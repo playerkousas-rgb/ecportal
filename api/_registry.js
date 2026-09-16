@@ -133,7 +133,7 @@ export function getTrustedUnit(id) {
 // ============================================================
 // 進度紀錄：旅團後端 —— 伺服器端設定（可選；一個後端、兩個前端）
 // ------------------------------------------------------------
-// 旅團可以喺介面自己填（存喺佢自己嘅資料／瀏覽器），亦可以改用 Vercel env：
+// 平常喺介面「進度 → 設定」填就得（存喺旅團自己嘅資料）；亦可以用 Vercel env 覆蓋：
 //   TROOP_<編號>_PROGRESSBACKEND = https://script.google.com/macros/s/…/exec
 //   TROOP_<編號>_PROGRESSAPIKEY  = …（喺旅團自己嘅 Apps Script 執行 showApiKey()）
 //   TROOP_<編號>_PROGRESSCATALOG = https://…/items.json（自訂考核項目，可選）
@@ -142,8 +142,7 @@ export function getTrustedUnit(id) {
 export function getProgressRegistryEntry(id) {
   /* 一個後端、兩個前端：進度資料就係旅團自己嘅後端（GAS /exec）。
      伺服器端可以設定 TROOP_<id>_PROGRESSBACKEND / _PROGRESSAPIKEY（可選覆蓋；
-     一般情況係旅團自己喺前端「進度 → 設定」填，管理員唔使逐團做嘢），
-     設定咗就優先於前端輸入（API Key 唔使落前端）。 */
+     一般情況喺前端「進度 → 設定」填就得），設定咗就優先於前端輸入（API Key 唔使落前端）。 */
   const out = { backend: '', apiKey: '', catalog: '' };
   if (typeof id !== 'string' || !/^[0-9A-Za-z_-]{1,32}$/.test(id)) return out;
   const idUpper = id.toUpperCase();

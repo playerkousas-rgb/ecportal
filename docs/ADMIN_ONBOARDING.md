@@ -110,20 +110,21 @@ meetings.json       ← 會議（可選）
 }
 ```
 
-> **API Key 由旅團自己填**（前端「進度 → 設定」，存在旅團自己嘅資料）：主系統由管理員保護（登入／權限），
-> 但「經主系統去旅團自己後端」嘅連線係旅團自己嘅事 —— 唔使管理員逐團設定，否則會做到死。
-> 伺服器端 env `TROOP_<id>_PROGRESSBACKEND` / `_PROGRESSAPIKEY` / `_PROGRESSCATALOG` 只係部署者自用嘅可選覆蓋。
+> **要埋讀取進度追蹤？** 喺「進度 → 設定」填兩個值就得：
+> ① `/exec` 網址（Apps Script → 部署 → 管理部署） ② API Key（Apps Script 執行 `showApiKey()`）。
+> 撳「測試連線」見到團員名單＝成功；兩個值存喺旅團自己嘅資料。
+> 想收埋條 Key 唔落前端：先設 env `TROOP_<id>_PROGRESSBACKEND` / `_PROGRESSAPIKEY` / `_PROGRESSCATALOG`（可選覆蓋）。
 
 ---
 
 ## 2. 另一半（進度前端）
 
-**唔使管理員做任何嘢。** 一個後端、兩個前端：進度資料就喺上面 `backend.gasUrl` 指向嘅同一支 Apps Script，
-執委系統同進度前端讀寫同一份。所以：
+一個後端、兩個前端：進度資料就喺上面 `backend.gasUrl` 指向嘅同一支 Apps Script，
+執委系統同進度前端讀寫同一份。要埋讀進度嘅話：
 
 * 唔使設 `portalOrigin` / `portalRoles`（舊 portal 設計已停用，見 [`archive/PROGRESS_PORTAL_HANDOFF.md`](archive/PROGRESS_PORTAL_HANDOFF.md)）
 * 唔使另一張試算表 —— `initializeSheets` 已經建好 `進度追蹤`／`其他獎章`／`待批完成`／`活動履歷`／`待批履歷`／`成員名單`
-* API Key：**唔使管理員做嘢** —— 通知旅團登入後去「進度 → 設定」自己填 `/exec` ＋ API Key（想收埋條 Key 先自己用 env 覆蓋）
+* 想埋讀取進度：喺「進度 → 設定」填 `/exec` ＋ API Key（教學有逐步指示；想收埋條 Key 先自己用 env 覆蓋）
 
 ---
 
@@ -135,7 +136,7 @@ meetings.json       ← 會議（可選）
 □ 執委管理系統  unit.json            （可選）填 progress.backend（後端 /exec ＋ API Key 覆蓋用；唔填就用 units.json 登記嗰個）
 □ 執委管理系統  後端 Code.gs    用最新範本（npm run build:gas → apps-script/Code.gs）；
                                  執行 initializeSheets 會建「進度追蹤／其他獎章／活動履歷／成員名單」等分頁
-□ 通知旅團：登入後去「進度 → 設定」自己填 /exec ＋ API Key（管理員唔使逐團設定；env 只係可選覆蓋）
+□ 通知旅團：想埋讀進度就去「進度 → 設定」填 /exec ＋ API Key（執行 showApiKey() 複製）
 □ Deploy 一次（同一個 /exec 服務兩個前端）
 □ 實測：執委管理系統揀該旅團 → 登入 → 「進度」→ 見到團員同進度（讀後端）
         → 「勾選進度」勾一項 → 去 Google Sheet「進度追蹤」分頁應該見到新一行

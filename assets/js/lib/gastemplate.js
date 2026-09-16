@@ -87,7 +87,7 @@ function initializeSheets() {
     { name: '物資', headers: ['旅團', 'id', '物資編號', '物資名稱', '分類', '總數量', '單位', '存放位置', '狀態', '備註', '同步時間'] },
     { name: '物資借用', headers: ['旅團', '時間', '申請人', '聯絡電話', '物資編號', '物資名稱', '數量', '借用日', '歸還日', '用途', '狀態', '紀錄編號'] },
     { name: '團員', headers: ['旅團', 'id', 'ymis', 'systemId', '姓名', '英文名', '身份', '生日', '職位', '狀態', '電話', '電郵', '加入日期', '備註', '同步時間'] },
-    { name: '通告', headers: ['旅團', 'id', '標題(中)', '標題(英)', '類型', '狀態', '活動日期', '截止日期', '地點', '費用', '發布日期', '同步時間'] },
+    { name: '通告', headers: ['旅團', 'id', '標題(中)', '標題(英)', '類型', '狀態', '活動日期', '截止日期', '活動地點', '集合時間及地點', '解散時間及地點', '內容／程序', '服裝', '費用', '名額', '查詢', '發布日期', '同步時間'] },
     { name: '報名', headers: ['旅團', '通告編號', '通告標題', '報名時間', '姓名', '聯絡', '出席與否', '全部欄位(JSON)'] },
     { name: '會議', headers: ['旅團', 'id', '日期', '標題', '地點', '狀態', '備註', '同步時間'] },
     { name: '同步紀錄', headers: ['時間', '旅團', '旅團名稱', '統計內容'] },
@@ -261,7 +261,9 @@ function syncAll(body) {
   counts['memberList'] = writeMemberList(ss, tables.members || []);
 
   // 通告：一張通告一行
-  counts['notices'] = writeTab(ss, body, '通告', tables.notices, schema.notices, ['title.zh', 'title.en', 'type', 'status', 'eventDate', 'deadline', 'venue', 'fee', 'publishAt']);
+  counts['notices'] = writeTab(ss, body, '通告', tables.notices, schema.notices,
+    ['title.zh', 'title.en', 'type', 'status', 'eventDate', 'deadline', 'venue', 'assembly', 'dismissal',
+     'programme', 'dress', 'fee', 'quota', 'enquiry', 'publishAt']);
 
   // 報名：每一份報名一行（由通告內嘅 signups 攤開）
   counts['signups'] = writeSignups(ss, body, tables.notices || []);

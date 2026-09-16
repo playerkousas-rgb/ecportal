@@ -157,7 +157,9 @@ function bootNotice(search) {
     !!d.querySelector('[data-fk="name"]') && !!d.querySelector('[data-fk="contact"]') && !!d.querySelector('[data-fk="member"]'));
   ok('必填欄有 required', d.querySelector('[data-fk="name"]')?.hasAttribute('required') === true);
   ok('有剔選欄（飲食禁忌）', d.querySelectorAll('[data-fk="diet"]').length >= 3);
-  ok('地點／費用／名額都有顯示', txt().includes('香港仔郊野公園') && txt().includes('$120') && txt().includes('24'));
+  ok('活動詳情欄位都有顯示（地點／集合／解散／服裝／費用／名額／查詢）',
+    ['香港仔郊野公園', '0830 香港仔郊野公園入口集合', '1630 香港仔郊野公園入口解散', '戶外制服', '$120', '24', '9123 4567 陳團長']
+      .every(k => txt().includes(k)), txt().slice(0, 200));
 
   // 未填必填 → 有錯誤提示
   form.dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true }));

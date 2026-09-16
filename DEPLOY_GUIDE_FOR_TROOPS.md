@@ -118,7 +118,7 @@
 在 Vercel 專案 Settings → Environment Variables 加入：
 - `TROOP_0082_BACKEND` = `https://script.google.com/macros/s/…/exec`
 - `TROOP_0082_APIKEY` = `v82_xxxxxxxxxxxxxxxx`
-- （進度紀錄）**唔使設** —— 旅團自己喺「進度 → 設定」填 `/exec` ＋ API Key；想收埋條 Key 先自己用 env 覆蓋（`TROOP_0082_PROGRESSBACKEND` / `_PROGRESSAPIKEY` / `_PROGRESSCATALOG`）
+- （進度紀錄）**唔使設** —— 要埋讀進度就去「進度 → 設定」填 `/exec` ＋ API Key；想收埋條 Key 先自己用 env 覆蓋（`TROOP_0082_PROGRESSBACKEND` / `_PROGRESSAPIKEY` / `_PROGRESSCATALOG`）
 
 ---
 
@@ -149,7 +149,7 @@
 * 執行一次 `initializeSheets` 會建立所有分頁（包括進度用嘅 5 張 ＋ `成員名單`）
 * 改完範本記得跑 `npm run build:gas`（會重新產生 `apps-script/Code.gs`，`npm test` 會檢查兩邊一致）
 
-### 伺服器端設定（可選：只有想收埋條 Key 先需要；一般旅團喺「進度 → 設定」自己填）
+### 伺服器端設定（可選：只有想收埋條 Key 先需要；唔設就去「進度 → 設定」填）
 
 喺 Vercel 專案 Settings → Environment Variables 加：
 

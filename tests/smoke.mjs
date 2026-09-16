@@ -1138,55 +1138,58 @@ section('通告詳情（輸出連出席回覆）');
   store.remove('notices', 'nt-bare');
 }
 
-/* ---------- 通告快速模板（由 PDF 通告抽出重點） ---------- */
-section('通告快速模板（30 週年旅慶）');
+/* ---------- 通告「活動詳情」欄位（清單驅動：加一行就六處同步） ---------- */
+section('通告欄位（活動詳情）');
 {
-  const presets = await import('../assets/js/lib/notice-presets.js');
-  const p = presets.presetById('lv30');
-  ok('有旅慶模板（中英對照）', !!p && /30 週年旅慶/.test(p.draft.title.zh) && /30th Anniversary/.test(p.draft.title.en));
-  ok('模板有最重要內容（地點／費用／集合／營火會／家長同意書）',
-    /北潭涌/.test(p.draft.venue) && /\$280/.test(p.draft.fee)
-    && /筲箕灣/.test(p.draft.body.zh) && /燈光營火會/.test(p.draft.body.zh) && /pt46\.pdf/.test(p.draft.body.zh));
-  ok('模板有英文全文（Pak Tam Chung / fee）',
-    /Pak Tam Chung/.test(p.draft.body.en) && /\$280/.test(p.draft.body.en));
-  ok('模板要報名，欄位有 YMIS／家長同意書／會員費',
-    p.draft.needSignup === true
-    && p.draft.fields.some(f => /YMIS/.test(f.label))
-    && p.draft.fields.some(f => /家長同意書/.test(f.label))
-    && p.draft.fields.some(f => /會員費/.test(f.label)));
-  ok('presetDraft() 會回傳獨立副本（唔會改到模板本身）', (() => {
-    const c = presets.presetDraft('lv30');
-    c.patch.title.zh = '改咗';
-    return p.draft.title.zh !== '改咗' && /30 週年旅慶/.test(p.draft.title.zh);
-  })());
+  const nf = await import('../assets/js/lib/notice-fields.js');
+  const nv = await import('../assets/js/views/notices.js');
+  const KEYS = ['eventDate', 'deadline', 'venue', 'assembly', 'dismissal', 'programme', 'dress', 'fee', 'quota', 'enquiry'];
+  ok('欄位清單齊（日期／截止／地點／集合／解散／內容／服裝／費用／名額／查詢）',
+    KEYS.every(k => nf.NOTICE_INFO_FIELDS.some(f => f.key === k)),
+    nf.NOTICE_INFO_FIELDS.map(f => f.key).join(','));
+  ok('noticeInfoRows() 只列有值嘅欄位，名額會加「人」',
+    JSON.stringify(nf.noticeInfoRows({ venue: '創興水上活動中心', fee: '$380', quota: 24 }))
+      === JSON.stringify([['活動地點', '創興水上活動中心'], ['費用', '$380'], ['名額', '24 人']]));
+  ok('空通告唔會有空行', nf.noticeInfoRows({}).length === 0 && nf.noticeInfoRows(null).length === 0);
 
+  /* 編輯器：新欄位真係出喺表單 */
   window.location.hash = '#/notices/new';
   window.dispatchEvent(new window.HashChangeEvent('hashchange'));
-  await new Promise(r => setTimeout(r, 80));
+  await new Promise(r => setTimeout(r, 90));
   const ed = doc.getElementById('view');
-  const presetBtn = ed.querySelector('[data-preset="lv30"]');
-  ok('開新通告頁有「快速模板」掣', !!presetBtn);
-  presetBtn?.click();
-  await new Promise(r => setTimeout(r, 150));
-  const ed2 = doc.getElementById('view');
-  ok('一撳填好標題（中英）',
-    /30 週年旅慶/.test(ed2.querySelector('#n-title')?.value || '')
-    && /30th Anniversary/.test(ed2.querySelector('#n-title-en')?.value || ''));
-  ok('一撳填好活動日期／地點／費用',
-    ed2.querySelector('#n-event')?.value === '2026-10-03'
-    && /北潭涌/.test(ed2.querySelector('#n-venue')?.value || '')
-    && /280/.test(ed2.querySelector('#n-fee')?.value || ''));
-  ok('內容齊（集合／解散／服裝／覆誓／家長同意書）',
-    ['集合', '解散', '服裝', '覆誓', '家長同意書'].every(k => new RegExp(k).test(ed2.querySelector('#n-body')?.value || '')));
-  ok('截止日期故意留空（原通告回條日已過 → 報名唔會自動截）',
-    (ed2.querySelector('#n-deadline')?.value || '') === '');
-  const fieldLabels = [...ed2.querySelectorAll('#n-fields-wrap input[data-k="label"]')].map(i => i.value).join('|');
-  ok('報名表已換成旅慶欄位（YMIS／家長同意書／會員費）',
-    /YMIS/.test(fieldLabels) && /家長同意書/.test(fieldLabels) && /會員費/.test(fieldLabels), fieldLabels);
-  ok('需要報名預設打勾（可以直接收報名）', ed2.querySelector('#n-need')?.checked === true);
+  ok('開新通告有「集合／解散／服裝／內容／查詢」欄位',
+    ['assembly', 'dismissal', 'dress', 'programme', 'enquiry'].every(k => !!ed.querySelector('#n-' + k)));
 
-  ed2.querySelector('[data-act="cancel"]')?.click();
+  /* 填 → 儲存 → 讀返 */
+  ed.querySelector('#n-title').value = '欄位測試通告';
+  ed.querySelector('#n-eventDate').value = '2026-10-03';
+  ed.querySelector('#n-deadline').value = '2026-09-28';
+  ed.querySelector('#n-venue').value = '創興水上活動中心';
+  ed.querySelector('#n-assembly').value = '0830 康山花園地下';
+  ed.querySelector('#n-dismissal').value = '1630 康山花園地下';
+  ed.querySelector('#n-programme').value = '獨木舟、划艇、水上安全';
+  ed.querySelector('#n-dress').value = '戶外制服';
+  ed.querySelector('#n-fee').value = '$380（津貼後 $266）';
+  ed.querySelector('#n-quota').value = '30';
+  ed.querySelector('#n-enquiry').value = '9123 4567 陳團長';
+  ed.querySelector('[data-act="save"]').click();
+  await new Promise(r => setTimeout(r, 220));
+  const saved = store.load().notices.find(x => x.title?.zh === '欄位測試通告');
+  ok('儲存後欄位入到通告資料',
+    saved?.assembly === '0830 康山花園地下' && saved?.dress === '戶外制服' && saved?.quota === 30,
+    JSON.stringify(saved && { assembly: saved.assembly, dress: saved.dress, quota: saved.quota }));
+
+  /* 詳情頁／分享文字／列印內容都跟住清單 */
+  const txt = nv.shareText(saved);
+  ok('WhatsApp 分享文字帶埋集合／解散／服裝／查詢',
+    /0830 康山花園地下/.test(txt) && /1630 康山花園地下/.test(txt) && /戶外制服/.test(txt) && /9123 4567/.test(txt),
+    txt.split('\n').slice(3, 6).join(' / '));
+  ok('分享文字唔會塞「內容／程序」（留返喺正文）', !/內容／程序/.test(txt));
+
+  window.location.hash = '#/notices';
+  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
   await new Promise(r => setTimeout(r, 80));
+  store.remove('notices', saved.id);
 }
 
 /* ---------- 5. 旅團選擇閘 ---------- */
@@ -1818,8 +1821,8 @@ section('進度紀錄（讀 ＋ 勾 ＋ 寫，同一個後端）');
     window.dispatchEvent(new window.HashChangeEvent('hashchange'));
     await new Promise(r => setTimeout(r, 100));
     const sv = doc.getElementById('view');
-    ok('設定頁講明 API Key 由旅團自己填（管理員唔使逐團設定）',
-      /旅團自己填/.test(sv.textContent) && /唔會幫每團設定/.test(sv.textContent));
+    ok('設定頁有「點填」指示（複製 /exec ＋ showApiKey ＋ 測試連線）',
+      /點填/.test(sv.textContent) && /showApiKey/.test(sv.textContent) && /測試連線/.test(sv.textContent));
     ok('設定頁有「後端 /exec 網址」同「API Key」欄',
       !!sv.querySelector('#p-backend') && !!sv.querySelector('#p-key') && !!sv.querySelector('#p-catalog'));
     sv.querySelector('#p-backend').value = 'https://script.google.com/macros/s/AKfycbTESTTESTTESTTESTTESTTESTTESTTEST/exec';

@@ -8,6 +8,7 @@
 
 import { esc, icon, toast, uid } from './lib/util.js';
 import { todayISO } from './lib/dates.js';
+import { noticeInfoRows } from './lib/notice-fields.js';
 
 const q = new URLSearchParams(location.search);
 const app = document.getElementById('app');
@@ -114,10 +115,7 @@ function render() {
 }
 
 function detailRows(n) {
-  const rows = [
-    ['活動日期', n.eventDate], ['地點', n.venue], ['費用', n.fee],
-    ['名額', n.quota ? `${n.quota} 人` : ''], ['報名截止', n.deadline]
-  ].filter(([, v]) => v);
+  const rows = noticeInfoRows(n);
   if (!rows.length) return '';
   return `<div class="mt-12" style="display:grid;gap:6px">${rows.map(([k, v]) =>
     `<div class="row gap-8"><span class="xs faint" style="width:76px">${esc(k)}</span><span class="semibold sm">${esc(String(v))}</span></div>`).join('')}</div>`;

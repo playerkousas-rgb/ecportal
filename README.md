@@ -208,14 +208,15 @@ Word／PDF／Markdown／單一 HTML／JSON 匯出、QR Code、
   執行一次 `initializeSheets` 會建好 `進度追蹤`／`其他獎章`／`待批完成`／`活動履歷`／`待批履歷`／`成員名單` 分頁，
   同步時亦會更新 `成員名單`，令兩個前端見到同一批人
 * **安全**：`/api/progress` 只准 GAS `/exec`、payload ≤ 1 MB、45 秒逾時，log 只記 metadata（唔記 API Key）。
-  **/exec 網址同 API Key 由旅團自己喺「進度 → 設定」填**（存在旅團自己嘅資料，跟 JSON 備份走）；
-  管理員只保護主系統嘅登入／權限，唔使逐團設定。伺服器端 env（`TROOP_<旅團>_PROGRESSBACKEND` / `_PROGRESSAPIKEY`）
-  只係部署者自用嘅可選覆蓋
+  要埋讀取進度追蹤：去「進度 → 設定」貼 `/exec` 網址（Apps Script → 部署 → 管理部署）＋ API Key
+  （Apps Script 執行 `showApiKey()`）→ 撳「測試連線」見到團員名單就成功（存在旅團自己嘅資料，跟 JSON 備份走）。
+  想收埋條 Key 唔落前端，先設伺服器端 env（`TROOP_<旅團>_PROGRESSBACKEND` / `_PROGRESSAPIKEY`）覆蓋
 * **身份對應**：團員／執委用 **YMIS（10 位數字）**、領袖用 **Email**
 
-### 通告：快速模板 + 一撳 WhatsApp 分享 + QR 報名
-「開新通告」頂部有**快速模板**（例：30 週年旅慶，由真實通告 PDF 抽出中英重點／日期／地點／費用／報名欄位），
-一撳填好再逐格改。
+### 通告：欄位 + 一撳 WhatsApp 分享 + QR 報名
+通告有齊常規欄位：**活動日期、報名截止、活動地點、集合時間及地點、解散時間及地點、內容／程序、服裝、費用、名額、查詢**
+（清單喺 `assets/js/lib/notice-fields.js`；加一行，編輯器／詳情／公開頁／分享文字／列印／總表分頁自動跟）。
+空欄位唔會顯示。
 「通告」清單或詳情頁 →「分享報名」：
 * **用 WhatsApp 分享**：直接開 `wa.me`，標題／日期／地點／費用／截止／內容重點同**報名連結**都自動填好（可以改完先送）
 * **QR Code**：畫面即時顯示，可以儲存圖（PNG／GIF，貼落群組）、下載 SVG、列印 A4 海報

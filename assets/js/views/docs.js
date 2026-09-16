@@ -441,9 +441,10 @@ function progressDoc() {
   ${noteBox('後端要係本系統嘅 <code>Code.gs</code>（或者已經支援 <code>?action=load</code> 同 <code>action=save</code> 嘅版本）：'
     + '「帳號與系統 → 資料管理 → 總表同步」可以下載最新範本，執行一次 <code>initializeSheets</code> 會建好'
     + '「進度追蹤／其他獎章／活動履歷」等分頁。', 'info')}
-  ${noteBox('後端網址同 API Key 由<b>旅團自己</b>喺「進度 → 設定」填（存在旅團自己嘅資料，跟 JSON 備份走）。'
-    + '管理員只保護主系統嘅登入同權限，唔會幫每團設定 —— 環境變數 <code>TROOP_&lt;旅團&gt;_PROGRESSBACKEND</code> / '
-    + '<code>TROOP_&lt;旅團&gt;_PROGRESSAPIKEY</code> 只係部署者自用嘅可選項，一般旅團唔使理。', 'info')}
+  ${noteBox('<b>設好後端之後，想埋讀取進度追蹤？</b>去「進度 → 設定」：'
+    + '① 貼 <code>/exec</code> 網址（Apps Script → 部署 → 管理部署） ② 貼 API Key（Apps Script 執行 '
+    + '<code>showApiKey()</code>） ③ 撳「測試連線」見到團員名單就成功。'
+    + '兩個值存在旅團自己嘅資料（跟 JSON 備份走）。', 'info')}
 
   ${H('考核項目定義')}
   ${P('項目定義（第 11 版綱要）已經<b>內建</b>喺 <code>data/progress/items.json</code>，離線都用得，唔使連任何網站。'

@@ -12,7 +12,7 @@ import { can, current } from '../lib/auth.js';
 import { profile, settings, members } from '../lib/model.js';
 import { pageHead, tabs, stat, empty, noteBox, photoPicker, photoStrip, bindPhotoPicker } from './ui.js';
 import { compressImage, formatBytes } from '../lib/files.js';
-import { NOTICE_PRESETS, presetDraft } from '../lib/notice-presets.js';
+import { NOTICE_INFO_FIELDS, noticeInfoRows } from '../lib/notice-fields.js';
 
 let tab = 'list';
 let filter = 'open';
@@ -494,6 +494,24 @@ function settingsView() {
   </div>`;
 }
 
+/** 由表單讀返所有活動詳情欄位 */
+function theInfoPatch(root) {
+  const out = {};
+  NOTICE_INFO_FIELDS.forEach(f => {
+    const el = root.querySelector('#n-' + f.key);
+    if (!el) return;
+    out[f.key] = f.type === 'number' ? (Number(el.value) || 0) : el.value.trim();
+  });
+  return out;
+}
+
+/** 新通告嘅空白欄位 */
+function emptyInfoFields() {
+  const out = {};
+  NOTICE_INFO_FIELDS.forEach(f => { out[f.key] = f.type === 'number' ? 0 : ''; });
+  return out;
+}
+
 /* ============================================================
    編輯器
    ============================================================ */
@@ -503,7 +521,7 @@ function editor(n) {
       id: 'new', type: 'event', status: 'draft',
       title: { zh: '', en: '' }, body: { zh: '', en: '' },
       needSignup: true, quota: 0, fields: JSON.parse(JSON.stringify(DEFAULT_FIELDS)),
-      attachments: [], publishAt: '', eventDate: '', deadline: '', venue: '', fee: ''
+      attachments: [], publishAt: '', ...emptyInfoFields()
     };
     draftPhotos = { photos: draft.attachments || [] };
     draftFields = draft.fields || [];
@@ -518,24 +536,13 @@ function editor(n) {
     actions: `<button class="btn btn-sm" data-act="cancel">${icon('chevronL', 15)} 返回</button>`
   })}
 
-  ${NOTICE_PRESETS.length ? `<div class="card mb-16">
-    <div class="card-head"><div><div class="card-title">快速模板</div>
-      <div class="card-sub">由真實通告（PDF）抽好重點 —— 一撳填好，之後照樣可以逐格改</div></div></div>
-    <div style="padding:14px 18px" class="row gap-8 wrap">
-      ${NOTICE_PRESETS.map(t => `<button class="btn btn-sm" data-preset="${esc(t.id)}" title="${esc(t.source || '')}">
-        ${icon('megaphone', 15)} ${esc(t.label)}</button>`).join('')}
-      <span class="xs faint" style="align-self:center">${NOTICE_PRESETS.map(t => esc(t.note || '')).join(' · ')}</span>
-    </div>
-  </div>` : ''}
-
   <div class="grid g-2-1">
     <div class="col gap-16">
       <div class="card"><div style="padding:18px 20px">
         <div class="grid g-2" style="gap:12px">
           <div class="field"><label class="label">通告類型</label>
             <select class="select" id="n-type">${TYPES.map(([v, l]) => `<option value="${v}" ${d.type === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
-          <div class="field"><label class="label">活動日期</label>
-            <input class="input" id="n-event" type="date" value="${esc(d.eventDate || '')}"></div>
+          ${infoFieldHtml('eventDate', d)}
           <div class="field" style="grid-column:1/-1"><label class="label">標題（中文） <span class="req">*</span></label>
             <input class="input" id="n-title" value="${esc(d.title?.zh || '')}" placeholder="例：2026 秋季露營 — 報名及須知"></div>
           <div class="field" style="grid-column:1/-1"><label class="label">Title (English)</label>
@@ -544,14 +551,11 @@ function editor(n) {
             <textarea class="textarea" id="n-body" style="min-height:190px" placeholder="可以直接打，支援換行。&#10;例：&#10;日期：2026-10-17 至 10-18&#10;集合：上午 8:30 康山花園地下&#10;費用：$380（團費津貼 30%，上限 $70）&#10;帶備：睡袋、雨衣、個人藥物">${esc(d.body?.zh || '')}</textarea></div>
           <div class="field" style="grid-column:1/-1"><label class="label">Body (English)</label>
             <textarea class="textarea" id="n-body-en" style="min-height:90px">${esc(d.body?.en || '')}</textarea></div>
-          <div class="field"><label class="label">截止日期</label>
-            <input class="input" id="n-deadline" type="date" value="${esc(d.deadline || '')}"></div>
-          <div class="field"><label class="label">地點</label>
-            <input class="input" id="n-venue" value="${esc(d.venue || '')}" placeholder="例：西貢創興水上活動中心"></div>
-          <div class="field"><label class="label">費用</label>
-            <input class="input" id="n-fee" value="${esc(String(d.fee || ''))}" placeholder="例：$380（會員）/ $420（非會員）"></div>
-          <div class="field"><label class="label">名額</label>
-            <input class="input" id="n-quota" type="number" min="0" value="${Number(d.quota) || 0}" placeholder="0 = 不限"></div>
+        </div>
+
+        <div class="card-sub mt-12" style="border-top:1px solid var(--line-2);padding-top:12px">活動詳情（會顯示喺通告、公開頁、WhatsApp 分享同列印，亦會寫入總表「通告」分頁）</div>
+        <div class="grid g-2" style="gap:12px;margin-top:8px">
+          ${NOTICE_INFO_FIELDS.filter(f => f.key !== 'eventDate').map(f => infoFieldHtml(f.key, d)).join('')}
         </div>
         ${photoPicker('n-photos', { label: '附件 / 相片（可以影海報、通告紙本、位置圖）', hint: '相片會自動壓縮；手機可以直接影相。' })}
         <div id="n-photo-note" class="hint"></div>
@@ -591,6 +595,18 @@ function editor(n) {
       </div>
     </div>
   </div>`;
+}
+
+/** 活動詳情欄位（全部由 NOTICE_INFO_FIELDS 產生 —— 加欄位只改嗰張清單） */
+function infoFieldHtml(key, d) {
+  const f = NOTICE_INFO_FIELDS.find(x => x.key === key);
+  if (!f) return '';
+  const v = key === 'quota' ? (Number(d.quota) || 0) : (d[key] ?? '');
+  const attrs = f.type === 'date' ? ' type="date"'
+    : f.type === 'number' ? ' type="number" min="0"' : '';
+  return `<div class="field"${f.wide ? ' style="grid-column:1/-1"' : ''}>
+    <label class="label">${esc(f.label)}</label>
+    <input class="input" id="n-${esc(f.key)}"${attrs} value="${esc(String(v))}" placeholder="${esc(f.ph || '')}"></div>`;
 }
 
 function fieldsHtml() {
@@ -633,10 +649,7 @@ export function shareText(n) {
   const title = n.title?.zh || '通告';
   L.push(`【${profile().name || ''}】${typeLabel(n.type)}：${title}`);
   if (n.title?.en) L.push(n.title.en);
-  const rows = [
-    ['日期', n.eventDate], ['地點', n.venue], ['費用', n.fee],
-    ['名額', n.quota ? `${n.quota} 人` : ''], ['截止', n.deadline]
-  ].filter(([, v]) => v !== undefined && v !== null && String(v).trim() !== '');
+  const rows = noticeInfoRows(n).filter(([k]) => !['內容／程序'].includes(k));
   if (rows.length) L.push(rows.map(([k, v]) => `${k}：${v}`).join('\n'));
   const body = String(n.body?.zh || '').trim();
   if (body) {
@@ -699,27 +712,6 @@ export function mount(root, params) {
 
     root.querySelector('#n-need')?.addEventListener('change', e => { draft.needSignup = e.target.checked; refresh(); });
 
-    /* 快速模板：一撳填好（已經打咗嘢就問一問先覆蓋） */
-    root.querySelectorAll('[data-preset]').forEach(b => b.addEventListener('click', async () => {
-      const pre = presetDraft(b.dataset.preset);
-      if (!pre) return;
-      if ((draft.title?.zh || '').trim()) {
-        const yes = await confirmDlg({
-          title: '套用模板？', okText: '套用（覆蓋現有內容）',
-          message: '而家已經填咗標題／內容，套用模板會蓋過佢。要繼續？'
-        });
-        if (!yes) return;
-      }
-      Object.assign(draft, pre.patch);
-      draft.fields = pre.fields;
-      draftFields = JSON.parse(JSON.stringify(pre.fields));
-      const pastDeadline = pre.patch.deadline && pre.patch.deadline < todayISO();
-      toast(pastDeadline
-        ? `已套用「${pre.label}」模板 —— 原通告截止日 ${pre.patch.deadline} 已經過，記得改做新日期`
-        : `已套用「${pre.label}」模板 —— 截止日期留空（唔會自動截），需要就自己填`, pastDeadline ? 'warn' : 'ok');
-      refresh();
-    }));
-
     root.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => {
       const act = b.dataset.act;
       if (act === 'cancel') { draft = null; return go('#/notices'); }
@@ -739,11 +731,7 @@ export function mount(root, params) {
           type: root.querySelector('#n-type').value,
           title: { zh: title, en: root.querySelector('#n-title-en').value.trim() },
           body: { zh: root.querySelector('#n-body').value, en: root.querySelector('#n-body-en').value.trim() },
-          eventDate: root.querySelector('#n-event').value,
-          deadline: root.querySelector('#n-deadline').value,
-          venue: root.querySelector('#n-venue').value.trim(),
-          fee: root.querySelector('#n-fee').value.trim(),
-          quota: Number(root.querySelector('#n-quota').value) || 0,
+          ...theInfoPatch(root),
           needSignup: root.querySelector('#n-need').checked,
           fields: draftFields,
           attachments: draftPhotos.photos
@@ -1119,11 +1107,7 @@ function noticeBodyHtml(n) {
     <div class="doc-title">${esc(n.title?.zh || '通告')}</div>
     ${n.title?.en ? `<div class="doc-sub">${esc(n.title.en)}</div>` : ''}</div>`);
   L.push(`<div class="doc-meta"><span>${esc(typeLabel(n.type))}</span><span>發出：${esc(n.publishAt || n.createdAt || '')}</span>${n.deadline ? `<span>截止：${esc(n.deadline)}</span>` : ''}</div>`);
-  const kv = [
-    ['活動日期', n.eventDate], ['地點', n.venue], ['費用', n.fee],
-    ['名額', n.quota ? `${n.quota} 人` : ''],
-    ['報名截止', n.deadline]
-  ].filter(([, v]) => v);
+  const kv = noticeInfoRows(n);
   if (kv.length) L.push(`<p>${kv.map(([k, v]) => `<b>${esc(k)}：</b>${esc(String(v))}`).join('　　')}</p>`);
   L.push(`<p style="white-space:pre-wrap;line-height:1.85">${esc(n.body?.zh || '')}</p>`);
   if (n.body?.en) L.push(`<p class="en-block" style="white-space:pre-wrap">${esc(n.body.en)}</p>`);

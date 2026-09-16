@@ -107,8 +107,14 @@ export const DEFAULT_TABLES = {
       { key: 'type', label: '類型', type: 'text', show: true },
       { key: 'eventDate', label: '活動日期', type: 'date', show: true },
       { key: 'deadline', label: '截止日期', type: 'date', show: true },
-      { key: 'venue', label: '地點', type: 'text', show: true },
+      { key: 'venue', label: '活動地點', type: 'text', show: true },
+      { key: 'assembly', label: '集合時間及地點', type: 'text', show: false },
+      { key: 'dismissal', label: '解散時間及地點', type: 'text', show: false },
+      { key: 'programme', label: '內容／程序', type: 'text', show: false },
+      { key: 'dress', label: '服裝', type: 'text', show: false },
       { key: 'fee', label: '費用', type: 'text', show: true },
+      { key: 'quota', label: '名額', type: 'number', show: false },
+      { key: 'enquiry', label: '查詢', type: 'text', show: false },
       { key: 'status', label: '狀態', type: 'select', options: ['draft', 'published'], optionLabels: ['草稿', '已發布'], show: true },
       { key: 'body.zh', label: '內容', type: 'textarea', show: false }
     ]
