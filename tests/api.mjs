@@ -121,12 +121,31 @@ ok('unitsHandler 回傳 units 物件', !!resJson?.units?.['0082']);
     sent.troopId === '0100' && sent.troopName === '第一百旅深資童軍團'
     && /\/exec$/.test(sent.scriptUrl) && sent.apiKey === 'K1' && sent.contact === 'a@b.hk'
     && sent.mainSystemUrl === 'https://ecportal.vercel.app' && /^\d{4}-\d{2}-\d{2}T/.test(sent.at || ''));
-  ok('收件匣回 JSON 成功 → 前端攞到真回執（success:true）', good.statusCode === 200 && good.body?.success === true);
-  ok('收件匣唔係 JSON（例：HTML 錯誤頁）→ 唔可以當成功，回 502',
-    (upstreamRaw = '<html>error</html>', true)
-    && (await post({ action: 'submitRegistration', troopId: '0100', troopName: 'X',
-      scriptUrl: 'https://script.google.com/macros/s/AKfycbTESTTESTTESTTESTTESTTESTTESTTEST/exec' })).statusCode === 502);
+  ok('收件匣回 JSON → proxy 當送到（success:true，唔聲稱有回執）',
+    good.statusCode === 200 && good.body?.success === true && good.body?.receipt === false);
+  /* 收件匣唔會回執：回 HTML／空白都要當送到（ADMIN 系統收到就 OK） */
+  const htmlPage = await (upstreamRaw = '<html>已收到</html>', post({ action: 'submitRegistration', troopId: '0100', troopName: 'X',
+    scriptUrl: 'https://script.google.com/macros/s/AKfycbTESTTESTTESTTESTTESTTESTTESTTEST/exec' }));
+  ok('收件匣唔回 JSON（HTML／空白）→ 照當送到（唔會誤報失敗）',
+    htmlPage.statusCode === 200 && htmlPage.body?.success === true, JSON.stringify(htmlPage.body));
+  const blank = await (upstreamRaw = ' ', post({ action: 'submitRegistration', troopId: '0100', troopName: 'X',
+    scriptUrl: 'https://script.google.com/macros/s/AKfycbTESTTESTTESTTESTTESTTESTTESTTEST/exec' }));
+  ok('收件匣回空白 → 同樣當送到', blank.statusCode === 200 && blank.body?.success === true);
+  /* 但收件匣真係話收唔到，就照當失敗 */
   upstreamRaw = null;
+  const refused = await (upstreamJson = { success: false, error: '唔收呢類申請' },
+    post({ action: 'submitRegistration', troopId: '0100', troopName: 'X',
+      scriptUrl: 'https://script.google.com/macros/s/AKfycbTESTTESTTESTTESTTESTTESTTESTTEST/exec' }));
+  ok('收件匣明確回 success:false → 當失敗（唔會呃申請人）',
+    refused.statusCode === 502 && /唔收呢類申請/.test(refused.body?.error || ''), JSON.stringify(refused.body));
+  upstreamJson = { success: true, message: '申請已提交' };
+  /* 連線唔通 → 失敗 */
+  const realFetch2 = globalThis.fetch;
+  globalThis.fetch = async () => { const e = new Error('boom'); e.name = 'TimeoutError'; throw e; };
+  const down = await post({ action: 'submitRegistration', troopId: '0100', troopName: 'X',
+    scriptUrl: 'https://script.google.com/macros/s/AKfycbTESTTESTTESTTESTTESTTESTTESTTEST/exec' });
+  ok('連線／逾時 → 回 504（呢個先算送唔到）', down.statusCode === 504, JSON.stringify(down.body));
+  globalThis.fetch = realFetch2;
   ok('proxy 只接受 POST', (await (async () => {
     const r = proxyRes(); await proxyHandler({ method: 'GET' }, r); return r;
   })()).statusCode === 405);

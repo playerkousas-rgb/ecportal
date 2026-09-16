@@ -232,10 +232,10 @@ async function openDeployGuideModal() {
           <div class="xs faint mb-8">
             撳下面個掣會開<b>申請表</b>（旅團編號、名稱、後端 <code>/exec</code>、API Key、聯絡人）。
             送出之後，資料會經<b>同源伺服器轉發</b>，直接落到平台管理員嘅
-            <b>ADMIN 系統收件匣</b>（同 VSBADGE 共用同一個收件匣，用 <code>appType: 82venture</code> 分辨），
-            所以管理員<u>一定收到</u>你張申請，唔會石沉大海。<br>
-            成功送出嗰陣，收件匣會回覆「已收到」——見到呢個回覆就代表管理員嗰邊已經有紀錄，
-            你可以安心等開通（管理員會加 <code>TROOP_&lt;編號&gt;_*</code> 環境變數並通知你）。
+            <b>ADMIN 系統收件匣</b>（同 VSBADGE 共用同一個收件匣，用 <code>appType: 82venture</code> 分辨）。<br>
+            <b>送出就 OK，唔使等回覆</b>：ADMIN 系統唔會回覆申請人，管理員收到之後會轉寄畀團長跟進，
+            開好團（加好 <code>TROOP_&lt;編號&gt;_*</code> 環境變數）就會 email 通知你。
+            如果幾日都冇消息，用申請內容 WhatsApp／電郵問一聲管理員就得。
             <br>之後：想埋讀「進度追蹤」＝登入後去「進度 → 設定」貼 <code>/exec</code> ＋ API Key（或者交畀管理員一齊設定）；
             通告一開就可以用 QR／WhatsApp 分享收報名，報名直接入你自己嘅 Sheet。
           </div>
@@ -266,7 +266,7 @@ async function openApplication() {
   try { mainUrl = location.origin; } catch (e) { mainUrl = ''; }
   const r = await modal({
     title: '新旅團申請接入', wide: true,
-    sub: box.configured ? '申請會送去做平台管理員嘅 ADMIN 系統（收件匣）' : '（未設定收件匣）',
+    sub: box.configured ? '申請會送去做平台管理員嘅 ADMIN 系統（呢個系統唔會回覆，送出去就得）' : '（未設定收件匣）',
     body: `
       <div class="note-box mb-12">${icon('alert', 15)}<div>
         <b>申請之前請先起好你自己嘅後端</b>（每個旅團一張自己嘅 Google Sheet）：
@@ -324,27 +324,23 @@ async function openApplication() {
   toast('送出中…', 'info');
   const res = await submitApplication(r);
   if (res.ok) {
-    const confirmed = res.confirmed !== false;
     await modal({
-      title: confirmed ? '申請已送到 ADMIN 系統' : '申請已送出（未收到回執）',
-      sub: `${res.payload.troopId} · ${res.payload.troopName} · ${res.via === 'proxy' ? '經伺服器轉發' : '直接送出'}${res.ms != null ? ` · ${res.ms} ms` : ''}`,
-      wide: !confirmed,
+      title: '申請已送出',
+      sub: `${res.payload.troopId} · ${res.payload.troopName} · ${res.via === 'proxy' ? '經伺服器轉發去 ADMIN 系統' : '直接送去 ADMIN 系統'}${res.ms != null ? ` · ${res.ms} ms` : ''}`,
       body: `
-        <div class="note-box ${confirmed ? 'info' : 'warn'} mb-12">${icon(confirmed ? 'check' : 'alert', 15)}<div>
-          ${confirmed
-            ? `管理員收件匣已經回覆<b>收到申請</b>，你唔使再做嘢。`
-            : `申請已經送出，但<b>攞唔到收件匣回執</b>（伺服器轉發唔通，改為直接送出）。
-               建議順手複製下面段文字，WhatsApp／電郵畀平台管理員，穩陣啲。`}
-          ${!confirmed && (res.errors || []).length ? `<div class="xs faint mt-4">伺服器路線回覆：${esc((res.errors || []).join(' · '))}</div>` : ''}
-          <br><span class="xs">管理員會把你嘅後端加進平台 Registry，完成之後用同一條網址就可以揀到你嘅旅團。</span>
+        <div class="note-box info mb-12">${icon('check', 15)}<div>
+          你張申請已經送去<b>平台管理員嘅 ADMIN 系統</b>。
+          <br><span class="xs">呢個系統<b>唔會回覆</b>（App 唔會知 ADMIN 收咗未），所以你唔會喺呢度見到「已收到」——正常，唔使擔心。
+          管理員收到之後會轉寄畀團長跟進，開好團就會 email 通知你。</span>
         </div></div>
         <div class="row gap-8 mb-12">
-          <button class="btn btn-sm" id="ap-copy-again">${icon('copy', 14)} 複製申請內容（WhatsApp／電郵備用）</button>
+          <button class="btn btn-sm" id="ap-copy-again">${icon('copy', 14)} 複製申請內容（跟進／備用）</button>
         </div>
-        <div class="xs faint">管理員要做嘅嘢（自動列出，方便你跟進）：</div>
+        <div class="xs faint">管理員收到之後會做嘅嘢（方便你跟進）：</div>
         <ol class="xs mono" style="padding-left:18px;line-height:1.9">
           ${adminChecklist(res.payload.troopId).map(x => `<li>${esc(x)}</li>`).join('')}
-        </ol>`,
+        </ol>
+        <div class="xs faint mt-8">過幾日都未收到通知？複製上面段字，WhatsApp／電郵畀平台管理員問一聲就得。</div>`,
       actions: [{ label: '好', class: 'btn-primary', value: true }],
       onMount: el => {
         el.querySelector('#ap-copy-again')?.addEventListener('click', async () => {

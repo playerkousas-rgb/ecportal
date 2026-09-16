@@ -35,9 +35,18 @@
 **送出方式（同 VSBADGE 一樣）**：申請人**唔會**直接打收件匣，係行同源
 `POST /api/proxy` → `action: 'submitRegistration'` → 由 Vercel 伺服器端轉發去收件匣
 （`api/proxy.js` 嘅 `SCOUT_ADMIN_API`，目的地係伺服器常數，前端改唔到）。
-收件匣一定要回 **JSON** 先當成功（`{success:true}`），否則 `/api/proxy` 回 502，
-喺 App 就會顯示「送唔到去 ADMIN 系統」＋畀申請人複製內容直接搵你 —— **唔會呃申請人話送咗**。
-冇 `/api/proxy`（純靜態部署）先會 fallback 直接 POST（no-cors，冇回執，UI 會講明）。
+
+**收件匣唔會回執** —— 申請人嘅 App 唔會知你收咗未（申請人亦唔會收到任何通知），
+所以 `/api/proxy` 嘅判斷係：**POST 過得去（伺服器有回應）就當送到**，
+唔會因為你回 HTML／空白就報失敗。只有兩種情況當失敗：
+（1）連線／逾時（回 502／504）；（2）你嘅收件匣明確回 `{success:false, error:'…'}`。
+真係失敗嗰陣，App 會顯示「送唔到去 ADMIN 系統」＋畀申請人**複製申請內容**
+（WhatsApp／電郵畀你）或者**再試一次**；伺服器路線失敗亦會自動再直接 POST 多一次。
+冇 `/api/proxy`（純靜態部署）就 fallback 直接 POST。
+
+**你要做嘅跟進**（因為冇回執，全靠你嗰邊）：
+1. 收件匣收到申請 → 轉寄畀負責團長
+2. 開好團（方法 B 或方法 A）→ **email 通知旅團**（佢哋喺 App 度等緊你嘅通知）
 
 收件匣設定喺 `data/units.json` → **`admin.submitUrl`**（冇設定就用 `api/proxy.js` 內建預設值，
 即 VSBADGE 同一個中央收件匣，用 `appType` 分辨：`82venture` / `vsbadge`）。

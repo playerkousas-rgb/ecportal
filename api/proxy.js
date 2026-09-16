@@ -23,6 +23,8 @@ const MAX_DATA_BYTES = 4 * 1024 * 1024; // 單次請求上限 4MB
 
 // 中央管理員收件匣（新旅團接入申請）—— 目的地係伺服器端常數，前端改唔到。
 // 呢個收件匣同 VSBADGE 共用（用 appType 分辨：82venture / vsbadge）。
+// 注意：收件匣**唔會回執** —— 申請人 App 唔會知 ADMIN 收唔收到，
+// 所以只要 POST 過得去（有回應）就當送到，只有連線／逾時先當失敗。
 const SCOUT_ADMIN_API = process.env.SCOUT_ADMIN_API ||
   'https://script.google.com/macros/s/AKfycbxj5BDDGgjs559smkK4Z5aYImWYeXbN5af8U1ObON0z9WnsN6QJW4I1XWolhs5kQ_H-UQ/exec';
 
@@ -112,14 +114,15 @@ export default async function handler(req, res) {
     };
     try {
       const up = await callUpstream(SCOUT_ADMIN_API, regPayload);
-      /* 收件匣一定要回 JSON 先算收到（同 vsbadge 一致）——唔係 JSON 就當送唔到，
-         唔可以呃申請人話成功（管理員收唔到就冇人跟進） */
-      if (!up.json) {
-        safeLog({ result: 'admin_upstream_bad', status: up.status, ms: Date.now() - t0 });
-        return sendJson(res, 502, { success: false, error: '申請未能送達管理員，請稍後重試' });
+      /* 收件匣冇回執機制：POST 過得去就當送到（ADMIN 系統收到就 OK）。
+         唯一例外：收件匣真係回咗 JSON 而且話 success:false，就照當失敗。 */
+      const said = (up.json && typeof up.json === 'object') ? up.json : null;
+      if (said && said.success === false) {
+        safeLog({ result: 'admin_upstream_refused', status: up.status, ms: Date.now() - t0 });
+        return sendJson(res, 502, { success: false, error: said.error || '管理員收件匣話收唔到呢張申請' });
       }
-      safeLog({ result: 'registration_ok', status: up.status, ms: Date.now() - t0 });
-      return sendJson(res, 200, { success: true, message: '申請已提交' });
+      safeLog({ result: 'registration_sent', status: up.status, json: !!up.json, ms: Date.now() - t0 });
+      return sendJson(res, 200, { success: true, message: '申請已提交', delivered: 'sent', receipt: false });
     } catch (e) {
       const timeout = e && e.name === 'TimeoutError';
       return sendJson(res, timeout ? 504 : 502, { success: false, error: timeout ? '提交逾時，請稍後重試' : '申請未能送達管理員' });

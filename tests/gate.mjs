@@ -102,6 +102,8 @@ ok('申請表有齊欄位（編號／名稱／後端網址／API Key／聯絡人
   ok('指南有下載／複製 Code.gs 掣', !!g.querySelector('#guide-dl-btn') && !!g.querySelector('#guide-copy-btn'));
   ok('指南第 5 步講明申請直接入 ADMIN 系統（收件匣）＋ appType 分辨',
     /ADMIN 系統/.test(gt) && /收件匣/.test(gt) && /82venture/.test(gt));
+  ok('指南講明「送出就 OK，唔使等回覆」（ADMIN 唔回執，開團後 email 通知）',
+    /送出就 OK/.test(gt) && /唔使等回覆/.test(gt) && /email 通知/.test(gt));
   ok('指南有「填寫申請表自動送出」掣，連去申請表',
     !!g.querySelector('#guide-apply-btn'), [...(g?.querySelectorAll('button') || [])].map(b => b.textContent.trim()).join(' | '));
   /* 撳申請掣 → 應該閂指南、開申請表 */

@@ -41,7 +41,7 @@
     "submitUrl": "https://script.google.com/macros/s/AKfycbxj5BDDGgjs559smkK4Z5aYImWYeXbN5af8U1ObON0z9WnsN6QJW4I1XWolhs5kQ_H-UQ/exec",
     "_howto": "新旅團喺旅團選擇畫面撳「新旅團申請接入」，資料會經同源 /api/proxy（action=submitRegistration）由伺服器端 POST 去呢度（同 VSBADGE 一條路，目的地固定）。管理員收到之後：data/units.json 加該旅團 entry（backend.gasUrl / backend.apiKey），再建 data/units/<編號>/ 資料夾（unit.json / members.json / constitution.json / finance.json / inventory.json）。一個後端、兩個前端：該 backend.gasUrl 就係進度資料所在（進度追蹤／其他獎章／活動履歷等分頁），旅團登入之後喺「進度」直接讀寫 —— 唔需要任何外連或 portal 設定。",
     "_payload": "{ troopId, troopName, scriptUrl, apiKey, appType:'82venture', appName:'執委管理系統', mainSystemUrl, contact, note, at }",
-    "_note": "呢個 URL 係共用嘅中央管理員收件匣（api/proxy.js 嘅 SCOUT_ADMIN_API；收件匣唔回 JSON 就當送唔到，App 會叫申請人複製內容直接搵管理員）。如果你嘅 admin GAS 有按 appType 過濾，記得加 '82venture'。"
+    "_note": "呢個 URL 係共用嘅中央管理員收件匣（api/proxy.js 嘅 SCOUT_ADMIN_API）。收件匣唔會回執：POST 過得去就當送到（ADMIN 系統收到就 OK）；只有連線／逾時或者明確回 success:false 先當失敗，嗰陣 App 會叫申請人複製內容直接搵管理員。收到之後：轉寄畀負責團長 → 開團 → email 通知旅團。如果你嘅 admin GAS 有按 appType 過濾，記得加 '82venture'。"
   },
   "backend": {
     "name": "82venture 總表（Apps Script Web App）",

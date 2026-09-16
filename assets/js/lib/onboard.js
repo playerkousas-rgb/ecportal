@@ -89,10 +89,11 @@ export function validateApplication(input = {}) {
 /**
  * 把申請送去中央管理員收件匣 —— 同 VSBADGE 一樣行同源 proxy：
  *   瀏覽器 ──POST /api/proxy (action=submitRegistration)──▶ Vercel ──▶ 管理員收件匣 GAS
- * 好處：目的地固定喺伺服器端（前端改唔到）＋ 攞到真正嘅成功／失敗回執，
- * 咁管理員就一定知有人想申請，申請人亦唔會以為送咗但其實冇。
- * 冇 /api/proxy（淨靜態部署、GitHub Pages）就 fallback 直接 POST（no-cors，冇回執）。
- * @returns {{ok:boolean, via:'proxy'|'direct', confirmed:boolean, ms:number, payload:object, errors?:string[]}}
+ * 目的地固定喺伺服器端（前端改唔到）。
+ * 注意：收件匣**唔會回執**（ADMIN 收到之後自己轉寄畀團長，開團後 email 通知旅團），
+ * 所以 App 只可以知道「送出去咗」——ADMIN 系統收到就 OK。
+ * 冇 /api/proxy（淨靜態部署、GitHub Pages）就 fallback 直接 POST。
+ * @returns {{ok:boolean, via:'proxy'|'direct', receipt:boolean, ms:number, payload:object, errors?:string[]}}
  */
 async function postViaProxy(payload, timeoutMs) {
   const ctrl = new AbortController();
@@ -111,7 +112,7 @@ async function postViaProxy(payload, timeoutMs) {
       /* 同源冇 /api（靜態部署）→ 話畀呼叫者知，改用直接 POST */
       return { available: false, ms: Date.now() - t0 };
     }
-    if (j.success) return { available: true, ok: true, ms: Date.now() - t0 };
+    if (j.success !== false) return { available: true, ok: true, ms: Date.now() - t0 };
     return { available: true, ok: false, ms: Date.now() - t0, errors: [j.error || '管理員收件匣話送唔到'] };
   } catch (e) {
     return { available: false, ms: Date.now() - t0, errors: [e?.name === 'AbortError' ? '逾時' : (e?.message || String(e))] };
@@ -133,12 +134,12 @@ async function postDirectToInbox(payload, timeoutMs) {
       signal: ctrl.signal
     });
     clearTimeout(timer);
-    return { ok: true, via: 'direct', confirmed: false, ms: Date.now() - t0, payload };
+    return { ok: true, via: 'direct', receipt: false, ms: Date.now() - t0, payload };
   } catch (e) {
     clearTimeout(timer);
     const aborted = e?.name === 'AbortError';
     return {
-      ok: false, via: 'direct', confirmed: false, ms: Date.now() - t0,
+      ok: false, via: 'direct', receipt: false, ms: Date.now() - t0,
       errors: [aborted ? `提交逾時（${Math.round(timeoutMs / 1000)} 秒冇回應）` : (e?.message || String(e))],
       payload
     };
@@ -146,22 +147,23 @@ async function postDirectToInbox(payload, timeoutMs) {
 }
 
 /**
- * 送出申請：先經同源 proxy（有真回執），唔得就自己直接送多一次（未確認）。
- * @returns {{ok:boolean, via:'proxy'|'direct', confirmed:boolean, ms:number, payload:object, errors?:string[]}}
+ * 送出申請：先經同源 proxy，唔得就自己直接送多一次。
+ * 兩條路都只可以確認「送出去咗」——收件匣唔回執（ADMIN 收到就 OK）。
+ * @returns {{ok:boolean, via:'proxy'|'direct', receipt:boolean, ms:number, payload:object, errors?:string[]}}
  */
 export async function submitApplication(input = {}, timeoutMs = 20000) {
   const v = validateApplication(input);
-  if (!v.ok) return { ok: false, via: 'proxy', confirmed: false, errors: v.errors, payload: v.payload };
+  if (!v.ok) return { ok: false, via: 'proxy', receipt: false, errors: v.errors, payload: v.payload };
   const box = adminInbox();
   if (!box.configured) {
-    return { ok: false, via: 'proxy', confirmed: false, errors: ['未設定管理員收件匣（data/units.json → admin.submitUrl）'], payload: v.payload };
+    return { ok: false, via: 'proxy', receipt: false, errors: ['未設定管理員收件匣（data/units.json → admin.submitUrl）'], payload: v.payload };
   }
   const viaProxy = await postViaProxy(v.payload, timeoutMs);
   if (viaProxy.available && viaProxy.ok) {
-    return { ok: true, via: 'proxy', confirmed: true, ms: viaProxy.ms, payload: v.payload };
+    return { ok: true, via: 'proxy', receipt: false, ms: viaProxy.ms, payload: v.payload };
   }
   /* 伺服器路線送唔到（或者根本冇 /api/proxy）→ 自己直接送多一次，
-     寧願管理員收到兩次，都好過收唔到。直接送冇回執，UI 會講清楚。 */
+     寧願管理員收到兩次，都好過收唔到（兩條路都唔會有回執，App 只會話「已送出」）。 */
   const direct = await postDirectToInbox(v.payload, timeoutMs);
   if (direct.ok) {
     return {
@@ -170,7 +172,7 @@ export async function submitApplication(input = {}, timeoutMs = 20000) {
     };
   }
   return {
-    ok: false, via: direct.via, confirmed: false,
+    ok: false, via: direct.via, receipt: false,
     ms: (viaProxy.ms || 0) + (direct.ms || 0),
     payload: v.payload,
     errors: [...(viaProxy.available ? (viaProxy.errors || []) : []), ...(direct.errors || [])]

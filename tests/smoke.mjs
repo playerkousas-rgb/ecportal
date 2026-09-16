@@ -1752,8 +1752,8 @@ console.log('\n▌新旅團申請接入（送去 ADMIN 收件匣）');
     seen[0].url === 'api/proxy' && body.action === 'submitRegistration', seen[0].url);
   ok('送出嘅 payload 帶 appType=82venture ＋ appName（ADMIN 系統認得到係邊個 app）',
     body.appType === '82venture' && body.appName === '執委管理系統', JSON.stringify({ appType: body.appType, appName: body.appName }));
-  ok('收件匣／伺服器回覆收到 → 當成功，而且標明「已確認」',
-    okSend.ok === true && okSend.via === 'proxy' && okSend.confirmed === true, JSON.stringify(okSend));
+  ok('送出成功 → 經 proxy 送到 ADMIN（唔會當自己「ADMIN 已確認」，因為收件匣唔回執）',
+    okSend.ok === true && okSend.via === 'proxy' && okSend.receipt === false, JSON.stringify(okSend));
 
   seen.length = 0;
   globalThis.fetch = stub(async (url) => {
@@ -1781,8 +1781,8 @@ console.log('\n▌新旅團申請接入（送去 ADMIN 收件匣）');
   ok('伺服器路線失敗 → 會自動再直接送一次（寧願重複都唔好收唔到）',
     seen.length === 2 && seen[1].url === ob.adminInbox().url && seen[1].init.mode === 'no-cors',
     seen.map(x => x.url).join(' → '));
-  ok('呢種情況標明「已送出・未確認」（唔會當係 ADMIN 已回覆）',
-    rescued.ok === true && rescued.via === 'direct' && rescued.confirmed === false);
+  ok('呢種情況一樣當送到（直接送），亦唔會當係 ADMIN 已回覆',
+    rescued.ok === true && rescued.via === 'direct' && rescued.receipt === false);
 
   seen.length = 0;
   globalThis.fetch = stub(async () => ({ ok: false, status: 404, text: async () => '<html>404</html>', json: async () => { throw new Error('not json'); } }));
@@ -1790,8 +1790,8 @@ console.log('\n▌新旅團申請接入（送去 ADMIN 收件匣）');
   ok('冇 /api/proxy（純靜態部署）→ 自動 fallback 直接 POST 去收件匣',
     seen.length === 2 && seen[1].url === ob.adminInbox().url && seen[1].init.mode === 'no-cors',
     seen.map(x => x.url).join(' → '));
-  ok('直接送出冇回執 → 標明未確認（UI 會叫申請人順手通知管理員）',
-    fallback.ok === true && fallback.via === 'direct' && fallback.confirmed === false);
+  ok('直接送出（冇 /api）一樣當送到',
+    fallback.ok === true && fallback.via === 'direct' && fallback.receipt === false);
   globalThis.fetch = realFetch;
 
   const cl = ob.adminChecklist('0100');
