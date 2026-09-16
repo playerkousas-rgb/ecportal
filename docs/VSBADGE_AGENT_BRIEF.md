@@ -8,7 +8,7 @@
 
 ### 背景
 
-`vsbadge` 同一個叫 **82venture** 嘅執委會管理平台（`playerkousas-rgb/82venture`）做聯邦式對接：
+`vsbadge` 同一個叫 **82venture** 嘅執委管理系統（`playerkousas-rgb/82venture`）做聯邦式對接：
 82venture 係主系統（hub），vsbadge 係進度系統，**進度資料由 vsbadge 擁有**，82venture 只做入口同管理。
 82venture 用 portal 信任模式把執委／領袖身份帶過嚟，例如：
 

@@ -2,7 +2,7 @@
   "name": "82venture",
   "version": "2.0.0",
   "private": true,
-  "description": "深資童軍團執委會管理平台（純靜態，零依賴）。jsdom 只係測試用。",
+  "description": "深資童軍團執委管理系統（純靜態，零依賴）。jsdom 只係測試用。",
   "type": "module",
   "scripts": {
     "serve": "python3 -m http.server 8000",

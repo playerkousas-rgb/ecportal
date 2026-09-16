@@ -264,6 +264,9 @@ function detail(id, query) {
           <button class="btn btn-block" data-act="export-full-pdf">${icon('print', 16)} 通告＋出席回覆（PDF）</button>
           <button class="btn btn-block" data-act="export-attend">${icon('table', 16)} 出席回覆表（CSV）</button>
           <button class="btn btn-block" data-act="export-attend-word">${icon('download', 16)} 出席回覆表（Word）</button>
+          <div class="xs semibold muted mt-8">進度系統聯動 (VSBADGE)</div>
+          <button class="btn btn-block" data-act="export-vsbadge-csv">${icon('table', 16)} 匯出活動履歷（VSBADGE CSV）</button>
+          <button class="btn btn-block" data-act="export-vsbadge-json">${icon('download', 16)} 匯出活動履歷（JSON）</button>
           <div class="xs semibold muted mt-8">只出通告</div>
           <button class="btn btn-block" data-act="export-word">${icon('download', 16)} 通告（Word）</button>
           <button class="btn btn-block" data-act="export-pdf">${icon('print', 16)} 通告（PDF / 列印）</button>
@@ -352,7 +355,7 @@ export function attendanceRows(n) {
       const r = i >= 0 ? list[i] : null;
       if (i >= 0) used.add(i);
       return {
-        id: m.id, name: m.name, role: m.role || '', inRoster: true,
+        id: m.id, ymis: m.ymis || '', systemId: m.systemId || '', name: m.name, role: m.role || '', inRoster: true,
         signup: r || null, at: r?.at || '',
         state: r ? attendValue(r) : '',
         manual: r ? !!r.manual : false,
@@ -360,7 +363,7 @@ export function attendanceRows(n) {
       };
     });
   const extras = list.filter((r, i) => !used.has(i)).map(r => ({
-    id: r.id, name: r.values?.name || r.name || '（無名）', role: r.values?.member || '名冊以外',
+    id: r.id, ymis: '', systemId: '', name: r.values?.name || r.name || '（無名）', role: r.values?.member || '名冊以外',
     inRoster: false, signup: r, at: r.at || '', state: attendValue(r), contact: r.values?.contact || ''
   }));
   return { roster, extras, all: [...roster, ...extras], match };
@@ -712,6 +715,8 @@ export function mount(root, params) {
     if (act === 'export-full-pdf') { printNoticeFull(n); }
     if (act === 'export-attend') { if (!n) return; exportAttendanceCsv(n); }
     if (act === 'export-attend-word') { if (!n) return; exportAttendanceWord(n); }
+    if (act === 'export-vsbadge-csv') { if (!n) return; exportVsbadgeActivityCsv(n); }
+    if (act === 'export-vsbadge-json') { if (!n) return; exportVsbadgeActivityJson(n); }
     if (act === 'export-md') { if (!n) return; exportNoticeMarkdown(n); }
     if (act === 'export-html') { if (!n) return; exportNoticeStandalone(n); }
     if (act === 'qr-poster') { if (!n) return; qrPoster(n); }
@@ -943,6 +948,8 @@ async function exportDialog(n) {
             <button class="btn btn-block" data-ex="full-pdf">${icon('print', 15)} 通告＋出席回覆（PDF / 列印）</button>
             <button class="btn btn-block" data-ex="attend-csv">${icon('table', 15)} 出席回覆表（CSV）</button>
             <button class="btn btn-block" data-ex="attend-word">${icon('download', 15)} 出席回覆表（Word）</button>
+            <button class="btn btn-block" data-ex="vsbadge-csv">${icon('table', 15)} 匯出活動履歷（VSBADGE CSV）</button>
+            <button class="btn btn-block" data-ex="vsbadge-json">${icon('download', 15)} 匯出活動履歷（JSON）</button>
           </div>
           <div class="hint mt-8">出席 ${A.yes} · 唔出席 ${A.no} · 未回覆 ${A.none}（名冊 ${A.rosterCount} 位）</div>
         </div>
@@ -965,6 +972,8 @@ async function exportDialog(n) {
         if (k === 'full-pdf') printNoticeFull(n);
         if (k === 'attend-csv') exportAttendanceCsv(n);
         if (k === 'attend-word') exportAttendanceWord(n);
+        if (k === 'vsbadge-csv') exportVsbadgeActivityCsv(n);
+        if (k === 'vsbadge-json') exportVsbadgeActivityJson(n);
         if (k === 'word') { exportNoticeWord(n); toast('已輸出（Word）', 'ok'); }
         if (k === 'pdf') printNotice(n);
         if (k === 'md') exportNoticeMarkdown(n);
@@ -1157,6 +1166,87 @@ export function exportAllSignupsWord() {
       <div class="doc-sub">${esc(profile().name || '')} · ${esc(todayISO())}</div></div>${body || '<p>（未有報名）</p>'}`
   });
   toast('已輸出 Word', 'ok');
+}
+
+/* ============================================================
+   進度系統 (VSBADGE) 活動履歷橋接
+   ============================================================ */
+export function vsbadgeActivityPayload(n) {
+  const db = load();
+  const unit = db.unitCode || '0082';
+  const rows = attendanceRows(n);
+  const title = n.title?.zh || '活動';
+  const eventDate = n.eventDate || n.publishAt || todayISO();
+  const type = n.type || 'event';
+  const venue = n.venue || '';
+  const fee = n.fee || '';
+  const desc = (n.body?.zh || '').slice(0, 300);
+
+  const attendees = rows.all.map(r => ({
+    unit,
+    ymis: r.ymis || '',
+    systemId: r.systemId || '',
+    name: r.name,
+    role: r.role || '',
+    inRoster: r.inRoster,
+    status: attendLabel(r.state),
+    attended: r.state === 'yes',
+    contact: r.contact || '',
+    remarks: r.signup ? summaryOf({ ...r.signup, values: omit(r.signup.values, ['name', 'contact', 'attend', 'rsvp']) }) : ''
+  }));
+
+  return {
+    version: '1.0',
+    source: '82venture_ecportal',
+    unit,
+    exportedAt: nowStamp(),
+    activity: {
+      id: n.id,
+      title,
+      type,
+      categoryLabel: typeLabel(type),
+      date: eventDate,
+      venue,
+      fee,
+      description: desc
+    },
+    attendees,
+    stats: attendanceSummary(n)
+  };
+}
+
+export function exportVsbadgeActivityCsv(n) {
+  const payload = vsbadgeActivityPayload(n);
+  const rows = payload.attendees.map(a => [
+    payload.unit,
+    payload.activity.id,
+    payload.activity.date,
+    payload.activity.categoryLabel,
+    payload.activity.title,
+    payload.activity.venue,
+    a.ymis,
+    a.name,
+    a.role,
+    a.status,
+    a.attended ? '是' : '否',
+    a.remarks
+  ]);
+  toCSV({
+    filename: `進度系統活動履歷_${payload.unit}_${(n.title?.zh || n.id).slice(0, 15)}_${stamp()}.csv`,
+    headers: ['旅團編號', '通告編號', '活動日期', '活動類別', '活動名稱', '地點', 'YMIS會籍編號', '團員姓名', '團內崗位', '出席狀態', '是否計入進度', '備註與詳情'],
+    rows
+  });
+  toast('已匯出 VSBADGE 活動履歷 CSV', 'ok');
+}
+
+export function exportVsbadgeActivityJson(n) {
+  const payload = vsbadgeActivityPayload(n);
+  dlFile(
+    `進度系統活動履歷_${payload.unit}_${(n.title?.zh || n.id).slice(0, 15)}_${stamp()}.json`,
+    JSON.stringify(payload, null, 2),
+    'application/json;charset=utf-8'
+  );
+  toast('已匯出 VSBADGE 活動履歷 JSON', 'ok');
 }
 
 export function refresh() { window.dispatchEvent(new CustomEvent('v82:refresh')); }

@@ -335,17 +335,18 @@ function tablesDoc() {
   </div>
   ${noteBox('冇公開連結都可以：喺 Sheet 選取範圍 → Ctrl+C → 按「改為貼上 CSV」照樣讀得到。', 'info')}
 
-  ${H('③ 總表同步：一張 Sheet 統管整個 Venture')}
-  ${P('目標係所有旅團嘅資料最後都寫入<b>同一個總 Sheet</b>，格式由你話事（每個旅團一個分頁，或者用「旅團」欄分辨）。')}
+  ${H('③ 總表同步：旅團獨立專屬 Google Sheet 後端')}
+  ${P('每個旅團使用<b>獨立專屬嘅 Google Sheet</b>（執委管理系統一張，進度追蹤系統另設一張，兩張完全分開獨立維護，互不干擾）。')}
   <div class="steps">
-    <div class="step"><div>開你嘅總 Sheet → <b>擴充功能 → Apps Script</b></div></div>
-    <div class="step"><div>APP 內「總表同步 → <b>下載 Code.gs</b>」→ 貼上去（全部取代）</div></div>
+    <div class="step"><div>開你旅團嘅專屬 Google Sheet → <b>擴充功能 → Apps Script</b></div></div>
+    <div class="step"><div>APP 內免登入或於「總表同步 → <b>下載 Code.gs</b>」→ 貼上去（全部取代）</div></div>
+    <div class="step"><div>執行 <code>initializeSheets</code> 建立 9 個棗紅工作表並取得專屬 API Key</div></div>
     <div class="step"><div><b>部署 → 新增部署作業 → 網頁應用程式</b>；執行身分：我；存取權：任何人</div></div>
-    <div class="step"><div>複製 <code>/exec</code> 網址，貼返「Apps Script 網址」，填旅團編號同（可選）API Key</div></div>
+    <div class="step"><div>複製 <code>/exec</code> 網址，貼返「Apps Script 網址」，填旅團編號與 API Key</div></div>
     <div class="step"><div>按「<b>測試連線</b>」→ 成功後按「<b>立即同步全部</b>」（或者開「每次改動後自動同步」）</div></div>
-    <div class="step"><div>總 Sheet 會自動建立／更新分頁：帳目、物資、團員、收支申報、通告、報名、會議、同步紀錄</div></div>
+    <div class="step"><div>專屬 Sheet 會自動建立／更新分頁：帳目、物資、團員、收支申報、通告、報名、會議、同步紀錄</div></div>
   </div>
-  ${noteBox('Script 用「每次同步重寫該旅團嘅分頁」方式，所以唔會愈積愈多舊資料；相片唔會直接塞入 Sheet（只記數量），如果想存相就喺 Code.gs 頂部填 <code>DRIVE_FOLDER_ID</code>，相片會自動上載去 Drive 再貼連結落 Sheet。', 'brand')}
+  ${noteBox('<b>重要原則：絕不混合單一試算表。</b>「執委管理系統」同「深資童軍進度追蹤 (VSBADGE)」必須各自擁有獨立試算表，權限隔離，架構升級互不影響。相片唔會直接塞入 Sheet（只記數量），如果想存相就喺 Code.gs 頂部填 <code>DRIVE_FOLDER_ID</code>，相片會自動上載去 Drive 再貼連結落 Sheet。', 'brand')}
 
   ${H('④ 儲存與備份')}
   ${P('所有資料存喺<b>你自己嘅瀏覽器</b>（localStorage，大約 5MB）。相片最佔位，所以：')}

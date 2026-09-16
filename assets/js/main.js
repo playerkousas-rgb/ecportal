@@ -108,7 +108,7 @@ function renderUnitGate() {
       <div class="gate-brand">
         <div class="logo">82</div>
         <div>
-          <div class="gate-title">82venture · 執委會管理平台</div>
+          <div class="gate-title">82venture · 執委管理系統</div>
           <div class="gate-sub">第一步：揀你嘅旅團（或者用示範資料試玩）</div>
         </div>
       </div>
@@ -371,7 +371,7 @@ function renderLogin() {
         </div>
       </div>
       <div>
-        <h1 class="hero-title">${esc(u.name || '深資童軍團')}<br>執委會管理平台</h1>
+        <h1 class="hero-title">${esc(u.name || '深資童軍團')}<br>執委管理系統</h1>
         <p class="hero-sub">會議、財務、團員、物資、團章 —— 一個地方搞掂。財務仲可以出「兩條數」（AGM 旅年度 ＋ 童軍年度）。</p>
         <div class="hero-list">
           ${[['團章內建，可改可輸出 Word / PDF / QR', 'book'],

@@ -1111,7 +1111,7 @@ function currentRanges() {
 
 function reportMeta() {
   const p = profile();
-  return `${p.name || ''} · 列印日期 ${todayISO()} · 由 82venture 執委會管理平台輸出`;
+  return `${p.name || ''} · 列印日期 ${todayISO()} · 由 82venture 執委管理系統輸出`;
 }
 
 function exportReportWord(both = true, which = 'unit') {
