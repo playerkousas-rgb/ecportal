@@ -21,7 +21,8 @@ const UPSTREAM_TIMEOUT_MS = (() => {
 })();
 const MAX_DATA_BYTES = 4 * 1024 * 1024; // 單次請求上限 4MB
 
-// 中央管理員收件匣（新旅團接入申請）
+// 中央管理員收件匣（新旅團接入申請）—— 目的地係伺服器端常數，前端改唔到。
+// 呢個收件匣同 VSBADGE 共用（用 appType 分辨：82venture / vsbadge）。
 const SCOUT_ADMIN_API = process.env.SCOUT_ADMIN_API ||
   'https://script.google.com/macros/s/AKfycbxj5BDDGgjs559smkK4Z5aYImWYeXbN5af8U1ObON0z9WnsN6QJW4I1XWolhs5kQ_H-UQ/exec';
 
@@ -103,6 +104,7 @@ export default async function handler(req, res) {
       scriptUrl: String(body.scriptUrl || '').substring(0, 300),
       apiKey: String(body.apiKey || '').substring(0, 120),
       appType: '82venture',
+      appName: '執委管理系統',
       contact: String(body.contact || '').substring(0, 120),
       mainSystemUrl: String(body.mainSystemUrl || '').substring(0, 300),
       note: String(body.note || '').substring(0, 500),
@@ -110,7 +112,10 @@ export default async function handler(req, res) {
     };
     try {
       const up = await callUpstream(SCOUT_ADMIN_API, regPayload);
-      if (!up.json && up.status >= 400) {
+      /* 收件匣一定要回 JSON 先算收到（同 vsbadge 一致）——唔係 JSON 就當送唔到，
+         唔可以呃申請人話成功（管理員收唔到就冇人跟進） */
+      if (!up.json) {
+        safeLog({ result: 'admin_upstream_bad', status: up.status, ms: Date.now() - t0 });
         return sendJson(res, 502, { success: false, error: '申請未能送達管理員，請稍後重試' });
       }
       safeLog({ result: 'registration_ok', status: up.status, ms: Date.now() - t0 });

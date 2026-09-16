@@ -24,6 +24,7 @@
   "scriptUrl": "https://script.google.com/macros/s/AKfyc…/exec",   // ← 佢嘅後端
   "apiKey":    "…",
   "appType":   "82venture",          // 用嚟分辨係邊個系統送出嘅申請
+  "appName":   "執委管理系統",        // 顯示名（同 appType 一齊，ADMIN 系統睇得到）
   "mainSystemUrl": "https://…",      // ← 畀你核對／記錄，唔再係 portalOrigin（見下）
   "contact":   "…",
   "note":      "…",
@@ -31,8 +32,16 @@
 }
 ```
 
-收件匣設定喺 `data/units.json` → **`admin.submitUrl`**
-（`api/proxy.js` 嘅 `SCOUT_ADMIN_API`，共用收件匣，用 `appType` 分辨。**如果你嘅 admin GAS 有按 `appType` 過濾，記得加 `'82venture'`**）。
+**送出方式（同 VSBADGE 一樣）**：申請人**唔會**直接打收件匣，係行同源
+`POST /api/proxy` → `action: 'submitRegistration'` → 由 Vercel 伺服器端轉發去收件匣
+（`api/proxy.js` 嘅 `SCOUT_ADMIN_API`，目的地係伺服器常數，前端改唔到）。
+收件匣一定要回 **JSON** 先當成功（`{success:true}`），否則 `/api/proxy` 回 502，
+喺 App 就會顯示「送唔到去 ADMIN 系統」＋畀申請人複製內容直接搵你 —— **唔會呃申請人話送咗**。
+冇 `/api/proxy`（純靜態部署）先會 fallback 直接 POST（no-cors，冇回執，UI 會講明）。
+
+收件匣設定喺 `data/units.json` → **`admin.submitUrl`**（冇設定就用 `api/proxy.js` 內建預設值，
+即 VSBADGE 同一個中央收件匣，用 `appType` 分辨：`82venture` / `vsbadge`）。
+**如果你嘅 admin GAS 有按 `appType` 過濾，記得加 `'82venture'`**，否則申請會石沉大海。
 
 ---
 

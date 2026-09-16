@@ -7,7 +7,10 @@ import {
   switchUnit, clearMockData
 } from './lib/store.js';
 import { loadRegistry, unitList, unitEntry, defaultUnitCode } from './lib/units.js';
-import { adminInbox, validateApplication, submitApplication, adminChecklist, downloadCodeGs, copyCodeGs } from './lib/onboard.js';
+import {
+  adminInbox, validateApplication, submitApplication, adminChecklist,
+  applicationText, downloadCodeGs, copyCodeGs
+} from './lib/onboard.js';
 import { applyTheme, MAROON } from './lib/theme.js';
 import {
   login, logout, current, currentRole, ROLES, displayName, displaySub,
@@ -182,7 +185,7 @@ async function openDeployGuideModal() {
     body: `
       <div class="note-box info mb-12">
         ${icon('check', 16)}
-        <div><b>10 分鐘完成部署！</b>本系統為多旅團架構，每個旅團擁有自己獨立的 Google Sheet 後端，毋須登入即可完成部署並提交登記。</div>
+        <div><b>10 分鐘完成部署！</b>本系統為多旅團架構，每個旅團擁有自己獨立的 Google Sheet 後端，毋須登入即可完成部署並提交登記（申請會直接送去平台管理員嘅 ADMIN 系統）。</div>
       </div>
       
       <div class="col gap-12" style="font-size:13.5px;line-height:1.6">
@@ -225,14 +228,19 @@ async function openDeployGuideModal() {
         </div>
 
         <div class="card" style="padding:14px">
-          <div class="semibold mb-4">第 5 步：提交登記（撳申請表自動送出）</div>
+          <div class="semibold mb-4">第 5 步：填申請表 → 直接入 ADMIN 系統</div>
           <div class="xs faint mb-8">
-            將 <b>旅團編號</b>、<b>旅團名稱</b>、<b>Apps Script /exec URL</b>、<b>API Key</b> 送出，
-            系統管理員會將你嘅旅團加入平台（Vercel 環境變數 <code>TROOP_&lt;編號&gt;_*</code>），完成後即可正式登入。
+            撳下面個掣會開<b>申請表</b>（旅團編號、名稱、後端 <code>/exec</code>、API Key、聯絡人）。
+            送出之後，資料會經<b>同源伺服器轉發</b>，直接落到平台管理員嘅
+            <b>ADMIN 系統收件匣</b>（同 VSBADGE 共用同一個收件匣，用 <code>appType: 82venture</code> 分辨），
+            所以管理員<u>一定收到</u>你張申請，唔會石沉大海。<br>
+            成功送出嗰陣，收件匣會回覆「已收到」——見到呢個回覆就代表管理員嗰邊已經有紀錄，
+            你可以安心等開通（管理員會加 <code>TROOP_&lt;編號&gt;_*</code> 環境變數並通知你）。
             <br>之後：想埋讀「進度追蹤」＝登入後去「進度 → 設定」貼 <code>/exec</code> ＋ API Key（或者交畀管理員一齊設定）；
             通告一開就可以用 QR／WhatsApp 分享收報名，報名直接入你自己嘅 Sheet。
           </div>
-          <button class="btn btn-sm" id="guide-apply-btn">${icon('plus', 15)} 填寫申請表自動送出</button>
+          <button class="btn btn-sm btn-primary" id="guide-apply-btn">${icon('plus', 15)} 填寫申請表自動送出（入 ADMIN 系統）</button>
+          <div class="xs faint mt-8">送唔到（例如網絡問題）？申請表會畀你<b>複製申請內容</b>，直接 WhatsApp／電郵畀管理員都一樣開得團。</div>
         </div>
       </div>
     `,
@@ -258,7 +266,7 @@ async function openApplication() {
   try { mainUrl = location.origin; } catch (e) { mainUrl = ''; }
   const r = await modal({
     title: '新旅團申請接入', wide: true,
-    sub: box.configured ? '申請會送去做平台管理員' : '（未設定收件匣）',
+    sub: box.configured ? '申請會送去做平台管理員嘅 ADMIN 系統（收件匣）' : '（未設定收件匣）',
     body: `
       <div class="note-box mb-12">${icon('alert', 15)}<div>
         <b>申請之前請先起好你自己嘅後端</b>（每個旅團一張自己嘅 Google Sheet）：
@@ -316,19 +324,60 @@ async function openApplication() {
   toast('送出中…', 'info');
   const res = await submitApplication(r);
   if (res.ok) {
+    const confirmed = res.confirmed !== false;
     await modal({
-      title: '申請已送出', sub: `${res.payload.troopId} · ${res.payload.troopName}`,
-      body: `<div class="note-box info mb-12">${icon('check', 15)}<div>
-          你嘅申請已經送去做平台管理員（${res.ms} ms）。<br>
-          <span class="xs">管理員會把你嘅後端網址加進 Registry，完成之後用同一條網址就可以揀到你嘅旅團。</span></div></div>
+      title: confirmed ? '申請已送到 ADMIN 系統' : '申請已送出（未收到回執）',
+      sub: `${res.payload.troopId} · ${res.payload.troopName} · ${res.via === 'proxy' ? '經伺服器轉發' : '直接送出'}${res.ms != null ? ` · ${res.ms} ms` : ''}`,
+      wide: !confirmed,
+      body: `
+        <div class="note-box ${confirmed ? 'info' : 'warn'} mb-12">${icon(confirmed ? 'check' : 'alert', 15)}<div>
+          ${confirmed
+            ? `管理員收件匣已經回覆<b>收到申請</b>，你唔使再做嘢。`
+            : `申請已經送出，但<b>攞唔到收件匣回執</b>（伺服器轉發唔通，改為直接送出）。
+               建議順手複製下面段文字，WhatsApp／電郵畀平台管理員，穩陣啲。`}
+          ${!confirmed && (res.errors || []).length ? `<div class="xs faint mt-4">伺服器路線回覆：${esc((res.errors || []).join(' · '))}</div>` : ''}
+          <br><span class="xs">管理員會把你嘅後端加進平台 Registry，完成之後用同一條網址就可以揀到你嘅旅團。</span>
+        </div></div>
+        <div class="row gap-8 mb-12">
+          <button class="btn btn-sm" id="ap-copy-again">${icon('copy', 14)} 複製申請內容（WhatsApp／電郵備用）</button>
+        </div>
         <div class="xs faint">管理員要做嘅嘢（自動列出，方便你跟進）：</div>
         <ol class="xs mono" style="padding-left:18px;line-height:1.9">
           ${adminChecklist(res.payload.troopId).map(x => `<li>${esc(x)}</li>`).join('')}
         </ol>`,
-      actions: [{ label: '好', class: 'btn-primary', value: true }]
+      actions: [{ label: '好', class: 'btn-primary', value: true }],
+      onMount: el => {
+        el.querySelector('#ap-copy-again')?.addEventListener('click', async () => {
+          const { copyText } = await import('./lib/util.js');
+          const okCopy = await copyText(applicationText(res.payload));
+          toast(okCopy ? '已複製申請內容' : '複製唔到，請手動抄低', okCopy ? 'ok' : 'err');
+        });
+      }
     });
   } else {
-    toast(res.errors?.[0] || '送出失敗', 'err');
+    const sig = (res.errors || []).join(' · ') || '送出失敗';
+    toast(sig, 'err');
+    await modal({
+      title: '送唔到去 ADMIN 系統', wide: true,
+      sub: res.via === 'proxy' ? '（經伺服器轉發時失敗）' : '（直接送出時失敗）',
+      body: `
+        <div class="note-box danger mb-12">${icon('alert', 15)}<div>
+          <b>${esc(sig)}</b><br>
+          <span class="xs">申請內容仲喺度，你可以複製落嚟，直接 WhatsApp／電郵畀平台管理員，佢一樣開得團。</span>
+        </div></div>
+        <textarea class="input mono" rows="9" readonly style="font-size:12px">${esc(applicationText(res.payload))}</textarea>`,
+      actions: [
+        { label: '關閉', class: 'btn', value: null },
+        { label: '再試一次', class: 'btn', value: 'retry' },
+        { label: '複製申請內容', class: 'btn-primary', value: 'copy' }
+      ]
+    }).then(async v => {
+      if (v === 'copy') {
+        const { copyText } = await import('./lib/util.js');
+        toast((await copyText(applicationText(res.payload))) ? '已複製申請內容' : '複製唔到，請手動抄低', 'ok');
+      }
+      if (v === 'retry') openApplication();
+    });
   }
 }
 

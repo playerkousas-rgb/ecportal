@@ -1716,7 +1716,7 @@ console.log('\n▌新旅團申請接入（送去 ADMIN 收件匣）');
   });
   ok('填齊就通過驗證', good.ok === true && good.errors.length === 0, JSON.stringify(good.errors));
   ok('payload schema 同收件匣 submitRegistration 格式對齊',
-    ['troopId','troopName','scriptUrl','apiKey','appType','note'].every(k => k in good.payload),
+    ['troopId','troopName','scriptUrl','apiKey','appType','appName','note'].every(k => k in good.payload),
     Object.keys(good.payload).join(','));
   ok('payload 帶 mainSystemUrl（管理員核對用）',
     typeof good.payload.mainSystemUrl === 'string' && good.payload.mainSystemUrl.length > 0,
@@ -1734,6 +1734,65 @@ console.log('\n▌新旅團申請接入（送去 ADMIN 收件匣）');
 
   const failed = await ob.submitApplication({ troopId: '', troopName: '', scriptUrl: '' });
   ok('驗證失敗就唔會送出', failed.ok === false && failed.errors.length > 0, JSON.stringify(failed.errors));
+
+  /* ---- 送出：一定要經同源 proxy 去 ADMIN 系統，唔可以「冇送到都話成功」 ---- */
+  const realFetch = globalThis.fetch;
+  const seen = [];
+  const stub = (handler) => async (url, init = {}) => { seen.push({ url: String(url), init }); return handler(String(url), init); };
+  const APP = {
+    troopId: '0100', troopName: '第一百旅深資童軍團',
+    scriptUrl: 'https://script.google.com/macros/s/AKfycbTESTTESTTESTTESTTESTTESTTESTTEST/exec',
+    apiKey: 'K1', contact: 'a@b.hk', note: '想埋進度'
+  };
+
+  globalThis.fetch = stub(async () => ({ ok: true, status: 200, json: async () => ({ success: true, message: '申請已提交' }) }));
+  const okSend = await ob.submitApplication(APP);
+  const body = JSON.parse(seen[0].init.body);
+  ok('送出申請 → 行同源 /api/proxy（action=submitRegistration）',
+    seen[0].url === 'api/proxy' && body.action === 'submitRegistration', seen[0].url);
+  ok('送出嘅 payload 帶 appType=82venture ＋ appName（ADMIN 系統認得到係邊個 app）',
+    body.appType === '82venture' && body.appName === '執委管理系統', JSON.stringify({ appType: body.appType, appName: body.appName }));
+  ok('收件匣／伺服器回覆收到 → 當成功，而且標明「已確認」',
+    okSend.ok === true && okSend.via === 'proxy' && okSend.confirmed === true, JSON.stringify(okSend));
+
+  seen.length = 0;
+  globalThis.fetch = stub(async (url) => {
+    /* 伺服器路線話送唔到；直接送同樣失敗 → 真係要當失敗 */
+    if (url === 'api/proxy') return { ok: false, status: 502, json: async () => ({ success: false, error: '申請未能送達管理員，請稍後重試' }) };
+    throw new Error('network failed');
+  });
+  const badSend = await ob.submitApplication(APP);
+  ok('伺服器路線＋直接送都失敗 → 當失敗（唔會呃申請人話成功）',
+    badSend.ok === false && /未能送達管理員/.test(badSend.errors.join(' ')), JSON.stringify(badSend.errors));
+  ok('失敗都帶返 payload（可以複製去 WhatsApp／電郵畀管理員）',
+    badSend.payload && badSend.payload.troopId === '0100');
+  ok('申請內容純文字版有齊編號／後端／appType（求救用）',
+    /旅團編號：0100/.test(ob.applicationText(badSend.payload))
+    && /\/exec/.test(ob.applicationText(badSend.payload))
+    && /82venture/.test(ob.applicationText(badSend.payload)));
+
+  seen.length = 0;
+  globalThis.fetch = stub(async (url) => {
+    /* 伺服器路線話送唔到，但自己直接送得到 → 都算送到（未確認） */
+    if (url === 'api/proxy') return { ok: false, status: 502, json: async () => ({ success: false, error: '申請未能送達管理員，請稍後重試' }) };
+    return { ok: true, status: 200 };
+  });
+  const rescued = await ob.submitApplication(APP);
+  ok('伺服器路線失敗 → 會自動再直接送一次（寧願重複都唔好收唔到）',
+    seen.length === 2 && seen[1].url === ob.adminInbox().url && seen[1].init.mode === 'no-cors',
+    seen.map(x => x.url).join(' → '));
+  ok('呢種情況標明「已送出・未確認」（唔會當係 ADMIN 已回覆）',
+    rescued.ok === true && rescued.via === 'direct' && rescued.confirmed === false);
+
+  seen.length = 0;
+  globalThis.fetch = stub(async () => ({ ok: false, status: 404, text: async () => '<html>404</html>', json: async () => { throw new Error('not json'); } }));
+  const fallback = await ob.submitApplication(APP);
+  ok('冇 /api/proxy（純靜態部署）→ 自動 fallback 直接 POST 去收件匣',
+    seen.length === 2 && seen[1].url === ob.adminInbox().url && seen[1].init.mode === 'no-cors',
+    seen.map(x => x.url).join(' → '));
+  ok('直接送出冇回執 → 標明未確認（UI 會叫申請人順手通知管理員）',
+    fallback.ok === true && fallback.via === 'direct' && fallback.confirmed === false);
+  globalThis.fetch = realFetch;
 
   const cl = ob.adminChecklist('0100');
   ok('管理員 checklist 有列出要做嘅嘢（units.json ＋ 資料夾 ＋ 通知旅團）',

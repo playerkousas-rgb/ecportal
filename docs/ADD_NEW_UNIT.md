@@ -11,6 +11,26 @@
 
 ---
 
+## 旅團點申請 / 點交資料畀你
+
+旅團**唔使登入**就睇得到教學：喺旅團閘撳「**部署指南**」（5 步：下載 Code.gs → 貼落自己張 Sheet →
+`initializeSheets` → 部署 Web App → **填申請表**）。撳「填寫申請表自動送出」之後：
+
+```
+申請人瀏覽器 ──POST /api/proxy（action=submitRegistration）──▶ Vercel 伺服器端
+                                                            └──▶ 中央管理員收件匣 Apps Script
+```
+
+* 目的地係**伺服器端常數**（`api/proxy.js` 嘅 `SCOUT_ADMIN_API`，同 VSBADGE 共用同一個收件匣，
+  用 `appType: '82venture'` 分辨）——前端改唔到，申請一定落到你嗰邊。
+* 收件匣要回 JSON 先算成功；唔係 JSON（HTML 錯誤頁／逾時）就回 502，App 會叫申請人
+  **複製申請內容**（WhatsApp／電郵畀你）或者**再試一次**，唔會呃佢話送咗。
+* Payload 帶 `appType: '82venture'`、`appName: '執委管理系統'`、旅團編號／名稱、`/exec`、
+  API Key、聯絡人、主系統網址、時間戳。**你嘅收件匣 GAS 如果有 `appType` 白名單，要加 `'82venture'`。**
+* 你收到之後照下面（方法 B 或方法 A）開團，再通知旅團。
+
+---
+
 ## 方法 B：Vercel 環境變數（唔改 Git）
 
 旅團畀你 `/exec` 網址同 API Key 之後，喺 Vercel 加：

@@ -12,7 +12,8 @@ import { gasTemplate } from './gastemplate.js';
 import { download } from './exporter.js';
 import { toast, copyText, icon } from './util.js';
 
-export const APP_TYPE = '82venture';
+export const APP_TYPE = '82venture';       // 中央收件匣用 appType 分辨來源（同 VSBADGE 共用收件匣）
+export const APP_NAME = '執委管理系統';        // 全名，方便管理員喺 ADMIN 系統睇到係邊個 app
 
 /** 登入前／任何時候直接在 App 內下載 Code.gs */
 export function downloadCodeGs() {
@@ -28,11 +29,21 @@ export async function copyCodeGs() {
   else toast('未能複製，請使用「下載 Code.gs」', 'err');
 }
 
+/* 內建嘅中央管理員收件匣（同 api/proxy.js 嘅 SCOUT_ADMIN_API 同一個；同 VSBADGE 共用，
+   用 appType 分辨）。data/units.json 有設定就用設定值。 */
+export const DEFAULT_ADMIN_INBOX =
+  'https://script.google.com/macros/s/AKfycbxj5BDDGgjs559smkK4Z5aYImWYeXbN5af8U1ObON0z9WnsN6QJW4I1XWolhs5kQ_H-UQ/exec';
+
 /** 管理員收件匣（Apps Script /exec） */
 export function adminInbox() {
   const a = registry()?.admin || {};
-  const url = String(a.submitUrl || '').trim();
-  return { name: a.name || '平台管理員收件匣', url, configured: /^https:\/\/script\.google\.com\/macros\/s\//i.test(url) };
+  const url = String(a.submitUrl || '').trim() || DEFAULT_ADMIN_INBOX;
+  return {
+    name: a.name || '平台管理員收件匣',
+    url,
+    configured: /^https:\/\/script\.google\.com\/macros\/s\//i.test(url),
+    builtin: !String(a.submitUrl || '').trim()
+  };
 }
 
 const EXEC_RE = /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]{10,}\/exec\/?$/i;
@@ -66,6 +77,7 @@ export function validateApplication(input = {}) {
     scriptUrl: scriptUrl.substring(0, 300),
     apiKey: apiKey.substring(0, 120),
     appType: APP_TYPE,
+    appName: APP_NAME,
     mainSystemUrl,
     contact: contact.substring(0, 120),
     note: note.substring(0, 500),
@@ -75,15 +87,40 @@ export function validateApplication(input = {}) {
 }
 
 /**
- * 把申請 POST 去管理員收件匣。
+ * 把申請送去中央管理員收件匣 —— 同 VSBADGE 一樣行同源 proxy：
+ *   瀏覽器 ──POST /api/proxy (action=submitRegistration)──▶ Vercel ──▶ 管理員收件匣 GAS
+ * 好處：目的地固定喺伺服器端（前端改唔到）＋ 攞到真正嘅成功／失敗回執，
+ * 咁管理員就一定知有人想申請，申請人亦唔會以為送咗但其實冇。
+ * 冇 /api/proxy（淨靜態部署、GitHub Pages）就 fallback 直接 POST（no-cors，冇回執）。
+ * @returns {{ok:boolean, via:'proxy'|'direct', confirmed:boolean, ms:number, payload:object, errors?:string[]}}
  */
-export async function submitApplication(input = {}, timeoutMs = 20000) {
-  const v = validateApplication(input);
-  if (!v.ok) return { ok: false, errors: v.errors };
+async function postViaProxy(payload, timeoutMs) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const t0 = Date.now();
+  try {
+    const r = await fetch('api/proxy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'submitRegistration', ...payload }),
+      signal: ctrl.signal
+    });
+    let j = null;
+    try { j = await r.json(); } catch (e) { j = null; }
+    if (!j || typeof j !== 'object') {
+      /* 同源冇 /api（靜態部署）→ 話畀呼叫者知，改用直接 POST */
+      return { available: false, ms: Date.now() - t0 };
+    }
+    if (j.success) return { available: true, ok: true, ms: Date.now() - t0 };
+    return { available: true, ok: false, ms: Date.now() - t0, errors: [j.error || '管理員收件匣話送唔到'] };
+  } catch (e) {
+    return { available: false, ms: Date.now() - t0, errors: [e?.name === 'AbortError' ? '逾時' : (e?.message || String(e))] };
+  } finally { clearTimeout(timer); }
+}
+
+/** 後備：直接 POST 去收件匣（no-cors，瀏覽器唔會畀回執） */
+async function postDirectToInbox(payload, timeoutMs) {
   const box = adminInbox();
-  if (!box.configured) {
-    return { ok: false, errors: ['未設定管理員收件匣（data/units.json → admin.submitUrl）'] };
-  }
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   const t0 = Date.now();
@@ -92,21 +129,69 @@ export async function submitApplication(input = {}, timeoutMs = 20000) {
       method: 'POST',
       mode: 'no-cors',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(v.payload),
+      body: JSON.stringify(payload),
       signal: ctrl.signal
     });
     clearTimeout(timer);
-    return { ok: true, ms: Date.now() - t0, payload: v.payload };
+    return { ok: true, via: 'direct', confirmed: false, ms: Date.now() - t0, payload };
   } catch (e) {
     clearTimeout(timer);
     const aborted = e?.name === 'AbortError';
     return {
-      ok: false,
-      ms: Date.now() - t0,
+      ok: false, via: 'direct', confirmed: false, ms: Date.now() - t0,
       errors: [aborted ? `提交逾時（${Math.round(timeoutMs / 1000)} 秒冇回應）` : (e?.message || String(e))],
-      payload: v.payload
+      payload
     };
   }
+}
+
+/**
+ * 送出申請：先經同源 proxy（有真回執），唔得就自己直接送多一次（未確認）。
+ * @returns {{ok:boolean, via:'proxy'|'direct', confirmed:boolean, ms:number, payload:object, errors?:string[]}}
+ */
+export async function submitApplication(input = {}, timeoutMs = 20000) {
+  const v = validateApplication(input);
+  if (!v.ok) return { ok: false, via: 'proxy', confirmed: false, errors: v.errors, payload: v.payload };
+  const box = adminInbox();
+  if (!box.configured) {
+    return { ok: false, via: 'proxy', confirmed: false, errors: ['未設定管理員收件匣（data/units.json → admin.submitUrl）'], payload: v.payload };
+  }
+  const viaProxy = await postViaProxy(v.payload, timeoutMs);
+  if (viaProxy.available && viaProxy.ok) {
+    return { ok: true, via: 'proxy', confirmed: true, ms: viaProxy.ms, payload: v.payload };
+  }
+  /* 伺服器路線送唔到（或者根本冇 /api/proxy）→ 自己直接送多一次，
+     寧願管理員收到兩次，都好過收唔到。直接送冇回執，UI 會講清楚。 */
+  const direct = await postDirectToInbox(v.payload, timeoutMs);
+  if (direct.ok) {
+    return {
+      ...direct,
+      errors: viaProxy.available ? viaProxy.errors : undefined   /* 伺服器路線嘅錯誤，用嚟提示 */
+    };
+  }
+  return {
+    ok: false, via: direct.via, confirmed: false,
+    ms: (viaProxy.ms || 0) + (direct.ms || 0),
+    payload: v.payload,
+    errors: [...(viaProxy.available ? (viaProxy.errors || []) : []), ...(direct.errors || [])]
+  };
+}
+
+/** 申請內容純文字版（送唔到時可以 WhatsApp／電郵畀管理員） */
+export function applicationText(payload = {}) {
+  const p = payload || {};
+  return [
+    '【新旅團申請接入 · 執委管理系統】',
+    `旅團編號：${p.troopId || ''}`,
+    `旅團名稱：${p.troopName || ''}`,
+    `後端 /exec：${p.scriptUrl || ''}`,
+    `API Key：${p.apiKey || '（未填）'}`,
+    `聯絡人：${p.contact || '（未填）'}`,
+    `主系統網址：${p.mainSystemUrl || ''}`,
+    `備註：${p.note || '（無）'}`,
+    `送出時間：${p.at || ''}`,
+    `appType：${p.appType || APP_TYPE} · app：${p.appName || APP_NAME}`
+  ].join('\n');
 }
 
 /** 管理員收到申請之後要做嘅嘢（用嚟顯示／複製） */
