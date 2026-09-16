@@ -22,5 +22,10 @@
         { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
       ]
     }
+  ],
+  "routes": [
+    { "src": "/api/proxy/?", "dest": "/api/proxy.js" },
+    { "src": "/api/units/?", "dest": "/api/units.js" },
+    { "src": "/api/(.*)", "dest": "/api/$1.js" }
   ]
 }
