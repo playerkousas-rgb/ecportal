@@ -1,0 +1,18 @@
+{
+  "schema": 2,
+  "unitCode": "MOCK",
+  "_comment": "示範團員（全部假名假資料）。生日刻意分佈喺唔同月份，方便試「本月生日 / 7 日前生日」提示。",
+  "members": [
+    { "id": "dm01", "name": "陳大文", "eng": "Chan Tai Man", "birthday": "2008-09-16", "role": "執委會主席", "status": "active", "tags": ["執委會"], "phone": "9000 0001", "email": "taiman@example.org", "join": "2024-09-01", "note": "示範資料：3 日後生日" },
+    { "id": "dm02", "name": "李小明", "eng": "Lee Siu Ming", "birthday": "2009-09-18", "role": "秘書", "status": "active", "tags": ["執委會"], "phone": "9000 0002", "email": "siuming@example.org", "join": "2024-09-01", "note": "示範資料：5 日後生日" },
+    { "id": "dm03", "name": "黃美儀", "eng": "Wong Mei Yee", "birthday": "2009-09-05", "role": "司庫", "status": "active", "tags": ["執委會"], "phone": "9000 0003", "email": "meiyee@example.org", "join": "2024-09-01", "note": "示範資料：本月已過生日" },
+    { "id": "dm04", "name": "張家俊", "eng": "Cheung Ka Chun", "birthday": "2009-09-30", "role": "活動統籌", "status": "active", "tags": ["執委會"], "phone": "9000 0004", "email": "kachun@example.org", "join": "2025-03-15", "note": "示範資料" },
+    { "id": "dm05", "name": "何嘉欣", "eng": "Ho Ka Yan", "birthday": "2010-10-03", "role": "文書", "status": "active", "tags": ["執委會"], "phone": "9000 0005", "email": "kayan@example.org", "join": "2025-03-15", "note": "示範資料" },
+    { "id": "dm06", "name": "林志強", "eng": "Lam Chi Keung", "birthday": "2010-11-20", "role": "隊長", "status": "active", "tags": ["小隊"], "phone": "9000 0006", "email": "chikeung@example.org", "join": "2025-09-06", "note": "示範資料" },
+    { "id": "dm07", "name": "吳淑儀", "eng": "Ng Suk Yee", "birthday": "2011-01-08", "role": "隊員", "status": "active", "tags": ["小隊"], "phone": "9000 0007", "email": "sukyee@example.org", "join": "2025-09-06", "note": "示範資料" },
+    { "id": "dm08", "name": "周文輝", "eng": "Chow Man Fai", "birthday": "2011-03-26", "role": "隊員", "status": "active", "tags": ["新團員"], "phone": "9000 0008", "email": "manfai@example.org", "join": "2026-03-14", "note": "示範資料" },
+    { "id": "dm09", "name": "鄭少玲", "eng": "Cheng Siu Ling", "birthday": "07-28", "role": "隊員", "status": "active", "tags": ["新團員"], "phone": "9000 0009", "email": "siuling@example.org", "join": "2026-03-14", "note": "示範資料：出生年份待補" },
+    { "id": "dm10", "name": "羅浩然", "eng": "Law Ho Yin", "birthday": "12-01", "role": "隊員", "status": "leave", "tags": [], "phone": "9000 0010", "email": "hoyin@example.org", "join": "2025-09-06", "note": "示範資料：休假中" },
+    { "id": "dm11", "name": "馬穎彤", "eng": "Ma Wing Tung", "birthday": "2004-05-12", "role": "舊團員", "status": "alumni", "tags": ["舊團員"], "phone": "9000 0011", "email": "wingtung@example.org", "join": "2019-09-01", "note": "示範資料：已離團" }
+  ]
+}

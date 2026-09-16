@@ -1,0 +1,9 @@
+{
+  "schema": 2,
+  "unitCode": "0082",
+  "_comment": "物資紀錄（真實資料，由 2026-09 起登記）。items.total = 總數量；可用數量＝total 減去未歸還嘅借用；audits 記錄盤點／損耗調整。",
+  "nextCode": "G-001",
+  "items": [],
+  "loans": [],
+  "audits": []
+}

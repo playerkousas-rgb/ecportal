@@ -1,0 +1,63 @@
+{
+  "schema": 2,
+  "updated": "2026-09-14",
+  "_comment": "旅團 Registry —— 多旅團平台嘅唯一註冊處。新增旅團：加一個 key（旅團編號）+ 建立 data/units/<編號>/ 資料夾（unit.json / constitution.json / members.json / inventory.json / finance.json）。詳見 docs/ADD_NEW_UNIT.md",
+  "defaultUnit": "0082",
+  "units": {
+    "0082": {
+      "code": "0082",
+      "name": "第八十二旅深資童軍團",
+      "nameEn": "82nd Hong Kong Group Venture Scout Unit",
+      "short": "82venture",
+      "section": "深資童軍",
+      "region": "港島地域",
+      "sponsor": "香港小童群益會康山兒童中心",
+      "address": "香港鰂魚涌康山花園第二至三座地下",
+      "dataPath": "data/units/0082/",
+      "theme": {
+        "brand700": "#7B2233",
+        "brand800": "#5E1826",
+        "brand900": "#4A111C",
+        "brand600": "#93293D",
+        "brand50": "#FBF1F3",
+        "brand100": "#F2DCE1"
+      },
+      "progress": {
+        "name": "深資童軍進度及行政平台 (VSBADGE)",
+        "_which_url": "呢度要填進度系統嘅**前端網址**（vsbadge.vercel.app），唔係佢嘅 GAS /exec。v3.0 起前端經自己嘅同源 /api/proxy 搵旅團後端，主系統只需要帶 u=旅團編號。填 GAS /exec 會見到 JSON 錯誤頁而唔係系統介面。",
+        "url": "https://vsbadge.vercel.app/",
+        "mode": "portal",
+        "portal": {
+          "unitParam": "0082",
+          "role": "exec_committee",
+          "_ymis_note": "留空＝自動產生 PORTAL-<旅團>-<角色>，唔使先去進度系統開帳戶（對方 portal 分支唔核對 ymis 係咪真成員）。",
+          "ymis": "",
+          "extraParams": "embed=1"
+        },
+        "_gas_backend_note": "旅團自己嘅 GAS 後端由 vsbadge 伺服器端 Registry（troops.json + TROOP_* env）保管，主系統唔需要亦唔應該帶。0082 嘅後端登記喺 vsbadge data/troops.json。"
+      },
+      "backend": {
+        "gasUrl": "https://script.google.com/macros/s/AKfycbySGLBg5KuWzgM9EySiOIppqnzrL0QASIYLlhbCIHocGHcLHKbkMdvmhJvam3baG___/exec",
+        "apiKey": ""
+      },
+      "notice": {
+        "submitUrl": "https://script.google.com/macros/s/AKfycbySGLBg5KuWzgM9EySiOIppqnzrL0QASIYLlhbCIHocGHcLHKbkMdvmhJvam3baG___/exec",
+        "_howto": "公開通告頁（notice.html）收到嘅報名會 POST 去呢個 Apps Script。"
+      }
+    }
+  },
+  "admin": {
+    "name": "平台管理員收件匣（Apps Script Web App）",
+    "submitUrl": "https://script.google.com/macros/s/AKfycbxj5BDDGgjs559smkK4Z5aYImWYeXbN5af8U1ObON0z9WnsN6QJW4I1XWolhs5kQ_H-UQ/exec",
+    "_howto": "新旅團喺旅團選擇畫面撳「新旅團申請接入」，資料會 POST 去呢度。同 VSBADGE 共用同一個收件匣（用 appType 分辨：82venture / vsbadge）。管理員收到之後要做兩件事：(1) 82venture —— data/units.json 加該旅團 entry（backend.gasUrl / backend.apiKey / progress）+ 建 data/units/<編號>/ 資料夾；(2) VSBADGE —— data/troops.json 加 backend（或 TROOP_<編號>_BACKEND env），並加 portalOrigin / portalRoles 先至可以 portal 免登入。",
+    "_payload": "{ troopId, troopName, scriptUrl, apiKey, appType:'82venture', mainSystemUrl, contact, note, at }",
+    "_note": "呢個 URL 係 VSBADGE 個中央管理員收件匣（api/proxy.js 嘅 SCOUT_ADMIN_API）。如果你嘅 admin GAS 有按 appType 過濾，記得加 '82venture'。"
+  },
+  "backend": {
+    "name": "82venture 總表（Apps Script Web App）",
+    "gasUrl": "https://script.google.com/macros/s/AKfycbySGLBg5KuWzgM9EySiOIppqnzrL0QASIYLlhbCIHocGHcLHKbkMdvmhJvam3baG___/exec",
+    "apiKey": "",
+    "_howto": "**每個旅團自設後端先係正常做法**：旅團下載 Code.gs → 建自己嘅 Google Sheet → 執行 initializeSheets → 部署做網頁應用程式 → 把 /exec 網址（同 API Key）交返平台管理員 → 管理員加進呢個 registry（該旅團 entry 嘅 backend.gasUrl）→ 完成開戶同連通。下面呢個共用 backend 只係**未有自己後端時嘅臨時 fallback／示範用**，唔係預設歸宿。",
+    "updated": "2026-09-14"
+  }
+}

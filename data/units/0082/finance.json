@@ -1,0 +1,185 @@
+{
+  "schema": 2,
+  "unitCode": "0082",
+  "_comment": "真實帳目（由 2026-09 起登記）。fees = 2026-27 年度團費收款表（每人 $360，預先建立好，收到錢就按「標記已收」，會自動入帳）。要匯入舊帳：見 finance.reference.json 或「財務 → 匯入」。",
+  "categories": {
+    "income": [
+      "團費",
+      "活動費",
+      "資助",
+      "捐款",
+      "售賣物品",
+      "利息",
+      "其他收入"
+    ],
+    "expense": [
+      "場地",
+      "活動",
+      "物資",
+      "文書",
+      "交通",
+      "膳食",
+      "訓練",
+      "服務",
+      "雜項"
+    ]
+  },
+  "methods": [
+    "現金",
+    "轉數快 FPS",
+    "銀行轉賬",
+    "自動扣賬",
+    "支票",
+    "PayMe",
+    "其他"
+  ],
+  "transactions": [],
+  "claims": [],
+  "fees": [
+    {
+      "id": "f001",
+      "memberId": "m001",
+      "period": "2026-27",
+      "label": "2026-27 年度團費",
+      "amount": 360,
+      "due": "2026-09-30",
+      "paid": false
+    },
+    {
+      "id": "f002",
+      "memberId": "m002",
+      "period": "2026-27",
+      "label": "2026-27 年度團費",
+      "amount": 360,
+      "due": "2026-09-30",
+      "paid": false
+    },
+    {
+      "id": "f003",
+      "memberId": "m003",
+      "period": "2026-27",
+      "label": "2026-27 年度團費",
+      "amount": 360,
+      "due": "2026-09-30",
+      "paid": false
+    },
+    {
+      "id": "f004",
+      "memberId": "m004",
+      "period": "2026-27",
+      "label": "2026-27 年度團費",
+      "amount": 360,
+      "due": "2026-09-30",
+      "paid": false
+    },
+    {
+      "id": "f005",
+      "memberId": "m005",
+      "period": "2026-27",
+      "label": "2026-27 年度團費",
+      "amount": 360,
+      "due": "2026-09-30",
+      "paid": false
+    },
+    {
+      "id": "f006",
+      "memberId": "m006",
+      "period": "2026-27",
+      "label": "2026-27 年度團費",
+      "amount": 360,
+      "due": "2026-09-30",
+      "paid": false
+    },
+    {
+      "id": "f007",
+      "memberId": "m007",
+      "period": "2026-27",
+      "label": "2026-27 年度團費",
+      "amount": 360,
+      "due": "2026-09-30",
+      "paid": false
+    },
+    {
+      "id": "f008",
+      "memberId": "m008",
+      "period": "2026-27",
+      "label": "2026-27 年度團費",
+      "amount": 360,
+      "due": "2026-09-30",
+      "paid": false
+    },
+    {
+      "id": "f009",
+      "memberId": "m009",
+      "period": "2026-27",
+      "label": "2026-27 年度團費",
+      "amount": 360,
+      "due": "2026-09-30",
+      "paid": false
+    },
+    {
+      "id": "f010",
+      "memberId": "m010",
+      "period": "2026-27",
+      "label": "2026-27 年度團費",
+      "amount": 360,
+      "due": "2026-09-30",
+      "paid": false
+    },
+    {
+      "id": "f011",
+      "memberId": "m011",
+      "period": "2026-27",
+      "label": "2026-27 年度團費",
+      "amount": 360,
+      "due": "2026-09-30",
+      "paid": false
+    },
+    {
+      "id": "f012",
+      "memberId": "m012",
+      "period": "2026-27",
+      "label": "2026-27 年度團費",
+      "amount": 360,
+      "due": "2026-09-30",
+      "paid": false
+    },
+    {
+      "id": "f013",
+      "memberId": "m013",
+      "period": "2026-27",
+      "label": "2026-27 年度團費",
+      "amount": 360,
+      "due": "2026-09-30",
+      "paid": false
+    },
+    {
+      "id": "f014",
+      "memberId": "m014",
+      "period": "2026-27",
+      "label": "2026-27 年度團費",
+      "amount": 360,
+      "due": "2026-09-30",
+      "paid": false
+    },
+    {
+      "id": "f015",
+      "memberId": "m015",
+      "period": "2026-27",
+      "label": "2026-27 年度團費",
+      "amount": 360,
+      "due": "2026-09-30",
+      "paid": false
+    },
+    {
+      "id": "f016",
+      "memberId": "m016",
+      "period": "2026-27",
+      "label": "2026-27 年度團費",
+      "amount": 360,
+      "due": "2026-09-30",
+      "paid": false
+    }
+  ],
+  "budgets": []
+}

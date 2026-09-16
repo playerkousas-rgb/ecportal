@@ -1,0 +1,308 @@
+{
+  "schema": 2,
+  "unitCode": "0082",
+  "version": "2024.09",
+  "status": "published",
+  "updated": "2024-09-12",
+  "translated": "2025-08-22",
+  "source": "https://docs.google.com/document/d/1tb8-j02mHquIrA3ouG0GpLAucobaOnuw-J9ryBYREiY/",
+  "_comment": "真實團章（中英對照），由 Google Doc 原文內建。可喺「團章 → 編輯」修改，改完可發布新版本及輸出 Word / PDF / Markdown / 單一 HTML。",
+  "title": { "zh": "團章", "en": "Constitution" },
+  "header": {
+    "zh": ["香港童軍總會", "港島地域", "第八十二旅深資童軍團", "香港小童群益會康山兒童中心"],
+    "en": ["Scout Association of Hong Kong", "Hong Kong Island Region", "82nd Venture Scout Unit", "BGCA Kornhill Children Centre"]
+  },
+  "preamble": {
+    "zh": "本章程依據香港童軍總會《政策、組織及規條》及深資童軍團自務自治之精神訂立，旨在確立本團之名稱、宗旨、組織、職權、會議、財務及紀律制度，使全體團員得以共同參與、共同決策、共同承擔。",
+    "en": "This Constitution is established in accordance with the Policy, Organisation and Rules of the Scout Association of Hong Kong and the spirit of self-governance of a Venture Scout Unit, setting out the Unit's name, objectives, organisation, powers, meetings, finance and discipline so that all members may participate, decide and share responsibility together."
+  },
+  "chapters": [
+    {
+      "id": "c01",
+      "heading": { "zh": "1. 名稱", "en": "1. Name" },
+      "articles": [
+        { "id": "a01-01", "zh": "本團名稱為「香港童軍總會港島地域第八十二旅深資童軍團」（下稱本團）。", "en": "The title of the Unit shall be “The 82nd Hong Kong Group Venture Scout Unit” (hereinafter referred to as the Unit)." }
+      ]
+    },
+    {
+      "id": "c02",
+      "heading": { "zh": "2. 主辦機構", "en": "2. Organising Organisation" },
+      "articles": [
+        { "id": "a02-01", "zh": "本團是由香港小童群益會康山兒童中心向香港童軍總會註冊開辦。", "en": "The Unit is sponsored by “The Boys' & Girls' Clubs Association Hong Kong, Kornhill Children Centre” (hereinafter referred to as “The BGCA”) and registered with Scout Association of Hong Kong." }
+      ]
+    },
+    {
+      "id": "c03",
+      "heading": { "zh": "3. 團址", "en": "3. Address" },
+      "articles": [
+        { "id": "a03-01", "zh": "本團之地址為香港鰂魚涌康山花園第二至三座地下香港小童群益會康山兒童中心。", "en": "The address of this Unit is: “The Boys' & Girls' Clubs Association Hong Kong, Kornhill Children Centre, G/F, Blocks 2 to 3, Kornhill Gardens, Quarry Bay, Hong Kong”." }
+      ]
+    },
+    {
+      "id": "c04",
+      "heading": { "zh": "4. 宗旨", "en": "4. Objectives" },
+      "articles": [
+        {
+          "id": "a04-01",
+          "zh": "本團之宗旨是：",
+          "en": "The aims of the Unit are based on the Scout Law and Promise, and are:",
+          "items": [
+            { "zh": "（甲）依照香港童軍總會之政策、組織及規條，推行童軍活動。", "en": "To promote Scouting as stipulated in the “Policy, Organisation and Rules” of Scout Association of Hong Kong." },
+            { "zh": "（乙）培育團員自立能力，鼓勵團員接受訓練，成爲有責任感及對社會有貢獻之公民。", "en": "To develop self-reliance in Venture Scouts and encourage them to take on training so that they can become responsible citizens and contribute to the society." },
+            { "zh": "（丙）爲社會及童軍運動服務。", "en": "To serve the community and the Scout Movement." },
+            { "zh": "（丁）爲團員提供有意義的活動，促進情誼。", "en": "To provide meaningful activities for Venture Scouts and promote friendship among members." },
+            { "zh": "（戊）吸引年輕人加入童軍活動。", "en": "To recruit young people in the Scout Movement." }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "c05",
+      "heading": { "zh": "5. 團員資格", "en": "5. Membership" },
+      "articles": [
+        {
+          "id": "a05-01",
+          "zh": "凡年齡在 15 至 21 歲，願意接受童軍誓詞規律，遵守團規，得本團執行委員會通過者可成爲暫許團員。暫許團員在接受基本訓練後，完成會員章各項規定，及參與本團活動六次或以上，在本團執行委員會審核後，得宣誓爲深資童軍，成爲正式團員。",
+          "en": "Anyone aged 15 to 21 who is willing to accept the Scout Law and Promise and observe the rules of the Unit as well as have gained approval from the Executive Committee of the Unit may become a Provisional Member. After Provisional Members have completed basic training, completed all requirements of the Venture Scout Membership Badge and participated in six or more Venture Scout activities organised by the Unit, and after review by the Executive Committee of the Unit, an investiture of Provisional Members may take place so that they can become full members of the Unit."
+        }
+      ]
+    },
+    {
+      "id": "c06",
+      "heading": { "zh": "6. 團員權利", "en": "6. Rights of Members" },
+      "articles": [
+        {
+          "id": "a06-01",
+          "zh": "團員享有以下權利：",
+          "en": "Members shall have the following rights:",
+          "items": [
+            { "zh": "（甲）參與本團之團員大會；", "en": "Participate in the General Meeting of the Unit;" },
+            { "zh": "（乙）於團員大會享有發言、動議、和議及投票之權利，唯團員必須親身出席才可享有以上權利；", "en": "Have the right to speak, move, second and vote (Members must be present in person to enjoy these rights);" },
+            { "zh": "（丙）可提名及選舉執行委員會成員；", "en": "Nominate and elect members of the Executive Committee;" },
+            { "zh": "（丁）如符合資格，可被提名及被選舉為執行委員會委員；", "en": "Be nominated and elected as members of the Executive Committee if eligible;" },
+            { "zh": "（戊）參與本團所有訓練、活動及服務；", "en": "Participate in all training, activities and services of the Unit;" },
+            { "zh": "（己）借用本團物資作童軍訓練用途；", "en": "Borrow gears from the Unit for Scout training purpose;" },
+            { "zh": "（庚）向執行委員會提供意見。", "en": "Give advice to the Executive Committee." }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "c07",
+      "heading": { "zh": "7. 團員義務", "en": "7. Member Obligations" },
+      "articles": [
+        {
+          "id": "a07-01",
+          "zh": "團員須履行以下義務：",
+          "en": "Members shall fulfil the following obligations:",
+          "items": [
+            { "zh": "（甲）遵守本團團章及團規；", "en": "Observe the Constitution and rules of the Unit;" },
+            { "zh": "（乙）所有團員應出席團員大會；", "en": "All members shall attend the General Meeting;" },
+            { "zh": "（丙）出席集會；", "en": "Attend meetings;" },
+            { "zh": "（丁）協助推行團務；", "en": "Assist in the general affairs of the Unit;" },
+            { "zh": "（戊）準時繳交團費；", "en": "Pay the membership fee punctually;" },
+            { "zh": "（己）遵行所有會議通過之決議案。", "en": "Observe resolutions approved in all meetings." }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "c08",
+      "heading": { "zh": "8. 團費", "en": "8. Membership Fees" },
+      "articles": [
+        {
+          "id": "a08-01",
+          "zh": "團友繳交團費，團費每年 $360，於每年全體團員大會後一個月內繳交；新入團者於首年度則按月計算；海外團員只需繳交團費的四分一。",
+          "en": "Members pay a membership fee of HKD$360 per year, payable within one month after the Annual General Meeting. New members are charged monthly for their first year. Overseas members only pay one-quarter of the membership fee."
+        }
+      ]
+    },
+    {
+      "id": "c09",
+      "heading": { "zh": "9. 津貼", "en": "9. Subsidies" },
+      "articles": [
+        {
+          "id": "a09-01",
+          "zh": "凡團員參加活動或訓練班，團費將津貼其費用之 30%，唯津貼之金額不得多於 $70。",
+          "en": "Members will receive a 30% subsidy from the membership fee for activities or training courses they participate in, subject to a maximum of HKD$70."
+        }
+      ]
+    },
+    {
+      "id": "c10",
+      "heading": { "zh": "10. 退團", "en": "10. Withdrawal" },
+      "articles": [
+        {
+          "id": "a10-01",
+          "zh": "退團安排如下：",
+          "en": "Withdrawal arrangements are as follows:",
+          "items": [
+            { "zh": "（甲）團員退團須於 1 個月前用書面通知本團。", "en": "Members wishing to withdraw from the Unit must give the Unit (Scout Leaders or Executive Committee) one month's written notice." },
+            { "zh": "（乙）凡團員年齡滿 21 歲，即自動退團。", "en": "Members who reach the age of 21 will automatically resign from the Unit." },
+            { "zh": "（丙）本團可終止下列團員團籍及權利：", "en": "The Unit may terminate the membership and rights of the following members:" },
+            { "level": 2, "zh": "(i) 違反香港童軍總會章則者；或", "en": "any member who has violated the Constitution of the Scout Association of Hong Kong; or" },
+            { "level": 2, "zh": "(ii) 違反或不遵守本團團章及決議案者；或", "en": "any member who has violated or failed to comply with the Constitution and resolutions of the Unit; or" },
+            { "level": 2, "zh": "(iii) 行為妨害本團聲譽者。", "en": "any member whose conduct is in disrepute of the Unit." },
+            { "zh": "（丁）退團者，如希望重新加入本團，須得本團執行委員會通過批准。", "en": "A member who has resigned from the Unit and wishes to rejoin the Unit must obtain the approval of the Executive Committee beforehand." }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "c11",
+      "heading": { "zh": "11. 制服", "en": "11. Uniform" },
+      "articles": [
+        {
+          "id": "a11-01",
+          "zh": "制服規定如下：",
+          "en": "Uniform regulations are as follows:",
+          "items": [
+            { "zh": "（甲）本團團員穿著香港童軍總會訂定之深資童軍制服。", "en": "Members shall wear the Venture Scout uniform as prescribed by the Scout Association of Hong Kong." },
+            { "zh": "（乙）本團領巾為紫色底加上紅、綠色底邊。", "en": "The Unit's neckerchief shall be purple with a red and green border." },
+            { "zh": "（丙）本團之活動制服為紫色左胸印有本團徽章之白領 Polo Tee，詳見附件 A。", "en": "The Unit's activity uniform shall be a purple polo shirt with a white collar and the Unit emblem printed on the left chest. Details in Annex A." },
+            { "zh": "（丁）團員參與香港童軍總會之活動、課程及旅慶穿著深資童軍制服。", "en": "Members shall wear the Venture Scout uniform when participating in activities, courses and celebrations organised by the Group." },
+            { "zh": "（戊）團員穿著深資童軍制服或活動制服出席集會；惟團員進行宣誓或覆誓禮時必須穿著深資童軍制服。", "en": "Members may wear the Venture Scout uniform or activity uniform to attend assemblies; however, members must wear the Venture Scout uniform when taking or renewing their Promise." }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "c12",
+      "heading": { "zh": "12. 組織", "en": "12. Organization" },
+      "articles": [
+        { "id": "a12-01", "zh": "本團團員並沒有分組，故沒有組長和副組長之職位。", "en": "The Unit does not have any patrols, so there are no patrol leaders or assistant patrol leaders." }
+      ]
+    },
+    {
+      "id": "c13",
+      "heading": { "zh": "13. 團員大會", "en": "13. General Meeting" },
+      "articles": [
+        {
+          "id": "a13-01",
+          "zh": "團員大會之規定如下：",
+          "en": "The General Meeting shall be regulated as follows:",
+          "items": [
+            { "zh": "（甲）團員大會每年召開 1 次，定於每年 7 至 8 月期間舉行。", "en": "The General Meeting shall be held once a year, between July and August." },
+            { "zh": "（乙）團員大會之職權如下：", "en": "The authorities of the General Meeting are as follows:" },
+            { "level": 2, "zh": "(i) 通過執行委員會之工作報告；", "en": "Approve the work report of the Executive Committee;" },
+            { "level": 2, "zh": "(ii) 通過財務年結帳目；", "en": "Approve the annual financial report;" },
+            { "level": 2, "zh": "(iii) 選舉執行委員會委員；", "en": "Elect members of the Executive Committee;" },
+            { "level": 2, "zh": "(iv) 通過團務方針；", "en": "Approve the Unit's objectives and direction;" },
+            { "level": 2, "zh": "(v) 聘任稽查員。", "en": "Appoint an Auditor." },
+            { "zh": "（丙）如有需要，執行委員會可隨時召開特別團員大會。如有超過半數團員聯名要求，執行委員會須在 21 天內召開特別團員大會。", "en": "The Executive Committee may call a Special General Meeting at any time if necessary. If a majority of the members jointly request such a meeting, the Executive Committee must call it within 21 days." },
+            { "zh": "（丁）團員大會應於 10 日前用書面通知召集，寫明日期、時間、地點及議程。", "en": "A General Meeting must be called by written notice at least 10 days in advance, specifying the date, time, location and agenda." },
+            { "zh": "（戊）團員大會之法定人數為團員人數之半數。如在半小時內未能湊足法定人數，該會議應作流會，會議可順延 14 日舉行，並於 7 日前通知人數。若到時仍未足法定人數，則以當日出席人數為法定人數。", "en": "The quorum for a General Meeting shall be half the number of members. If a quorum is not formed within half an hour, the meeting shall be adjourned and may be postponed for 14 days, with notification given 7 days in advance. If a quorum is still not formed by then, the number of persons present on that day shall constitute a quorum." },
+            { "zh": "（己）團員大會之主席，由執行委員會主席擔任。", "en": "The Chairman of the Executive Committee shall serve as the Chairperson of the General Meeting." },
+            { "zh": "（庚）任何提交團員大會之提案，須於會議前 7 日用書面，由提議人及和議人聯署交到秘書手上。", "en": "Any proposal submitted to the General Meeting must be submitted in writing, signed by the proposer and seconder, to the Secretary seven days before the meeting." }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "c14",
+      "heading": { "zh": "14. 執行委員會", "en": "14. Executive Committee" },
+      "articles": [
+        {
+          "id": "a14-01",
+          "zh": "執行委員會之組成及職權如下：",
+          "en": "The composition and powers of the Executive Committee are as follows:",
+          "items": [
+            { "zh": "（甲）執行委員會由團員在全體團員大會選舉組成。執行委員會設有主席、秘書、司庫（職位需由當年度全體團員決定）。主席及其他委員由全體團員推選擔任。執行委員會任期由本年度旅慶至下年度旅慶止，所有職位均可無限期連任，唯主席不得連任超過 2 次；除主席一職外，其他團員可兼任兩個職位。", "en": "The Executive Committee is composed of members elected during the General Meeting. It consists of a Chairperson, a Secretary and a Treasurer (positions to be determined by the General Meeting of the Unit in that year). The Chairperson and other members are elected by all members of the Unit. The term of office of the Executive Committee runs from the current year's Group anniversary to the next. All positions are renewable indefinitely, except that of the Chairperson, which may not be re-elected more than twice. In addition to the Chairperson, other members may hold two positions concurrently." },
+            { "zh": "（乙）執行委員會之職權如下：", "en": "The duties and powers of the Executive Committee are as follows:" },
+            { "level": 2, "zh": "(i) 執行團員大會之議決案；", "en": "Implement the resolutions of the General Meeting;" },
+            { "level": 2, "zh": "(ii) 管理團產及處理一切團務；", "en": "Manage the Unit's assets and handle all affairs of the Unit;" },
+            { "level": 2, "zh": "(iii) 成立臨時及常務小組，推進團務和舉辦活動。", "en": "Establish temporary and standing committees to promote the affairs of the Unit and organise activities." },
+            { "zh": "（丙）執行委員會會議最少每 6 個月召開 1 次，由主席召開及主持，會議須於 7 日前通知。會議法定人數為半數委員以上。若在半小時內仍未足法定人數，主席得解散會議。", "en": "The Executive Committee shall meet at least once every six months and shall be convened and presided over by the Chairman. Notice of each meeting shall be given seven days in advance. The quorum for a meeting shall be at least half of the members. If a quorum is not reached within half an hour, the Chairman may dissolve the meeting." },
+            { "zh": "（丁）如有委員離職，及因事不能擔任職務時，執行委員會可物色適當團員出任委員，並取得至少三分之二的團員的書面同意，直至下次團員大會爲止。", "en": "If a member resigns or is unable to perform his duties for personal reasons, the Executive Committee may identify suitable members to serve as members and obtain the written consent of at least two-thirds of the members until the next General Meeting." }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "c15",
+      "heading": { "zh": "15. 選舉及表決", "en": "15. Election and Voting" },
+      "articles": [
+        {
+          "id": "a15-01",
+          "zh": "選舉及表決之規定如下：",
+          "en": "Election and voting shall be conducted as follows:",
+          "items": [
+            { "zh": "（甲）各團員、暫許團員可在團員大會動議及投票；除非議案正反人數一樣，否則主席不得投票。", "en": "Each member and Provisional Member may propose and vote at a General Meeting; the Chairperson shall not vote unless the number of votes for and against a motion is equal." },
+            { "zh": "（乙）提名參選或增選執行委員，須由 1 名團員提名，於團員大會會前交到秘書手上；如在會前並無書面提名，或提名人數不足，可在大會中用口頭提名，提名須有提議人及和議人。", "en": "Nominations for election or co-election of Executive Committee members must be made by one member and submitted to the Secretary before the General Meeting. If no written nomination is made before the meeting or if insufficient nominations are received, oral nominations may be made at the meeting. Nominations must have a proposer and a seconder." },
+            { "zh": "（丙）表決採用舉手方式，如在表決前有出席團員的半數提出要求，並得出席者通過，主席須用不記名投票方式選舉及表決。", "en": "Voting shall be by show of hands. If, before the vote is cast, half of the members present so request and the approval of those present is given, the Chairman shall elect and vote by secret ballot." },
+            { "zh": "（丁）表決及投票以特別多數制決定，以出席人數的三分之二爲當選門檻，不足一亦當作一計算。", "en": "Voting shall be determined by a special majority, with the election threshold being two-thirds of the number of persons present. Any fraction shall be counted as one." },
+            { "zh": "（戊）選舉採用直選制，先選出執行委員會成員，再由成員自行決定職位。", "en": "The election shall be conducted by direct election, with the Executive Committee members first elected and then the members deciding their positions." },
+            { "zh": "（己）在全體團員大會舉行後，需要在一個月內通知團員下屆執行委員會各成員的職位。", "en": "Within one month of the General Meeting, the members shall be notified of the positions of the next Executive Committee members." }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "c16",
+      "heading": { "zh": "16. 職責", "en": "16. Responsibilities" },
+      "articles": [
+        {
+          "id": "a16-01",
+          "zh": "各職位之職責如下：",
+          "en": "The responsibilities of each post are as follows:",
+          "items": [
+            { "zh": "（甲）主席 － 主持團內所有會議，為本團之代表及發言人；如該屆執行委員會不設立聯絡一職，則由主席負責聯絡。", "en": "Chairman – Chairs all meetings of the Unit and serves as the Unit's representative and spokesperson. If the Executive Committee does not have a liaison position, the Chairman will be responsible for liaison." },
+            { "zh": "（乙）秘書 － 為團員大會及執行小組委員會之文書，負責發出會議通知書及議程，撰寫會議紀錄，保管本團文件檔案及印信，處理來往書信。", "en": "Secretary – Serves as the clerk for General Meetings and the Executive Committee, issuing meeting notices and agendas, preparing meeting minutes, maintaining the Unit's documents and seals, and handling incoming and outgoing correspondence." },
+            { "zh": "（丙）司庫 － 負責本團財政收支事務，保管財務文件，草擬週年預算、制訂每月收支帳目及資產負債表，保管本團財物。", "en": "Treasurer – Responsible for the Unit's financial affairs, including the safekeeping of financial documents, the preparation of the annual budget, the preparation of monthly income and expenditure accounts and balance sheets, and the safekeeping of the Unit's property." },
+            { "zh": "（丁）其他職位爲非常設職位，由執行委員會決定是否增設。", "en": "Other positions are non-permanent and will be established at the discretion of the Executive Committee." }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "c17",
+      "heading": { "zh": "17. 財務管理", "en": "17. Financial Management" },
+      "articles": [
+        {
+          "id": "a17-01",
+          "zh": "財務管理規定如下：",
+          "en": "Financial management shall be as follows:",
+          "items": [
+            { "zh": "（甲）本團現金及契據應存放在團員大會指定之地方。", "en": "(a) The Unit's cash and deeds shall be kept in the location designated by the General Meeting of Members." },
+            { "zh": "（乙）司庫管理現款，所有支出團員需持有收據，向司庫實報實銷。", "en": "(b) The Treasurer shall manage the cash. Members shall keep receipts for all expenditures and report them to the Treasurer on a reimbursement basis." }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "c18",
+      "heading": { "zh": "18. 解散", "en": "18. Dissolution" },
+      "articles": [
+        {
+          "id": "a18-01",
+          "zh": "如因任何理由，本團要解散時，則本團之財產，由特別團員大會處理，唯不得分配於本團現時及以前團員。倘若在解散時，有任何負債，即由當屆執行委員會承擔。",
+          "en": "If the Unit is to be dissolved for any reason, the property of the Unit shall be disposed of by a Special General Meeting of Members. However, no property shall be distributed to any current or former members of the Unit. Any liabilities arising from dissolution shall be borne by the then Executive Committee."
+        }
+      ]
+    },
+    {
+      "id": "c19",
+      "heading": { "zh": "19. 團章解釋", "en": "19. Interpretation of the Articles of Association" },
+      "articles": [
+        { "id": "a19-01", "zh": "團章的解釋權屬於團長。", "en": "The right to interpret the Articles of Association shall rest with the Venture Scout Leader." }
+      ]
+    }
+  ],
+  "appendices": [
+    {
+      "id": "apxA",
+      "heading": { "zh": "附件 A", "en": "Appendix A" },
+      "blocks": [
+        { "type": "p", "zh": "下圖為本團之活動制服樣式。", "en": "The following image shows the Unit's activity uniform." },
+        { "type": "note", "zh": "活動制服為紫色 Polo Tee，右袖邊為紅色，左袖邊為綠色，衣領為白色；前方左邊胸口印有本團徽章，右方印有白色的團員姓名字樣；後方中央印有 “Venture” 字樣。", "en": "The activity uniform is a purple polo tee with a red right sleeve, a green left sleeve, and a white collar. The Unit's emblem is printed on the left chest front, and the member's name is printed in white on the right side. The word “Venture” is printed in the centre of the back." }
+      ]
+    }
+  ],
+  "footer": {
+    "zh": "第八十二旅深資童軍團團章（更新日期：2024 年 9 月 12 日）",
+    "en": "The 82nd Hong Kong Group Venture Scout Unit Constitution (Updated 12/09/2024, Translated to English 22/08/2025)"
+  },
+  "history": [
+    { "version": "2024.09", "date": "2024-09-12", "by": "82venture", "note": "依 Google Doc 版本全文內建（中英對照）" }
+  ]
+}
