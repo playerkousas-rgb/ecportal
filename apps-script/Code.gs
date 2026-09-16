@@ -147,10 +147,10 @@ function doPost(e) {
         return json({ ok: false, success: false, error: '未授權：API Key 唔正確' });
       }
       if (body.action === 'save') {
-        var pr = saveProgress(body.changes || [], body.confirmer || '');
+        var pr = withLock(function () { return saveProgress(body.changes || [], body.confirmer || ''); });
         return json({ ok: pr.success === true, success: pr.success === true, processed: pr.processed || 0, error: pr.error || '' });
       }
-      var pbo = saveOtherBadges(body.records || []);
+      var pbo = withLock(function () { return saveOtherBadges(body.records || []); });
       return json({ ok: pbo.success === true, success: pbo.success === true, processed: pbo.processed || 0, error: pbo.error || '' });
     }
 
@@ -160,12 +160,16 @@ function doPost(e) {
         return json({ ok: false, success: false, error: '未授權：API Key 唔正確' });
       }
       if (body.action === 'reviewRequest') {
-        var rq = reviewProgressRequest(body.request_id, body.decision, body.review_note,
-          body.reviewer || '執委管理系統', body.confirmed_date);
+        var rq = withLock(function () {
+          return reviewProgressRequest(body.request_id, body.decision, body.review_note,
+            body.reviewer || '執委管理系統', body.confirmed_date);
+        });
         return json({ ok: rq.success === true, success: rq.success === true,
           message: rq.message || '', error: rq.error || '' });
       }
-      var lq = reviewLogRequest(body.request_id, body.decision, body.review_note, body.reviewer || '執委管理系統');
+      var lq = withLock(function () {
+        return reviewLogRequest(body.request_id, body.decision, body.review_note, body.reviewer || '執委管理系統');
+      });
       return json({ ok: lq.success === true, success: lq.success === true,
         message: lq.message || '', record_id: lq.record_id || '', error: lq.error || '' });
     }
@@ -458,6 +462,22 @@ function loadProgressData() {
     logRequestsSupported: !!ss.getSheetByName('待批履歷'),
     at: new Date()
   };
+}
+
+/**
+ * 同時多人寫入就排隊（LockService）
+ * 一個帳號同時最多 30 個執行；同一張 Sheet 嘅「讀→改→寫」要鎖住先唔會撞
+ * （例：通告一出，全團同一秒撳報名）。等唔到鎖都照做，唔好卡死用戶。
+ */
+function withLock(fn) {
+  var lock = LockService.getScriptLock();
+  var got = false;
+  try { got = lock.tryLock(20000); } catch (e) { got = false; }
+  try {
+    return fn();
+  } finally {
+    if (got) { try { lock.releaseLock(); } catch (e2) {} }
+  }
 }
 
 /** 勾／取消勾（同進度前端寫入同一個分頁） */

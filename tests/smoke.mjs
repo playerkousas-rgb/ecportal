@@ -1138,6 +1138,57 @@ section('通告詳情（輸出連出席回覆）');
   store.remove('notices', 'nt-bare');
 }
 
+/* ---------- 通告快速模板（由 PDF 通告抽出重點） ---------- */
+section('通告快速模板（30 週年旅慶）');
+{
+  const presets = await import('../assets/js/lib/notice-presets.js');
+  const p = presets.presetById('lv30');
+  ok('有旅慶模板（中英對照）', !!p && /30 週年旅慶/.test(p.draft.title.zh) && /30th Anniversary/.test(p.draft.title.en));
+  ok('模板有最重要內容（地點／費用／集合／營火會／家長同意書）',
+    /北潭涌/.test(p.draft.venue) && /\$280/.test(p.draft.fee)
+    && /筲箕灣/.test(p.draft.body.zh) && /燈光營火會/.test(p.draft.body.zh) && /pt46\.pdf/.test(p.draft.body.zh));
+  ok('模板有英文全文（Pak Tam Chung / fee）',
+    /Pak Tam Chung/.test(p.draft.body.en) && /\$280/.test(p.draft.body.en));
+  ok('模板要報名，欄位有 YMIS／家長同意書／會員費',
+    p.draft.needSignup === true
+    && p.draft.fields.some(f => /YMIS/.test(f.label))
+    && p.draft.fields.some(f => /家長同意書/.test(f.label))
+    && p.draft.fields.some(f => /會員費/.test(f.label)));
+  ok('presetDraft() 會回傳獨立副本（唔會改到模板本身）', (() => {
+    const c = presets.presetDraft('lv30');
+    c.patch.title.zh = '改咗';
+    return p.draft.title.zh !== '改咗' && /30 週年旅慶/.test(p.draft.title.zh);
+  })());
+
+  window.location.hash = '#/notices/new';
+  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+  await new Promise(r => setTimeout(r, 80));
+  const ed = doc.getElementById('view');
+  const presetBtn = ed.querySelector('[data-preset="lv30"]');
+  ok('開新通告頁有「快速模板」掣', !!presetBtn);
+  presetBtn?.click();
+  await new Promise(r => setTimeout(r, 150));
+  const ed2 = doc.getElementById('view');
+  ok('一撳填好標題（中英）',
+    /30 週年旅慶/.test(ed2.querySelector('#n-title')?.value || '')
+    && /30th Anniversary/.test(ed2.querySelector('#n-title-en')?.value || ''));
+  ok('一撳填好活動日期／地點／費用',
+    ed2.querySelector('#n-event')?.value === '2026-10-03'
+    && /北潭涌/.test(ed2.querySelector('#n-venue')?.value || '')
+    && /280/.test(ed2.querySelector('#n-fee')?.value || ''));
+  ok('內容齊（集合／解散／服裝／覆誓／家長同意書）',
+    ['集合', '解散', '服裝', '覆誓', '家長同意書'].every(k => new RegExp(k).test(ed2.querySelector('#n-body')?.value || '')));
+  ok('截止日期故意留空（原通告回條日已過 → 報名唔會自動截）',
+    (ed2.querySelector('#n-deadline')?.value || '') === '');
+  const fieldLabels = [...ed2.querySelectorAll('#n-fields-wrap input[data-k="label"]')].map(i => i.value).join('|');
+  ok('報名表已換成旅慶欄位（YMIS／家長同意書／會員費）',
+    /YMIS/.test(fieldLabels) && /家長同意書/.test(fieldLabels) && /會員費/.test(fieldLabels), fieldLabels);
+  ok('需要報名預設打勾（可以直接收報名）', ed2.querySelector('#n-need')?.checked === true);
+
+  ed2.querySelector('[data-act="cancel"]')?.click();
+  await new Promise(r => setTimeout(r, 80));
+}
+
 /* ---------- 5. 旅團選擇閘 ---------- */
 section('旅團選擇閘（先揀旅團再登入）');
 {
@@ -1228,6 +1279,8 @@ section('進度紀錄（一個後端 · 兩個前端）');
   ok('批准待批完成會寫入「進度追蹤」（同一個後端）',
     /已批准並寫入進度/.test(code) && /由申請轉入/.test(code));
   ok('Code.gs 會同步成員名單（兩個前端見同一批人）', /writeMemberList/.test(code));
+  ok('Code.gs 寫入用 LockService 排隊（全團同時撳都唔會撞）',
+    /LockService\.getScriptLock/.test(code) && /withLock\(function/.test(code));
   const onDisk = fs.readFileSync(path.join(ROOT, 'apps-script', 'Code.gs'), 'utf8');
   ok('apps-script/Code.gs 同 app 內下載嘅版本一致（npm run build:gas）', onDisk === code);
 }
@@ -1765,6 +1818,8 @@ section('進度紀錄（讀 ＋ 勾 ＋ 寫，同一個後端）');
     window.dispatchEvent(new window.HashChangeEvent('hashchange'));
     await new Promise(r => setTimeout(r, 100));
     const sv = doc.getElementById('view');
+    ok('設定頁講明 API Key 由旅團自己填（管理員唔使逐團設定）',
+      /旅團自己填/.test(sv.textContent) && /唔會幫每團設定/.test(sv.textContent));
     ok('設定頁有「後端 /exec 網址」同「API Key」欄',
       !!sv.querySelector('#p-backend') && !!sv.querySelector('#p-key') && !!sv.querySelector('#p-catalog'));
     sv.querySelector('#p-backend').value = 'https://script.google.com/macros/s/AKfycbTESTTESTTESTTESTTESTTESTTESTTEST/exec';

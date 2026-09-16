@@ -12,6 +12,7 @@ import { can, current } from '../lib/auth.js';
 import { profile, settings, members } from '../lib/model.js';
 import { pageHead, tabs, stat, empty, noteBox, photoPicker, photoStrip, bindPhotoPicker } from './ui.js';
 import { compressImage, formatBytes } from '../lib/files.js';
+import { NOTICE_PRESETS, presetDraft } from '../lib/notice-presets.js';
 
 let tab = 'list';
 let filter = 'open';
@@ -517,6 +518,16 @@ function editor(n) {
     actions: `<button class="btn btn-sm" data-act="cancel">${icon('chevronL', 15)} 返回</button>`
   })}
 
+  ${NOTICE_PRESETS.length ? `<div class="card mb-16">
+    <div class="card-head"><div><div class="card-title">快速模板</div>
+      <div class="card-sub">由真實通告（PDF）抽好重點 —— 一撳填好，之後照樣可以逐格改</div></div></div>
+    <div style="padding:14px 18px" class="row gap-8 wrap">
+      ${NOTICE_PRESETS.map(t => `<button class="btn btn-sm" data-preset="${esc(t.id)}" title="${esc(t.source || '')}">
+        ${icon('megaphone', 15)} ${esc(t.label)}</button>`).join('')}
+      <span class="xs faint" style="align-self:center">${NOTICE_PRESETS.map(t => esc(t.note || '')).join(' · ')}</span>
+    </div>
+  </div>` : ''}
+
   <div class="grid g-2-1">
     <div class="col gap-16">
       <div class="card"><div style="padding:18px 20px">
@@ -687,6 +698,27 @@ export function mount(root, params) {
     paintFields();
 
     root.querySelector('#n-need')?.addEventListener('change', e => { draft.needSignup = e.target.checked; refresh(); });
+
+    /* 快速模板：一撳填好（已經打咗嘢就問一問先覆蓋） */
+    root.querySelectorAll('[data-preset]').forEach(b => b.addEventListener('click', async () => {
+      const pre = presetDraft(b.dataset.preset);
+      if (!pre) return;
+      if ((draft.title?.zh || '').trim()) {
+        const yes = await confirmDlg({
+          title: '套用模板？', okText: '套用（覆蓋現有內容）',
+          message: '而家已經填咗標題／內容，套用模板會蓋過佢。要繼續？'
+        });
+        if (!yes) return;
+      }
+      Object.assign(draft, pre.patch);
+      draft.fields = pre.fields;
+      draftFields = JSON.parse(JSON.stringify(pre.fields));
+      const pastDeadline = pre.patch.deadline && pre.patch.deadline < todayISO();
+      toast(pastDeadline
+        ? `已套用「${pre.label}」模板 —— 原通告截止日 ${pre.patch.deadline} 已經過，記得改做新日期`
+        : `已套用「${pre.label}」模板 —— 截止日期留空（唔會自動截），需要就自己填`, pastDeadline ? 'warn' : 'ok');
+      refresh();
+    }));
 
     root.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => {
       const act = b.dataset.act;

@@ -141,7 +141,8 @@ export function getTrustedUnit(id) {
 // ============================================================
 export function getProgressRegistryEntry(id) {
   /* 一個後端、兩個前端：進度資料就係旅團自己嘅後端（GAS /exec）。
-     伺服器端可以設定 TROOP_<id>_PROGRESSBACKEND / _PROGRESSAPIKEY，
+     伺服器端可以設定 TROOP_<id>_PROGRESSBACKEND / _PROGRESSAPIKEY（可選覆蓋；
+     一般情況係旅團自己喺前端「進度 → 設定」填，管理員唔使逐團做嘢），
      設定咗就優先於前端輸入（API Key 唔使落前端）。 */
   const out = { backend: '', apiKey: '', catalog: '' };
   if (typeof id !== 'string' || !/^[0-9A-Za-z_-]{1,32}$/.test(id)) return out;

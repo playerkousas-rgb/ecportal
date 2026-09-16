@@ -12,8 +12,9 @@
    可選：POST { action:'catalog', catalog }            → 自訂考核項目定義（公開 https）
         （預設唔用：app 內建 data/progress/items.json，離線都讀得）
 
-   後端網址／API Key：伺服器端 env 優先（TROOP_<旅團>_PROGRESSBACKEND / _PROGRESSAPIKEY），
-   冇設就用前端傳上嚟嘅（前端預設會用返 data/units.json 登記嘅旅團後端）。
+   後端網址／API Key：**預設用前端傳上嚟嘅**（旅團自己喺「進度 → 設定」填 /exec ＋ API Key，
+   存在旅團自己嘅資料）——管理員唔使逐團設定。伺服器端 env（TROOP_<旅團>_PROGRESSBACKEND /
+   _PROGRESSAPIKEY）係部署者自用嘅可選覆蓋，設咗就優先。
 
    安全：
      1. 只准 https://script.google.com/macros/s/…/exec（擋 open proxy；可用 V82_PROXY_TEST=1 放行本機 mock）

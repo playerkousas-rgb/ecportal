@@ -431,9 +431,11 @@ function settingsView() {
             <button class="btn" data-act="reload">${icon('refresh', 16)} 重新讀取</button>
             <button class="btn btn-ghost" data-act="clear-cfg">${icon('trash', 15)} 清除自訂設定</button>
           </div>
-          <div class="hint mt-8">唔想 API Key 落前端？管理員可以用 Vercel 環境變數
-            <code>TROOP_${esc((c.unit || '0082'))}_PROGRESSBACKEND</code> / <code>…_PROGRESSAPIKEY</code>，
-            設定咗就以伺服器端為準。</div>
+          <div class="hint mt-8"><b>呢兩個欄位係旅團自己填嘅</b>（每團自己嘅後端＋Key）：填完就存在旅團自己嘅資料，
+            跟 JSON 備份走，唔會交畀第三方。管理員只負責主系統嘅登入同權限，唔會幫每團設定 —— 有問題問返自己嘅執委就得。
+            <div class="xs faint mt-4">（部署呢個系統嘅人如果真係想收埋條 Key，可以自己設環境變數
+              <code>TROOP_${esc((c.unit || '0082'))}_PROGRESSBACKEND</code> / <code>…_PROGRESSAPIKEY</code>；
+              一般旅團唔需要理，喺上面填就得。）</div></div>
         </div>
       </div>
     </div>
