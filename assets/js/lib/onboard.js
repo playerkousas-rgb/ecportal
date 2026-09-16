@@ -1,19 +1,32 @@
 /* ============================================================
-   onboard.js — 新旅團申請接入（把申請送去平台管理員收件匣）
-
+   onboard.js — 新旅團申請接入與部署協助（全前端 App 內完成，毋須存取 Git）
    流程（旅團嗰邊）：
-     1. 下載 Code.gs → 建自己嘅 Google Sheet → 執行 initializeSheets → 部署做 Web App
-     2. 喺旅團選擇畫面撳「新旅團申請接入」，填返編號／名稱／後端 /exec 網址／API Key
-     3. 管理員收到 → 加進兩邊嘅 Registry（82venture data/units.json + VSBADGE troops.json）
-
-   Payload schema 刻意同 VSBADGE 嘅 submitRegistration 對齊
-   （troopId / troopName / scriptUrl / apiKey / appType / note），
-   所以兩個系統可以共用同一個管理員收件匣，用 appType 分辨。
+     1. 登入前直接喺 App 內下載或複製 Code.gs（毋須登入、毋須 Git）
+     2. 建自己嘅 Google Sheet → 執行 initializeSheets → 複製 API Key
+     3. 部署做 Web App（執行身分：我；存取權：任何人）
+     4. 喺 App 內填寫「申請接入」自動送出，管理員於系統後台／Vercel 登記後即時生效
    ============================================================ */
 
 import { registry } from './units.js';
+import { gasTemplate } from './gastemplate.js';
+import { download } from './exporter.js';
+import { toast, copyText, icon } from './util.js';
 
 export const APP_TYPE = '82venture';
+
+/** 登入前／任何時候直接在 App 內下載 Code.gs */
+export function downloadCodeGs() {
+  download('Code.gs', gasTemplate(), 'text/plain;charset=utf-8');
+  toast('已下載 Code.gs（Apps Script 後端程式碼）', 'ok');
+}
+
+/** 登入前／任何時候直接複製 Code.gs 原始碼到剪貼簿（方便手機／平板使用） */
+export async function copyCodeGs() {
+  const code = gasTemplate();
+  const ok = await copyText(code);
+  if (ok) toast('已複製 Code.gs 全部原始碼到剪貼簿！', 'ok');
+  else toast('未能複製，請使用「下載 Code.gs」', 'err');
+}
 
 /** 管理員收件匣（Apps Script /exec） */
 export function adminInbox() {
@@ -63,8 +76,6 @@ export function validateApplication(input = {}) {
 
 /**
  * 把申請 POST 去管理員收件匣。
- * 用 text/plain 送 JSON —— 避開 CORS preflight（同通告報名／手機記帳同一做法）。
- * Apps Script 唔一定會回可讀嘅回應，所以「冇 throw」當作已送出。
  */
 export async function submitApplication(input = {}, timeoutMs = 20000) {
   const v = validateApplication(input);

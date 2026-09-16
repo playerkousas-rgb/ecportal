@@ -1,13 +1,4 @@
-/* ============================================================
-   gastemplate.js — 產生 Apps Script (Code.gs) 範本
-   用嚟將各旅團 82venture app 嘅資料寫入「後端總 Sheet」
-   （一張 Sheet 統管整個 Venture，支援多旅團獨立 Sheet 或合併 Sheet）。
-   ============================================================ */
-
-export const SHEET_TABS = ['帳目', '物資', '團員', '收支申報', '通告', '報名', '物資借用', '會議', '設定', '同步紀錄'];
-
-export function gasTemplate() {
-  return `/**
+/**
  * ============================================================
  *  82venture · 總表同步與多旅團後端 Apps Script（Code.gs）
  *  版本：v2.0.0
@@ -65,7 +56,7 @@ function showApiKey() {
   var ui = null;
   try { ui = SpreadsheetApp.getUi(); } catch (e) { /* headless */ }
   if (ui) {
-    ui.alert('82venture API Key', '你嘅旅團 API Key 為：\\n\\n' + apiKey + '\\n\\n請複製並交由 Git/Vercel 管理員作登記。', ui.ButtonSet.OK);
+    ui.alert('82venture API Key', '你嘅旅團 API Key 為：\n\n' + apiKey + '\n\n請複製並交由 Git/Vercel 管理員作登記。', ui.ButtonSet.OK);
   }
   Logger.log('==============================');
   Logger.log('82venture API Key: ' + apiKey);
@@ -111,11 +102,11 @@ function initializeSheets() {
   if (ui) {
     ui.alert(
       '初始化完成！',
-      '82venture 所有分頁已建立成功！\\n\\n' +
-      '你嘅 API Key 為：\\n' + apiKey + '\\n\\n' +
-      '下一步：\\n' +
-      '1. 點擊「部署」→「新增部署作業」\\n' +
-      '2. 選擇「網頁應用程式」（執行身分：我；存取權：任何人）\\n' +
+      '82venture 所有分頁已建立成功！\n\n' +
+      '你嘅 API Key 為：\n' + apiKey + '\n\n' +
+      '下一步：\n' +
+      '1. 點擊「部署」→「新增部署作業」\n' +
+      '2. 選擇「網頁應用程式」（執行身分：我；存取權：任何人）\n' +
       '3. 複製 /exec 網址並連同 API Key 交予 Git 管理員登記。',
       ui.ButtonSet.OK
     );
@@ -283,7 +274,7 @@ function appendClaim(body) {
   sh.appendRow([
     body.unit || '', new Date(), p.date || '', p.type === 'income' ? '收入' : '支出',
     p.category || '', p.item || '', Number(p.amount) || 0, p.byName || '', p.note || '',
-    (p.photos || []).length, links.join('\\n'), p.id || ''
+    (p.photos || []).length, links.join('\n'), p.id || ''
   ]);
   return links.length;
 }
@@ -372,17 +363,4 @@ function cell(v) {
 
 function json(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
-}
-`;
-}
-
-export function gasGuide() {
-  return [
-    '1. 開你嘅總 Sheet → 擴充功能 → Apps Script',
-    '2. 貼上下載嘅 Code.gs（全部取代）',
-    '3. 執行 initializeSheets 初始化試算表並取得 API Key',
-    '4. 部署 → 新增部署作業 → 類型：網頁應用程式',
-    '5. 執行身分：我　／　具有存取權的使用者：任何人',
-    '6. 複製 /exec 網址與 API Key，提交給管理員或貼返總表同步'
-  ].join('\n');
 }

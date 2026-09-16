@@ -7,7 +7,7 @@ import {
   switchUnit, clearMockData
 } from './lib/store.js';
 import { loadRegistry, unitList, unitEntry, defaultUnitCode } from './lib/units.js';
-import { adminInbox, validateApplication, submitApplication, adminChecklist } from './lib/onboard.js';
+import { adminInbox, validateApplication, submitApplication, adminChecklist, downloadCodeGs, copyCodeGs } from './lib/onboard.js';
 import { applyTheme, MAROON } from './lib/theme.js';
 import {
   login, logout, current, currentRole, ROLES, displayName, displaySub,
@@ -108,7 +108,7 @@ function renderUnitGate() {
       <div class="gate-brand">
         <div class="logo">82</div>
         <div>
-          <div class="gate-title">82venture · 執委會管理平台</div>
+          <div class="gate-title">82venture · 執委管理系統</div>
           <div class="gate-sub">第一步：揀你嘅旅團（或者用示範資料試玩）</div>
         </div>
       </div>
@@ -135,12 +135,18 @@ function renderUnitGate() {
         </button>
       </div>
 
-      <div class="gate-apply">
-        <div class="grow">
-          <div class="semibold">你嘅旅團未喺清單入面？</div>
-          <div class="xs faint">每個旅團用自己嘅 Google Sheet 做後端。下載 <code>Code.gs</code> → 建 Sheet → 部署 → 交返網址俾平台管理員開戶。</div>
+      <div class="gate-apply" style="display:flex;flex-direction:column;gap:12px">
+        <div class="row-between wrap gap-8">
+          <div class="grow" style="min-width:240px">
+            <div class="semibold">你嘅旅團未喺清單入面？（新旅團部署）</div>
+            <div class="xs faint">每個旅團用自己嘅 Google Sheet 做後端。毋須登入，先下載 <code>Code.gs</code> → 建立 Google Sheet → 執行 <code>initializeSheets</code> → 部署做網頁應用程式 → 把 URL 及 API Key 提交登記。</div>
+          </div>
+          <div class="row gap-8 wrap" style="align-items:center">
+            <button class="btn btn-sm" data-act="dl-gs">${icon('download', 15)} 下載 Code.gs</button>
+            <button class="btn btn-sm" data-act="guide">${icon('note', 15)} 部署指南</button>
+            <button class="btn btn-sm btn-primary" data-act="apply">${icon('plus', 15)} 新旅團申請接入</button>
+          </div>
         </div>
-        <button class="btn btn-sm" data-act="apply">${icon('plus', 15)} 新旅團申請接入</button>
       </div>
 
       <div class="gate-foot">
@@ -160,7 +166,82 @@ function renderUnitGate() {
     location.href = u.toString();
   }));
 
+  app.querySelector('[data-act="dl-gs"]')?.addEventListener('click', () => downloadCodeGs());
+  app.querySelector('[data-act="guide"]')?.addEventListener('click', openDeployGuideModal);
   app.querySelector('[data-act="apply"]')?.addEventListener('click', openApplication);
+}
+
+/* ============================================================
+   部署指南彈窗（登入前直接查閱）
+   ============================================================ */
+async function openDeployGuideModal() {
+  await modal({
+    title: '🗺️ 82venture 多旅團後端部署指南',
+    wide: true,
+    body: `
+      <div class="note-box info mb-12">
+        ${icon('check', 16)}
+        <div><b>10 分鐘完成部署！</b>本系統為多旅團架構，每個旅團擁有自己獨立的 Google Sheet 後端，毋須登入即可完成部署並提交登記。</div>
+      </div>
+      
+      <div class="col gap-12" style="font-size:13.5px;line-height:1.6">
+        <div class="card" style="padding:14px">
+          <div class="semibold mb-4">第 1 步：下載後端程式碼（Code.gs）</div>
+          <div class="xs faint mb-8">毋須登入，直接點擊下方按鈕下載或複製最新單一檔案後端程式碼：</div>
+          <div class="row gap-8 wrap">
+            <button class="btn btn-sm btn-primary" id="guide-dl-btn" type="button">${icon('download', 15)} ⬇️ 立即下載 Code.gs</button>
+            <button class="btn btn-sm" id="guide-copy-btn" type="button">${icon('copy', 15)} 📋 複製原始碼</button>
+          </div>
+        </div>
+
+        <div class="card" style="padding:14px">
+          <div class="semibold mb-4">第 2 步：建立 Google Sheet 並貼上代碼</div>
+          <ol class="xs mono" style="padding-left:18px;line-height:1.8">
+            <li>開啟 Google Sheets 建立新試算表（例：「第82旅 執委會總表」）</li>
+            <li>點擊上方選單「擴充功能」→「Apps Script」</li>
+            <li>清空預設代碼，將下載的 <code>Code.gs</code> 全部內容貼上並儲存 💾</li>
+          </ol>
+        </div>
+
+        <div class="card" style="padding:14px">
+          <div class="semibold mb-4">第 3 步：執行 initializeSheets 初始化試算表</div>
+          <ol class="xs mono" style="padding-left:18px;line-height:1.8">
+            <li>在 Apps Script 函數下拉選單選擇 <code>initializeSheets</code></li>
+            <li>點擊「▶ 執行」，依照 Google 提示完成授權（進階 → 前往 → 允許）</li>
+            <li>系統自動建立 9 個棗紅主題工作表（帳目、物資、團員、收支申報、通告、報名、物資借用、會議、同步紀錄）</li>
+            <li>彈窗會顯示專屬 <b>API Key</b>，請複製保存（日後可執行 <code>showApiKey</code> 再次查看）</li>
+          </ol>
+        </div>
+
+        <div class="card" style="padding:14px">
+          <div class="semibold mb-4">第 4 步：部署為網頁應用程式（Web App）</div>
+          <ol class="xs mono" style="padding-left:18px;line-height:1.8">
+            <li>點擊右上角「部署」→「新增部署作業」→ 齒輪選擇「網頁應用程式」</li>
+            <li>設定：執行身分選「<b>我</b>」；具有存取權的使用者選「<b>任何人</b>」</li>
+            <li>點擊「部署」，複製 <b>網頁應用程式網址</b>（以 <code>https://script.google.com/macros/s/…/exec</code> 結尾）</li>
+          </ol>
+        </div>
+
+        <div class="card" style="padding:14px">
+          <div class="semibold mb-4">第 5 步：登記至 Git 與 Vercel（或點擊申請接入）</div>
+          <div class="xs faint mb-8">
+            將 <b>旅團編號</b>、<b>旅團名稱</b>、<b>Apps Script /exec URL</b>、<b>API Key</b> 提交給 Git 負責人登記至 <code>data/units.json</code>（或 Vercel 環境變數 <code>TROOP_{ID}_BACKEND</code>），完成後即可正式登入使用！
+          </div>
+          <button class="btn btn-sm" id="guide-apply-btn">${icon('plus', 15)} 填寫申請表自動送出</button>
+        </div>
+      </div>
+    `,
+    actions: [{ label: '關閉', class: 'btn-primary', value: null }],
+    onMount: el => {
+      el.querySelector('#guide-dl-btn')?.addEventListener('click', () => downloadCodeGs());
+      el.querySelector('#guide-copy-btn')?.addEventListener('click', () => copyCodeGs());
+      el.querySelector('#guide-apply-btn')?.addEventListener('click', async () => {
+        const { closeModal } = await import('./lib/util.js');
+        closeModal(null);
+        openApplication();
+      });
+    }
+  });
 }
 
 /* ============================================================
@@ -176,8 +257,10 @@ async function openApplication() {
     body: `
       <div class="note-box mb-12">${icon('alert', 15)}<div>
         <b>申請之前請先起好你自己嘅後端</b>（每個旅團一張自己嘅 Google Sheet）：
-        <div class="xs mt-4">
-          1. 登入後去「表格與同步 → 總表同步」下載 <b>Code.gs</b><br>
+        <div class="xs mt-4 mb-8">
+          1. 獲取 <b>Code.gs</b>（免登入）：
+          <button class="btn btn-xs btn-primary ml-8" id="ap-dl-btn" type="button">${icon('download', 13)} 下載 Code.gs</button>
+          <button class="btn btn-xs ml-4" id="ap-copy-btn" type="button">${icon('copy', 13)} 複製原始碼</button><br>
           2. 建一張新 Google Sheet → 擴充功能 → Apps Script → 貼上 Code.gs<br>
           3. 執行 <code>initializeSheets</code>（會建好全部分頁），複製 API Key<br>
           4. 部署做<b>網頁應用程式</b>（執行身分：我；存取權：任何人），複製 <code>/exec</code> 網址
@@ -210,7 +293,17 @@ async function openApplication() {
         contact: el.querySelector('#ap-contact').value,
         note: el.querySelector('#ap-note').value
       }) }
-    ]
+    ],
+    onMount: el => {
+      el.querySelector('#ap-dl-btn')?.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        downloadCodeGs();
+      });
+      el.querySelector('#ap-copy-btn')?.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        copyCodeGs();
+      });
+    }
   });
   if (!r) return;
   const v = validateApplication(r);
@@ -278,7 +371,7 @@ function renderLogin() {
         </div>
       </div>
       <div>
-        <h1 class="hero-title">${esc(u.name || '深資童軍團')}<br>執委會管理平台</h1>
+        <h1 class="hero-title">${esc(u.name || '深資童軍團')}<br>執委管理系統</h1>
         <p class="hero-sub">會議、財務、團員、物資、團章 —— 一個地方搞掂。財務仲可以出「兩條數」（AGM 旅年度 ＋ 童軍年度）。</p>
         <div class="hero-list">
           ${[['團章內建，可改可輸出 Word / PDF / QR', 'book'],
@@ -339,7 +432,11 @@ function renderLogin() {
         <div class="mt-16" style="border-top:1px solid var(--line-2);padding-top:12px">
           <div class="row-between wrap gap-8">
             <div class="xs faint">而家嘅旅團：<b class="mono">${esc(code)}</b>${isMock() ? '（示範模式）' : ''}</div>
-            <button class="btn btn-xs" id="btnGate">${icon('refresh', 13)} 更換旅團 / 示範</button>
+            <div class="row gap-8 wrap">
+              <button class="btn btn-xs" id="loginDlGs" type="button">${icon('download', 13)} 下載 Code.gs</button>
+              <button class="btn btn-xs" id="loginGuide" type="button">${icon('note', 13)} 部署指南</button>
+              <button class="btn btn-xs" id="btnGate" type="button">${icon('refresh', 13)} 更換旅團 / 示範</button>
+            </div>
           </div>
         </div>
 
@@ -372,6 +469,8 @@ function renderLogin() {
   });
 
   app.querySelector('#btnMock')?.addEventListener('click', () => enterMock());
+  app.querySelector('#loginDlGs')?.addEventListener('click', () => downloadCodeGs());
+  app.querySelector('#loginGuide')?.addEventListener('click', openDeployGuideModal);
   app.querySelector('#btnGate')?.addEventListener('click', () => forgetChoice());
 
   app.querySelector('#loginForm').addEventListener('submit', async e => {

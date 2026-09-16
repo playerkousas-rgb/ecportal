@@ -417,6 +417,7 @@ function syncView() {
           下載 <code>Code.gs</code> → 喺你嘅試算表「擴充功能 → Apps Script」貼上 → 部署為網頁應用程式（執行身分：我；存取權：任何人）。
           <div class="col gap-6 mt-12">
             <button class="btn btn-sm btn-block" data-act="dl-gas">${icon('download', 15)} 下載 Code.gs（Apps Script）</button>
+            <button class="btn btn-sm btn-block" data-act="copy-gas">${icon('copy', 15)} 複製 Code.gs 原始碼</button>
             <button class="btn btn-sm btn-block" data-act="dl-schema">${icon('download', 15)} 下載欄位對應表（CSV）</button>
             <button class="btn btn-sm btn-block" data-act="copy-guide">${icon('copy', 15)} 複製部署步驟</button>
           </div>
@@ -938,6 +939,11 @@ export function mount(root, params) {
         const { gasTemplate } = await import('../lib/gastemplate.js');
         download('Code.gs', gasTemplate(), 'text/plain;charset=utf-8');
         toast('已下載 Code.gs', 'ok');
+      }
+      if (act === 'copy-gas') {
+        const { gasTemplate } = await import('../lib/gastemplate.js');
+        const ok = await copyText(gasTemplate());
+        if (ok) toast('已複製 Code.gs 全部原始碼到剪貼簿', 'ok');
       }
       if (act === 'dl-schema') {
         const defs = tableDefs();
