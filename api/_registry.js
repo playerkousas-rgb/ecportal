@@ -131,12 +131,12 @@ export function getTrustedUnit(id) {
 }
 
 // ============================================================
-// 進度系統（VSBADGE）後端 —— 伺服器端設定（可選）
+// 進度紀錄：旅團後端 —— 伺服器端設定（可選；一個後端、兩個前端）
 // ------------------------------------------------------------
 // 旅團可以喺介面自己填（存喺佢自己嘅資料／瀏覽器），亦可以改用 Vercel env：
 //   TROOP_<編號>_PROGRESSBACKEND = https://script.google.com/macros/s/…/exec
-//   TROOP_<編號>_PROGRESSAPIKEY  = …（喺 VSBADGE 個 Apps Script 執行 showApiKey()）
-//   TROOP_<編號>_PROGRESSFRONT   = https://vsbadge.vercel.app/
+//   TROOP_<編號>_PROGRESSAPIKEY  = …（喺旅團自己嘅 Apps Script 執行 showApiKey()）
+//   TROOP_<編號>_PROGRESSCATALOG = https://…/items.json（自訂考核項目，可選）
 // 有設就會優先採用（API Key 就唔會出現在瀏覽器）。
 // ============================================================
 export function getProgressRegistryEntry(id) {

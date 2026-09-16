@@ -587,7 +587,7 @@ window.HTMLAnchorElement.prototype.click = function () {};
 const qr1 = util.qrSvg('https://example.org/constitution.html?u=0082', 4, 2);
 ok('團章公開網址 QR 產生 SVG', qr1.trim().startsWith('<svg') && qr1.includes('</svg>'), qr1.slice(0, 30));
 const qr2 = util.qrSvg('https://example.org/?u=0082&role=exec_committee&ymis=DEMO-EXEC&from=portal&embed=1', 4, 2);
-ok('進度系統 Portal 網址 QR 產生成功', qr2.trim().startsWith('<svg'));
+ok('公開連結 QR 產生成功', qr2.trim().startsWith('<svg'));
 const qr3 = util.qrSvg('https://example.org/constitution.html?u=0082', 4, 2);
 let inconsistent = 0;
 for (let i = 0; i < 2; i++) if (util.qrSvg('https://example.org/constitution.html?u=0082', 4, 2) !== qr3) inconsistent++;
@@ -1122,11 +1122,11 @@ section('通告詳情（輸出連出席回覆）');
   ok('有「通告＋出席回覆（Word）」輸出掣', !!v2.querySelector('[data-act="export-full-word"]'));
   ok('有「通告＋出席回覆（PDF）」輸出掣', !!v2.querySelector('[data-act="export-full-pdf"]'));
   ok('有「出席回覆表（CSV）」輸出掣', !!v2.querySelector('[data-act="export-attend"]'));
-  ok('有「VSBADGE 活動履歷 CSV」輸出掣', !!v2.querySelector('[data-act="export-vsbadge-csv"]'));
-  ok('有「VSBADGE 活動履歷 JSON」輸出掣', !!v2.querySelector('[data-act="export-vsbadge-json"]'));
+  ok('有「活動履歷 CSV」輸出掣', !!v2.querySelector('[data-act="export-vsbadge-csv"]'));
+  ok('有「活動履歷 JSON」輸出掣', !!v2.querySelector('[data-act="export-vsbadge-json"]'));
   const payload = nv.vsbadgeActivityPayload(store.find('notices', n0.id));
-  ok('VSBADGE payload 包含旅團與活動資料', payload.unit && payload.activity.title === '測試通告（出席）', JSON.stringify(payload.activity));
-  ok('VSBADGE payload 正確記錄出席名單', payload.attendees.some(a => a.attended && a.name === ms2[0].name), JSON.stringify(payload.attendees[0]));
+  ok('活動履歷 payload 包含旅團與活動資料', payload.unit && payload.activity.title === '測試通告（出席）', JSON.stringify(payload.activity));
+  ok('活動履歷 payload 正確記錄出席名單', payload.attendees.some(a => a.attended && a.name === ms2[0].name), JSON.stringify(payload.attendees[0]));
   ok('詳情頁列出每位用戶嘅回覆', v2.querySelectorAll('[data-attend]').length >= 2,
     String(v2.querySelectorAll('[data-attend]').length));
   ok('舊通告可以補「出席與否」欄', (() => {
@@ -1494,7 +1494,7 @@ console.log('\n▌新旅團申請接入（送去 ADMIN 收件匣）');
   const box = ob.adminInbox();
   ok('admin 收件匣已設定（data/units.json → admin.submitUrl）', box.configured === true, box.url);
   ok('收件匣係 Apps Script /exec', /^https:\/\/script\.google\.com\/macros\/s\//.test(box.url), box.url);
-  ok('appType 係 82venture（同 vsbadge 共用收件匣時可以分辨）', ob.APP_TYPE === '82venture');
+  ok('appType 係 82venture（共用收件匣可以分辨）', ob.APP_TYPE === '82venture');
 
   const good = ob.validateApplication({
     troopId: '0100', troopName: '第一百旅深資童軍團',
@@ -1502,10 +1502,10 @@ console.log('\n▌新旅團申請接入（送去 ADMIN 收件匣）');
     apiKey: 'K1', contact: 'a@b.hk', note: 'x'
   });
   ok('填齊就通過驗證', good.ok === true && good.errors.length === 0, JSON.stringify(good.errors));
-  ok('payload schema 同 VSBADGE submitRegistration 對齊',
+  ok('payload schema 同收件匣 submitRegistration 格式對齊',
     ['troopId','troopName','scriptUrl','apiKey','appType','note'].every(k => k in good.payload),
     Object.keys(good.payload).join(','));
-  ok('payload 帶 mainSystemUrl（管理員要用做 portalOrigin）',
+  ok('payload 帶 mainSystemUrl（管理員核對用）',
     typeof good.payload.mainSystemUrl === 'string' && good.payload.mainSystemUrl.length > 0,
     good.payload.mainSystemUrl);
   ok('payload 帶 at（時間戳）', /^\d{4}-\d{2}-\d{2}T/.test(good.payload.at || ''), good.payload.at);
@@ -1530,7 +1530,7 @@ console.log('\n▌新旅團申請接入（送去 ADMIN 收件匣）');
     cl.some(x => /一個後端/.test(x) && /兩個前端/.test(x)), JSON.stringify(cl));
   ok('checklist 講明旅團自己去「進度 → 設定」填 Script ＋ API Key',
     cl.some(x => /進度 → 設定/.test(x) && /API Key/.test(x)), JSON.stringify(cl));
-  ok('checklist 唔再要求 portalOrigin（改咗直接接駁）',
+  ok('checklist 唔再要求 portalOrigin（一個後端、兩個前端）',
     !cl.some(x => /portalOrigin/.test(x)), JSON.stringify(cl));
 
 }

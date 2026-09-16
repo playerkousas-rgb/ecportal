@@ -1,5 +1,5 @@
 /* ============================================================
-   tests/progress.mjs — 進度系統（VSBADGE）直接接駁 API 測試
+   tests/progress.mjs — 進度紀錄同源轉發 API 測試（一個後端、兩個前端）
    ------------------------------------------------------------
    驗證 /api/progress 嘅安全規則同轉發行為：
      · 只接受 POST、action 白名單、後端一定要係 GAS /exec
@@ -17,7 +17,7 @@ function ok(name, cond, extra = '') {
   else { fail++; console.log('  ✗ ' + name + (extra ? '  → ' + extra : '')); }
 }
 
-console.log('\n▌進度系統直接接駁 API 測試');
+console.log('\n▌進度紀錄 API 測試（讀／寫旅團自己嘅後端）');
 
 const BACKEND = 'https://script.google.com/macros/s/AKfycbxqQ3JnEdSRnxlhoSEasa6-wX5F58p3dMqBiQRj1zg-SDn7YtFLBKykN5LiWcadgRdCBg/exec';
 const APikey = 'vs_testkey_should_never_be_logged';

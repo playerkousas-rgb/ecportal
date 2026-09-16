@@ -121,7 +121,7 @@ export function migrateOpeningBalances(db) {
 }
 
 /* ---------------- 跨系統身份（federation L1） ----------------
-   進度追蹤（VSBADGE）係獨立系統。兩邊要對得上同一個人，就要一個共同 key：
+   進度資料喺旅團自己嘅後端（一個後端、兩個前端）。要對得上同一個人，就要一個共同 key：
      ymis      會籍編號／YMIS —— **權威** key（人手填，同對面系統一樣）
      systemId  本系統派嘅穩定 ID —— 冇 YMIS 時嘅 fallback（一旦產生就唔會再改）
    冇呢兩個 key，任何同步都只可以靠姓名配對（會撞名、會漏）。 */

@@ -1,6 +1,6 @@
 /* ============================================================
    units.js — 旅團 Registry（多旅團）
-   正式旅團：data/units.json + data/units/<編號>/*.json（Git 管理，同 VSBADGE 做法）
+   正式旅團：data/units.json + data/units/<編號>/*.json（Git Registry 管理）
    本地旅團：只存喺呢部機嘅 localStorage（測試用，標示「本地」）
    ============================================================ */
 

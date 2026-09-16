@@ -91,7 +91,7 @@ const cfgPayload = () => {
   return { unit: c.unit, backend: c.backend, apikey: c.apiKey, catalog: c.catalogUrl };
 };
 
-/** 讀 VSBADGE 全部資料（成員／進度／待批／其他獎章／活動履歷） */
+/** 讀旅團後端全部進度資料（成員／進度／待批／其他獎章／活動履歷） */
 export async function loadRemote() {
   return callApi({ ...cfgPayload(), action: 'load' });
 }

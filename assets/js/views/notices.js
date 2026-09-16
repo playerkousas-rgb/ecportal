@@ -1026,7 +1026,7 @@ async function exportDialog(n) {
             <button class="btn btn-block" data-ex="full-pdf">${icon('print', 15)} 通告＋出席回覆（PDF / 列印）</button>
             <button class="btn btn-block" data-ex="attend-csv">${icon('table', 15)} 出席回覆表（CSV）</button>
             <button class="btn btn-block" data-ex="attend-word">${icon('download', 15)} 出席回覆表（Word）</button>
-            <button class="btn btn-block" data-ex="vsbadge-csv">${icon('table', 15)} 匯出活動履歷（VSBADGE CSV）</button>
+            <button class="btn btn-block" data-ex="vsbadge-csv">${icon('table', 15)} 匯出活動履歷（CSV）</button>
             <button class="btn btn-block" data-ex="vsbadge-json">${icon('download', 15)} 匯出活動履歷（JSON）</button>
           </div>
           <div class="hint mt-8">出席 ${A.yes} · 唔出席 ${A.no} · 未回覆 ${A.none}（名冊 ${A.rosterCount} 位）</div>
@@ -1247,7 +1247,7 @@ export function exportAllSignupsWord() {
 }
 
 /* ============================================================
-   進度系統 (VSBADGE) 活動履歷橋接
+   活動履歷匯出（進度紀錄用）
    ============================================================ */
 export function vsbadgeActivityPayload(n) {
   const db = load();
@@ -1314,7 +1314,7 @@ export function exportVsbadgeActivityCsv(n) {
     headers: ['旅團編號', '通告編號', '活動日期', '活動類別', '活動名稱', '地點', 'YMIS會籍編號', '團員姓名', '團內崗位', '出席狀態', '是否計入進度', '備註與詳情'],
     rows
   });
-  toast('已匯出 VSBADGE 活動履歷 CSV', 'ok');
+  toast('已匯出活動履歷 CSV（可直接匯入後端）', 'ok');
 }
 
 export function exportVsbadgeActivityJson(n) {
@@ -1324,7 +1324,7 @@ export function exportVsbadgeActivityJson(n) {
     JSON.stringify(payload, null, 2),
     'application/json;charset=utf-8'
   );
-  toast('已匯出 VSBADGE 活動履歷 JSON', 'ok');
+  toast('已匯出活動履歷 JSON', 'ok');
 }
 
 export function refresh() { window.dispatchEvent(new CustomEvent('v82:refresh')); }

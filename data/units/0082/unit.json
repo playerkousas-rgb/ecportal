@@ -79,22 +79,13 @@
     }
   },
   "progress": {
-    "name": "深資童軍進度及行政平台 (VSBADGE)",
-    "url": "https://vsbadge.vercel.app/",
-    "mode": "portal",
-    "portal": {
-      "unitParam": "0082",
-      "role": "exec_committee",
-      "_ymis_note": "留空＝自動產生 PORTAL-<旅團>-<角色>，新旅團接入零設定。只有想用專用帳戶身份先需要填。",
-      "ymis": "",
-      "extraParams": "embed=1"
-    },
-    "dedicated": {
-      "username": "",
-      "passwordNote": "如改用專用帳戶模式，請喺「進度」頁填寫對面系統嘅專用執委帳號。"
-    },
-    "paramUser": "ymis",
-    "paramPass": "p"
+    "name": "進度紀錄（同一個後端）",
+    "_note": "一個後端、兩個前端：進度資料就喺旅團自己嘅 Google Sheet（backend.gasUrl）；寫入嘅係「進度追蹤 / 其他獎章 / 活動履歷」等分頁。留空 backend / apiKey ＝ 用返 data/units.json 登記嘅旅團後端。",
+    "backend": {
+      "backend": "",
+      "apiKey": "",
+      "catalogUrl": ""
+    }
   },
   "birthday": {
     "remindDaysBefore": 7,

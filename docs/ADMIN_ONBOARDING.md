@@ -23,7 +23,7 @@
   "troopName": "第一百旅深資童軍團",
   "scriptUrl": "https://script.google.com/macros/s/AKfyc…/exec",   // ← 佢嘅後端
   "apiKey":    "…",
-  "appType":   "82venture",          // vsbadge 嗰邊送嘅係 "vsbadge"
+  "appType":   "82venture",          // 用嚟分辨係邊個系統送出嘅申請
   "mainSystemUrl": "https://…",      // ← 畀你核對／記錄，唔再係 portalOrigin（見下）
   "contact":   "…",
   "note":      "…",
@@ -32,8 +32,7 @@
 ```
 
 收件匣設定喺 `data/units.json` → **`admin.submitUrl`**
-（而家指向 VSBADGE 個中央管理員收件匣，即佢 `api/proxy.js` 嘅 `SCOUT_ADMIN_API`，
-兩邊共用，用 `appType` 分辨。**如果你嘅 admin GAS 有按 `appType` 過濾，記得加 `'82venture'`**）。
+（`api/proxy.js` 嘅 `SCOUT_ADMIN_API`，共用收件匣，用 `appType` 分辨。**如果你嘅 admin GAS 有按 `appType` 過濾，記得加 `'82venture'`**）。
 
 ---
 
@@ -116,43 +115,14 @@ meetings.json       ← 會議（可選）
 
 ---
 
-## 2. VSBADGE 嗰邊要 SET 嘅嘢
+## 2. 另一半（進度前端）
 
-### 2a. `data/troops.json`
+**唔使管理員做任何嘢。** 一個後端、兩個前端：進度資料就喺上面 `backend.gasUrl` 指向嘅同一支 Apps Script，
+執委系統同進度前端讀寫同一份。所以：
 
-```jsonc
-"0100": {
-  "name": "第 100 旅",
-  "en": "100th Group",
-  "backend": "https://script.google.com/macros/s/AKfyc…/exec"   // ← 旅團嘅後端（兩個前端共用）
-}
-```
-
-> `portalOrigin` / `portalRoles` **唔再需要**：執委管理系統唔會外連，只讀寫後端。
-> 歷史設計記錄見 [`PROGRESS_PORTAL_HANDOFF.md`](PROGRESS_PORTAL_HANDOFF.md)。
-
-### 2b. 或者用環境變數（優先於檔案）
-
-`api/_registry.js` 會讀三種寫法（`id` 原樣 / 大階 / 去前導零）：
-
-```
-TROOP_0100_BACKEND      ← 推薦
-TROOP_0100_APIKEY
-TROOP_100_BACKEND       ← 去前導零版本，都會讀到
-TROOP_100_APIKEY
-```
-
-其他相關 env：
-
-| 環境變數 | 用途 | 預設 |
-| --- | --- | --- |
-| `SCOUT_ADMIN_API` | 中央管理員收件匣（新旅團申請） | 已內建一條 |
-| `VSBADGE_PROXY_TIMEOUT_MS` | proxy 上游逾時 | `45000` |
-| `VSBADGE_PROXY_TEST` | 設 `1` 先允許 `localhost` mock GAS（只限本機測試） | 未設 |
-
-> VSBADGE v3.1 已經支援 `portalOrigin` / `portalRoles` 驗證（`api/portal.js`），
-> 但我哋**主要做法**已經改為直接接駁（API Key），所以呢啲欄位只係舊入口先要。
-> 詳情同實測記錄見 [`PROGRESS_PORTAL_HANDOFF.md`](PROGRESS_PORTAL_HANDOFF.md)。
+* 唔使設 `portalOrigin` / `portalRoles`（舊 portal 設計已停用，見 [`archive/PROGRESS_PORTAL_HANDOFF.md`](archive/PROGRESS_PORTAL_HANDOFF.md)）
+* 唔使另一張試算表 —— `initializeSheets` 已經建好 `進度追蹤`／`其他獎章`／`待批完成`／`活動履歷`／`待批履歷`／`成員名單`
+* 想 API Key 唔落前端：設 `TROOP_<id>_PROGRESSBACKEND` / `TROOP_<id>_PROGRESSAPIKEY`（可選 `TROOP_<id>_PROGRESSCATALOG` 自訂考核項目）
 
 ---
 
@@ -178,7 +148,7 @@ TROOP_100_APIKEY
 
 ## 4. 身份欄位（兩邊對人用）
 
-| 82venture `members.json` | VSBADGE | 邊個用 |
+| 執委系統 `members.json` | 進度（同一個後端） | 邊個用 |
 | --- | --- | --- |
 | `ymis`（10 位數字） | YMIS | **團員／執委** |
 | `email` | Email | **領袖** |

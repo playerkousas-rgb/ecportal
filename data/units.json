@@ -23,18 +23,8 @@
         "brand100": "#F2DCE1"
       },
       "progress": {
-        "name": "深資童軍進度及行政平台 (VSBADGE)",
-        "_which_url": "呢度要填進度系統嘅**前端網址**（vsbadge.vercel.app），唔係佢嘅 GAS /exec。v3.0 起前端經自己嘅同源 /api/proxy 搵旅團後端，主系統只需要帶 u=旅團編號。填 GAS /exec 會見到 JSON 錯誤頁而唔係系統介面。",
-        "url": "https://vsbadge.vercel.app/",
-        "mode": "portal",
-        "portal": {
-          "unitParam": "0082",
-          "role": "exec_committee",
-          "_ymis_note": "留空＝自動產生 PORTAL-<旅團>-<角色>，唔使先去進度系統開帳戶（對方 portal 分支唔核對 ymis 係咪真成員）。",
-          "ymis": "",
-          "extraParams": "embed=1"
-        },
-        "_gas_backend_note": "旅團自己嘅 GAS 後端由 vsbadge 伺服器端 Registry（troops.json + TROOP_* env）保管，主系統唔需要亦唔應該帶。0082 嘅後端登記喺 vsbadge data/troops.json。"
+        "name": "進度紀錄（同一個後端）",
+        "_note": "一個後端、兩個前端：進度資料就喺 backend.gasUrl 指向嘅同一支 Apps Script（進度追蹤／其他獎章／待批完成／活動履歷／待批履歷／成員名單 分頁）。留空 ＝ 前端自動用返呢個 entry 嘅 backend.gasUrl / backend.apiKey。"
       },
       "backend": {
         "gasUrl": "https://script.google.com/macros/s/AKfycbySGLBg5KuWzgM9EySiOIppqnzrL0QASIYLlhbCIHocGHcLHKbkMdvmhJvam3baG___/exec",
@@ -49,9 +39,9 @@
   "admin": {
     "name": "平台管理員收件匣（Apps Script Web App）",
     "submitUrl": "https://script.google.com/macros/s/AKfycbxj5BDDGgjs559smkK4Z5aYImWYeXbN5af8U1ObON0z9WnsN6QJW4I1XWolhs5kQ_H-UQ/exec",
-    "_howto": "新旅團喺旅團選擇畫面撳「新旅團申請接入」，資料會 POST 去呢度。同 VSBADGE 共用同一個收件匣（用 appType 分辨：82venture / vsbadge）。管理員收到之後要做兩件事：(1) 82venture —— data/units.json 加該旅團 entry（backend.gasUrl / backend.apiKey / progress）+ 建 data/units/<編號>/ 資料夾；(2) VSBADGE —— data/troops.json 加 backend（或 TROOP_<編號>_BACKEND env），並加 portalOrigin / portalRoles 先至可以 portal 免登入。",
+    "_howto": "新旅團喺旅團選擇畫面撳「新旅團申請接入」，資料會 POST 去呢度。管理員收到之後：data/units.json 加該旅團 entry（backend.gasUrl / backend.apiKey），再建 data/units/<編號>/ 資料夾（unit.json / members.json / constitution.json / finance.json / inventory.json）。一個後端、兩個前端：該 backend.gasUrl 就係進度資料所在（進度追蹤／其他獎章／活動履歷等分頁），旅團登入之後喺「進度」直接讀寫 —— 唔需要任何外連或 portal 設定。",
     "_payload": "{ troopId, troopName, scriptUrl, apiKey, appType:'82venture', mainSystemUrl, contact, note, at }",
-    "_note": "呢個 URL 係 VSBADGE 個中央管理員收件匣（api/proxy.js 嘅 SCOUT_ADMIN_API）。如果你嘅 admin GAS 有按 appType 過濾，記得加 '82venture'。"
+    "_note": "呢個 URL 係共用嘅中央管理員收件匣（api/proxy.js 嘅 SCOUT_ADMIN_API）。如果你嘅 admin GAS 有按 appType 過濾，記得加 '82venture'。"
   },
   "backend": {
     "name": "82venture 總表（Apps Script Web App）",

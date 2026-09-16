@@ -52,22 +52,12 @@
     }
   },
   "progress": {
-    "name": "進度系統（示範）",
-    "_url_note": "示範用：填對方系統嘅**前端**網址（唔係 GAS /exec）",
-    "url": "https://vsbadge.vercel.app/",
-    "mode": "portal",
-    "portal": {
-      "unitParam": "MOCK",
-      "role": "exec_committee",
-      "ymis": "DEMO-EXEC",
-      "extraParams": "embed=1"
-    },
-    "dedicated": {
-      "username": "",
-      "passwordNote": "示範用"
-    },
-    "paramUser": "ymis",
-    "paramPass": "p"
+    "name": "進度紀錄（示範 · 同一個後端）",
+    "backend": {
+      "backend": "",
+      "apiKey": "",
+      "catalogUrl": ""
+    }
   },
   "birthday": {
     "remindDaysBefore": 7,

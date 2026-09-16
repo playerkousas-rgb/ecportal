@@ -1,29 +1,24 @@
-// Vercel Serverless Function — 進度系統（VSBADGE）直接接駁橋
-// ============================================================
-// 背景（2026-09-16 團長要求）：
-//   唔想用「外連」方式（開新分頁／iframe 去 VSBADGE，再靠 portalOrigin 驗證 —— 會遇到
-//   referer_mismatch），而係要**執委管理系統自己讀 VSBADGE 嘅 script**，喺系統內直接顯示進度。
-//
-//   每個旅團嘅進度追蹤有自己嘅 Apps Script 同 API Key，所以登記方式係：
-//     旅團登入自己嘅執委管理系統 → 「進度 → 設定」填入
-//       · VSBADGE 後端 GAS /exec 網址
-//       · API Key（喺 VSBADGE 個 Apps Script 執行 showApiKey() 取得）
-//   之後主系統就用呢個 key 對 VSBADGE 後端，以執委身份讀取／勾選進度。
-//
-// 安全原則：
-//   1. 只接受 POST，同源（唔加任何 CORS header）
-//   2. backend 一定係 https://script.google.com/macros/s/<id>/exec（isTrustedExecUrl）
-//      → 唔會變成 open proxy / SSRF；亦可以改用伺服器端 registry（TROOP_<id>_PROGRESS*）唔經前端傳
-//   3. action 白名單：load（讀）／save（勾進度）／saveOtherBadge（其他獎章）／items（讀考核項目定義）
-//   4. 有尺寸上限；log 只記 metadata，**永不記錄 API Key / 內容**
-//   5. VSBADGE Code.gs 唔需要改一行：load 支援 apikey，save / saveOtherBadge 支援 apikey 直接寫入
-//      （見 vsbadge/apps-script/Code.gs：validKey = body.apikey && body.apikey === getApiKey()）
-//
-// 另外支援伺服器端設定（可選，唔一定要用）：
-//   TROOP_<旅團編號>_PROGRESSBACKEND = https://script.google.com/macros/s/…/exec
-//   TROOP_<旅團編號>_PROGRESSAPIKEY  = …
-//   TROOP_<旅團編號>_PROGRESSCATALOG = https://…/items.json（自訂考核項目，可選）
-//   有設就會優先採用（API Key 唔會出現在瀏覽器）。
+/* ============================================================
+   api/progress.js — 進度紀錄同源轉發層（一個後端、兩個前端）
+   ------------------------------------------------------------
+   旅團只有一個後端：Google Sheet ＋ 一支 Apps Script（/exec）。
+   執委管理系統同進度前端都係前端，讀寫同一份資料 —— 所以呢度只係
+   「代瀏覽器讀／寫旅團自己嘅後端」，唔會連去任何其他系統。
+
+   讀：POST { action:'load', unit, backend, apikey }  → GET 後端 ?action=load
+   寫：POST { action:'save' | 'saveOtherBadge', … }   → POST 後端 action=save
+   可選：POST { action:'catalog', catalog }            → 自訂考核項目定義（公開 https）
+        （預設唔用：app 內建 data/progress/items.json，離線都讀得）
+
+   後端網址／API Key：伺服器端 env 優先（TROOP_<旅團>_PROGRESSBACKEND / _PROGRESSAPIKEY），
+   冇設就用前端傳上嚟嘅（前端預設會用返 data/units.json 登記嘅旅團後端）。
+
+   安全：
+     1. 只准 https://script.google.com/macros/s/…/exec（擋 open proxy；可用 V82_PROXY_TEST=1 放行本機 mock）
+     2. payload ≤ 1 MB；上游 45 秒逾時
+     3. log 只記 metadata：唔記 API Key、唔記 payload 內容、唔記完整後端網址
+     4. catalog 只准公開 https（擋 localhost／內網，防 SSRF）
+   ============================================================ */
 
 import { isTrustedExecUrl, getProgressRegistryEntry } from './_registry.js';
 
@@ -37,7 +32,7 @@ const UPSTREAM_TIMEOUT_MS = (() => {
 const MAX_DATA_BYTES = 1024 * 1024;        // 前端送上去嘅資料上限 1MB
 const MAX_ITEMS_BYTES = 2 * 1024 * 1024;   // items.json 上限 2MB
 
-// VSBADGE Code.gs 支援嘅 action（唔會放寬）
+// 旅團後端（Code.gs）支援嘅 action（唔會放寬）
 const ACTIONS = new Set(['load', 'save', 'saveOtherBadge', 'catalog']);
 
 function sendJson(res, status, obj) {
@@ -172,7 +167,7 @@ export default async function handler(req, res) {
   try {
     let up;
     if (action === 'load') {
-      // VSBADGE doGet：?action=load(&apikey=…)
+      // 後端 doGet：?action=load(&apikey=…)
       const qs = new URLSearchParams({ action: 'load' });
       if (apiKey) qs.set('apikey', apiKey);
       up = await upstream(backend + (backend.includes('?') ? '&' : '?') + qs.toString(), { method: 'GET' });

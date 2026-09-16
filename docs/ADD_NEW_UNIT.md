@@ -1,6 +1,6 @@
 # 新增一個旅團（多旅團部署）
 
-82venture 用 **Git Registry** 方式管理多個旅團（同 VSBADGE 做法一樣）：
+執委管理系統用 **Git Registry** 方式管理多個旅團：
 `data/units.json` 係唯一註冊處，每個旅團一個資料夾 `data/units/<旅團編號>/`。
 唔需要開帳號、唔需要後端，加檔案 + 部署就完成。
 
@@ -58,10 +58,8 @@ cp -r data/units/0082 data/units/0137
       "dataPath": "data/units/0137/",
       "theme": { "brand700": "#7B2233", "brand800": "#5E1826" },
       "progress": {
-        "name": "深資童軍進度及行政平台 (VSBADGE)",
-        "url": "https://script.google.com/macros/s/…/exec",
-        "mode": "portal",
-        "portal": { "unitParam": "0137", "role": "exec_committee", "extraParams": "embed=1" }
+        "name": "進度紀錄（同一個後端）",
+        "backend": { "backend": "", "apiKey": "", "catalogUrl": "" }
       }
     }
   }
