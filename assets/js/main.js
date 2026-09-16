@@ -282,7 +282,7 @@ async function openApplication() {
           <input class="input" value="${esc(mainUrl)}" readonly style="font-family:var(--mono);font-size:12px;background:var(--bg-2)">
           <div class="hint">呢個係<b>你而家睇緊嘅呢個網站</b>嘅網址，方便管理員核對同登記。</div></div>
       </div>
-      <div class="hint mt-8">送出後管理員會把你嘅後端網址加進 Registry，完成開戶。之後你自己喺「<b>進度 → 設定</b>」填入旅團嘅 VSBADGE <code>/exec</code> 網址同 API Key，就可以喺呢度直接讀寫進度（唔使外連）。</div>`,
+      <div class="hint mt-8">送出後管理員會把你嘅後端網址加進 Registry，完成開戶。之後你自己喺「<b>進度 → 設定</b>」填入旅團自己嘅 <code>/exec</code> 網址同 API Key，就可以喺呢度直接讀寫進度（一個後端、兩個前端，唔使外連）。</div>`,
     actions: [
       { label: '取消', class: 'btn', value: null },
       { label: '送出申請', class: 'btn-primary', onClick: el => ({

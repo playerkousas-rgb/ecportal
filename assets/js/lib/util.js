@@ -286,6 +286,30 @@ export function qrSvg(text, cell = 5, margin = 2) {
   }
 }
 
+/**
+ * QR 圖（GIF data URL）—— 可以直接放 <img>、儲存落手機、貼落 WhatsApp 做圖
+ * 同 qrSvg() 用同一個編碼器（assets/vendor/qrcode.js，離線可用）
+ */
+export function qrDataUrl(text, cell = 8, margin = 3) {
+  if (typeof window.qrcode !== 'function') return '';
+  try {
+    const qr = window.qrcode(0, 'M');
+    qr.addData(String(text));
+    qr.make();
+    return qr.createDataURL(cell, margin);
+  } catch (e) {
+    console.error(e);
+    return '';
+  }
+}
+
+/** 用 <img> 顯示 QR（拿唔到 data URL 就退回 SVG） */
+export function qrImg(text, px = 190, cell = 8, margin = 3) {
+  const d = qrDataUrl(text, cell, margin);
+  if (!d) return qrSvg(text, 5, 2);
+  return `<img src="${d}" width="${px}" height="${px}" alt="QR Code" style="display:block;margin:0 auto;max-width:100%">`;
+}
+
 /* ---------- misc ---------- */
 export function groupBy(list, keyFn) {
   return list.reduce((acc, item) => {

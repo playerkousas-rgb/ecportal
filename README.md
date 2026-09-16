@@ -61,7 +61,7 @@ python3 -m http.server 8000     # 或用任何靜態伺服器（必須用 http:/
 | 5 | 生日內建、可改可輸出、當月＋前 7 日提示（顯示邊位） | `data/units/0082/members.json`（16 位，其中 1 位未填生日）、「用戶 → 生日」頁（月曆／年表／下載 .ics）、儀表板提示卡（會顯示姓名） |
 | 6 | 物資紀錄＋借用面板，任何已登入帳戶可批核，借出／歸還自動加減庫存 | 「物資」頁：物資清單、借用與批核、盤點紀錄；`inv.approve` 三個角色都有；庫存由 `model.itemTotals()` 即時計算（批准即鎖定、歸還即回復） |
 | 7 | 財務內建，取代 Google Form；**出兩條數**（旅 31/3 年結 vs 旅團 AGM 起計） | 「財務」頁：帳目／財政年度報告／**團費收款表（每年每人 $360，逐人記錄邊個交咗）**／申報／預算／匯入；`assets/js/lib/fiscal.js` 同時計算**童軍年度（4/1–3/31）**同**旅年度（AGM → 下屆 AGM 前一日）**；AGM 日期**逐年輸入**（每年唔同） |
-| 8 | 進度系統整合（**直接接駁**，唔使外連／唔使登入對面系統） | 「進度」頁：旅團喺「設定」填自己嘅 VSBADGE `/exec` 網址 ＋ API Key（**API Key＝執委身份**）→ 喺呢邊**讀進度**同**直接勾進度**，寫入同一個後端；分頁有總覽／成員進度／勾選進度／設定 |
+| 8 | 進度紀錄（**一個後端、兩個前端**） | 旅團只有**一個後端**（Google Sheet ＋ Apps Script）：**執委管理系統**同**進度前端**都係前端，讀寫同一份資料。呢邊**唔連任何其他系統** —— 直接讀後端（`?action=load`）／寫後端（`action=save`），通常用返 Registry 登記嘅後端，API Key＝執委身份；分頁有總覽／成員進度／勾選進度／設定 |
 | 9 | MOCK 與真實資料完全分離；多旅團系統（參考 VSBADGE） | `data/mock/*.json` vs `data/units/<編號>/*.json`；`data/units.json` 係 Git Registry，每個旅團一個資料夾 |
 | 10 | 成員用手機**影相＋揀欄目**就入得帳（取代 Google Form）；領袖／執委亦可在 APP 內填 | 公開收集頁 **`entry.html?u=0082`**（免登入：影相 → 揀欄目 → 金額 → 送出）＋ APP 內「儀表板 → 影相記一筆」／「財務 → 收支申報」；相機會自動壓縮，送出可經 Apps Script 直接入總表 |
 | 11 | 每個旅團可以**插入自己嘅 SHEET** 取代預設；欄目可改名／加減（內建類 Google Sheet） | 每個模組頁右上「**欄位**」掣（帳目／物資／借用／團員／通告／會議）：改名／加欄／改類型／必填／隱藏／排序／還原；「**插入自己嘅 Sheet**」搬去「**帳號與系統 → 資料管理**」 |
@@ -191,20 +191,30 @@ python3 -m http.server 8000     # 或用任何靜態伺服器（必須用 http:/
 Word／PDF／Markdown／單一 HTML／JSON 匯出、QR Code、
 **公開閱讀頁 `constitution.html`**（免登入、可獨立上載或貼連結）。
 
-### 進度系統接駁（直接接駁：讀同寫都喺呢邊做）
-進度追蹤係**獨立系統**（VSBADGE，都係多旅團、同一前端指向唔同後端），但**唔再需要外連** ——
-呢邊直接同**旅團自己嘅 VSBADGE 後端（Apps Script）**通話：喺執委系統內讀進度、直接勾進度。
+### 進度紀錄（一個後端、兩個前端）
+旅團只有**一個後端**：一張 Google Sheet ＋ 一支 Apps Script（`/exec`）。
+**執委管理系統**同**進度前端**（團員／領袖用嗰個）係**兩個前端**，讀寫同一份資料 ——
+所以執委系統**唔需要連去任何其他系統**：唔開分頁、唔用 portal，亦唔會出 `referer_mismatch`。
 
-* 「進度 → 設定」填兩樣：**VSBADGE 嘅 `/exec` 網址**（部署 Web App：執行身分「我」、存取權「任何人」）
-  ＋ **API Key**（VSBADGE 選單「顯示 API Key」）
-* **API Key 就等於執委身份** —— 有 Key 就可以讀同勾進度。Key 只儲存喺旅團自己嘅資料，**唔會出現在網址**、
-  亦唔會交畀第三方；唔想畀人用就喺 VSBADGE 換 Key
-* 讀／寫都經**同源 `/api/progress`** 轉發（Vercel 部署自動有；本機用 `npm run dev`），
-  server 端有白名單（只准 GAS `/exec`）、1 MB payload 上限、45 秒逾時，log 只記 metadata 唔記 Key
-* 「進度」頁分頁：**總覽**（全團＋逐個獎章完成度）、**成員進度**（逐個人睇）、**勾選進度**（直接勾／取消，寫入同一個後端）、**設定**（連線＋測試）
-* **跨系統對人靠身份欄**：團員／執委用 **YMIS（10 位數字）**、領袖用 **Email**；
-  未補嘅只可以用姓名配對（會撞名、會漏），進度頁會提示仲有幾多人未對上
-* 舊嘅「執委入口連結」（開 VSBADGE 自己嘅介面）仍然保留喺設定最底，但**唔再係主要做法**
+* **讀**：`GET ?action=load` → 成員、進度、待批完成、其他獎章、活動履歷（經同源 `/api/progress` 轉發）
+* **寫**：`POST {action:'save'|'saveOtherBadge', apikey, changes|records}` → 直接勾／取消勾，寫入同一個 Sheet
+* **設定**：通常唔使填 —— 旅團後端登記喺 `data/units.json`（`backend.gasUrl` / `apiKey`）就會自動用返；
+  未登記就去「進度 → 設定」填 `/exec` ＋ API Key（Apps Script 執行 `showApiKey()` 複製）。**API Key＝執委身份**
+* **考核項目**：第 11 版綱要已經**內建**喺 `data/progress/items.json`（離線可用，唔使連任何網站）；
+  旅團自己改過項目就喺設定填一條公開 https 網址
+* **後端範本**：`Code.gs` 已經同時支援兩邊（`sync` / `claim` / `noticeSignup` / `loan` ＋ `load` / `save` / `saveOtherBadge`）；
+  執行一次 `initializeSheets` 會建好 `進度追蹤`／`其他獎章`／`待批完成`／`活動履歷`／`待批履歷`／`成員名單` 分頁，
+  同步時亦會更新 `成員名單`，令兩個前端見到同一批人
+* **安全**：`/api/progress` 只准 GAS `/exec`、payload ≤ 1 MB、45 秒逾時，log 只記 metadata（唔記 API Key）；
+  唔想 Key 落前端就設 `TROOP_<旅團>_PROGRESSBACKEND` / `_PROGRESSAPIKEY`
+* **身份對應**：團員／執委用 **YMIS（10 位數字）**、領袖用 **Email**
+
+### 通告：一撳 WhatsApp 分享 + QR 報名
+「通告」清單或詳情頁 →「分享報名」：
+* **用 WhatsApp 分享**：直接開 `wa.me`，標題／日期／地點／費用／截止／內容重點同**報名連結**都自動填好（可以改完先送）
+* **QR Code**：畫面即時顯示，可以儲存圖（PNG／GIF，貼落群組）、下載 SVG、列印 A4 海報
+* **報名連結**：`notice.html?u=<旅團>&n=<通告>` 免登入 —— 團員／家長撳入去睇通告＋填名報名（截止／名額自動擋）
+* 報名會直接寫入旅團後端（`報名` 分頁）；「通告 → 所有報名」有**逐張通告統計**（報名／出席／唔出席／未回覆）
 
 ### 教學（內建）
 12 章使用說明：快速開始、帳戶與權限、團章、財務、**日常點輸入**、**手機記帳與通告**、
@@ -258,17 +268,18 @@ data/
 
 ```bash
 npm install          # 只裝測試用嘅 jsdom（網站本身零依賴）
-npm run dev          # 本機開發伺服器（靜態檔 + /api/*，進度接駁要用呢個）
-npm test             # smoke(real/mock) + public + gate + api + progress
+npm run dev          # 本機開發伺服器（靜態檔 + /api/*，進度讀寫要用呢個）
+npm run build:gas    # 由 assets/js/lib/gastemplate.js 產生 apps-script/Code.gs（單一來源）
+npm test             # build:gas + smoke(real/mock) + public + gate + api + progress
 ```
 
 | 測試 | 內容 | 結果（2026-09-16） |
 |---|---|---|
-| `node tests/smoke.mjs real` | 真實模式：種子資料、登入／密碼權限、雙財政年度、AGM 逐年輸入、**團費收款紀錄（含領袖免收）**、生日、全部頁面渲染、**分頁對位**、QR、文件輸出、物資加減庫存、財務匯入解析、**帳目（本年度總覽／按月／過往紀錄）**、**報告唔混上年度結餘**、**通告（開一張・分享・報名・統計）**、**欄位設計（改名／還原，每頁入口）**、**插入自己嘅 Sheet**、**快速記帳**、**總表同步下載**、**進度直接接駁** | **492 通過 / 0 失敗** |
-| `node tests/smoke.mjs mock` | 示範模式：同樣項目 + 示範／真實隔離 | **454 通過 / 0 失敗** |
+| `node tests/smoke.mjs real` | 真實模式：種子資料、登入／密碼權限、雙財政年度、AGM 逐年輸入、**團費收款紀錄（含領袖免收）**、生日、全部頁面渲染、**分頁對位**、QR、文件輸出、物資加減庫存、財務匯入解析、**帳目（本年度總覽／按月／過往紀錄）**、**報告唔混上年度結餘**、**通告（開一張・分享・報名・統計）**、**欄位設計（改名／還原，每頁入口）**、**插入自己嘅 Sheet**、**快速記帳**、**總表同步下載**、**進度直接接駁** | **502 通過 / 0 失敗** |
+| `node tests/smoke.mjs mock` | 示範模式：同樣項目 + 示範／真實隔離 | **463 通過 / 0 失敗** |
 | `node tests/public.mjs` | 公開頁：團章（免登入、中英對照、語言切換、搜尋）＋ 通告公開頁（分享連結、報名表、送出、失效連結）＋ 手機記一筆 | **73 通過 / 0 失敗** |
 | `node tests/gate.mjs` | 旅團閘：揀旅團、只顯示已啟用、申請接入（Code.gs → initializeSheets → 部署）、驗證 | **19 通過 / 0 失敗** |
-| `node tests/api.mjs` · `node tests/progress.mjs` | `/api/units` 個資收窄；**進度接駁**（只准 GAS `/exec`、逾時、payload 上限、serverside env 優先、log 唔記 API Key） | **11 · 25 通過 / 0 失敗** |
+| `node tests/api.mjs` · `node tests/progress.mjs` | `/api/units` 個資收窄；**進度讀寫**（只准 GAS `/exec`、逾時、payload 上限、伺服器端 env 優先、log 唔記 API Key、自訂考核項目 SSRF 防護） | **11 · 28 通過 / 0 失敗** |
 
 ---
 
@@ -356,7 +367,8 @@ tests/                         jsdom 端對端測試
    （亦可以直接喺「用戶」頁右上「欄位」自己加欄位）。
 6. **公開收集頁需要託管**：`entry.html` / `notice.html` 要放喺 https 網址（Vercel / GitHub Pages 等）先方便成員用手機開；
    純本機 `localhost` 只適合測試。
-7. **進度直接接駁需要 `/api/` 後端**：Vercel 部署自動有；本機用 `npm run dev`；
-   GitHub Pages 之類純靜態主機冇 API，進度頁會提示停用（其他功能照用）。
+7. **進度讀寫需要 `/api/` 後端**：Vercel 部署自動有；本機用 `npm run dev`；
+   GitHub Pages 之類純靜態主機冇 API，進度頁會提示（其他功能照用）。
+   * 旅團後端要係本系統嘅 `Code.gs`（或已支援 `?action=load` / `action=save`）；`npm run build:gas` 會由範本產生 `apps-script/Code.gs`。
 8. **Apps Script 版本**：你嗰條 `/exec` 而家冇 `doGet`（只有 `doPost`）；建議貼上內建 `Code.gs` 並用
    「管理部署作業 → 編輯 → 新版本」更新（網址不變），咁 `sync` / `claim` / `noticeSignup` 三個動作就齊。

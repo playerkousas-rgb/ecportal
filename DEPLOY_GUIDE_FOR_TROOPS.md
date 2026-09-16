@@ -7,9 +7,11 @@
 ## 🌟 系統架構概念
 
 ### 1. 雙系統聯邦運作 (Hub & Progress Tracker)
+* **模型：一個後端、兩個前端** —— 旅團只有**一個後端**（Google Sheet ＋ Apps Script `/exec`），
+  執委管理系統同進度前端都係前端，讀寫同一份資料。所以執委系統**唔會連去任何其他系統**。
 * **主系統（執委管理系統 · ecportal）**：
   - 執委會日常行政：會議紀錄、物資借用及庫存（自動扣除）、團章中英對照、活動通告與即時出席回覆（`notice.html`）、成員手機影相快速記帳（`entry.html`）、雙財政年度（AGM 旅年度 ＋ 4/1–3/31 童軍年度）。
-  - 各旅團進度直接接駁：喺「進度 → 設定」填入旅團自己嘅 VSBADGE `/exec` 網址同 API Key，就可以喺執委系統內**直接讀進度、直接勾進度**（唔使開對面系統）。
+  - 進度紀錄：直接讀／寫旅團自己嘅後端（`?action=load` / `action=save`）。預設用返 `data/units.json` 登記嘅 `backend.gasUrl` / `apiKey`；要覆蓋先喺「進度 → 設定」填。
 * **進度系統 (vsbadge · 深資童軍進度追蹤)**：
   - 專注深資童軍各階段獎章、活動段章、專科章及訓練班紀錄與審批。
 
@@ -117,33 +119,51 @@
 在 Vercel 專案 Settings → Environment Variables 加入：
 - `TROOP_0082_BACKEND` = `https://script.google.com/macros/s/…/exec`
 - `TROOP_0082_APIKEY` = `v82_xxxxxxxxxxxxxxxx`
-- （進度系統）`TROOP_0082_PROGRESSBACKEND` / `TROOP_0082_PROGRESSAPIKEY` / `TROOP_0082_PROGRESSFRONT`
+- （進度紀錄）`TROOP_0082_PROGRESSBACKEND` / `TROOP_0082_PROGRESSAPIKEY` / `TROOP_0082_PROGRESSCATALOG`（可選）
 
 ---
 
-## 🔗 與「深資童軍進度追蹤 (VSBADGE)」直接接駁
+## 🔗 進度紀錄：一個後端、兩個前端
 
-當成員／領袖在執委管理系統點選 **「進度」** 模組時，系統會經同源伺服器端 `/api/progress` 直接同**旅團自己嘅 VSBADGE 後端**通話：
+```
+                    ┌───────────────────────────────┐
+   執委管理系統 ───▶ │  旅團自己嘅後端（只有一個）      │ ◀─── 進度前端（團員／領袖用）
+   （前端 ①）        │  Google Sheet ＋ Apps Script    │      （前端 ②）
+                    └───────────────────────────────┘
+```
 
-1. **旅團自己設定**（每個旅團一次）：去「進度 → 設定」填
-   - VSBADGE 嘅 Apps Script **`/exec` 網址**（部署 Web App：執行身分「我」、存取權「任何人」）
-   - VSBADGE 嘅 **API Key**（VSBADGE 選單「顯示 API Key」，或Spreadsheet 工具選單）
-2. **API Key＝執委身份**：API Key 對得上，就代表執委有權讀取同勾選進度 —— 寫入嘅係 VSBADGE 用緊嘅同一個 Google Sheet，
-   所以兩邊永遠睇到同一份進度，唔會出現第二份真相。
-3. **讀同寫都喺執委系統內做**：總覽（全團／逐個獎章）、成員進度（逐個人）、勾選進度（直接勾／取消）——
-   API Key 只會由瀏覽器傳去同源 `/api/progress`，唔會出現在網址、唔會交畀第三方、唔會寫入 log。
-4. **仍有需要開 VSBADGE 自己介面**（例如支部領袖審批）就用設定頁最底嘅「執委入口連結」——
-   呢個係舊做法，需要 VSBADGE 側登記本系統網址，未登記會出 `referer_mismatch`。
+1. **後端只有一個**：旅團自己嘅 Google Sheet ＋ Apps Script（`/exec`）。進度資料（`進度追蹤`／`其他獎章`／
+   `活動履歷`／`待批完成`／`待批履歷`／`成員名單` 分頁）就住喺呢度。
+2. **執委管理系統唔連任何其他系統**：只係**讀後端**（`GET ?action=load`）／**寫後端**
+   （`POST {action:'save'|'saveOtherBadge', apikey, changes}`）。冇外連、冇 portal、冇 `referer_mismatch`。
+3. **API Key＝執委身份**：Key 對得上就讀得、勾得；Key 只會由瀏覽器傳去**同源** `/api/progress`，
+   唔會出現在網址、唔會交畀第三方、唔會寫入 log。
+4. **考核項目定義**：第 11 版綱要已內建喺 app（`data/progress/items.json`），離線用都得；
+   旅團自己改過項目就喺「進度 → 設定」填自訂 https 網址。
+5. **兩個前端共用同一批人**：靠 **YMIS（團員／執委）** 同 **Email（領袖）** 對人；
+   「總表同步」會同時更新 `成員名單`，所以兩邊見到同一份名冊。
 
-### 伺服器端設定（可選：唔想旅團自己填就用環境變數）
+### 後端範本（`Code.gs`）已經支援兩個前端
 
-喺 Vercel 專案 Settings → Environment Variables 加（**進度系統用，優先於前端輸入**）：
+* 執委系統用：`sync` / `claim` / `noticeSignup` / `loan` / `status` / `ping`
+* 進度用：`GET ?action=load`、`POST action=save`、`action=saveOtherBadge`
+* 執行一次 `initializeSheets` 會建立所有分頁（包括進度用嘅 5 張 ＋ `成員名單`）
+* 改完範本記得跑 `npm run build:gas`（會重新產生 `apps-script/Code.gs`，`npm test` 會檢查兩邊一致）
+
+### 伺服器端設定（可選：唔想 API Key 落前端就用環境變數）
+
+喺 Vercel 專案 Settings → Environment Variables 加：
 
 - `TROOP_0082_PROGRESSBACKEND` = `https://script.google.com/macros/s/…/exec`
 - `TROOP_0082_PROGRESSAPIKEY` = `v82_xxxxxxxxxxxxxxxx`
-- `TROOP_0082_PROGRESSFRONT` = `https://vsbadge.vercel.app/`（揀選「考核項目」定義時用）
+- `TROOP_0082_PROGRESSCATALOG` = `https://…/items.json`（自訂考核項目定義，可選）
 
-設咗之後，前端「進度 → 設定」可以留空，API Key 完全唔會落前端。
+設定咗之後，前端「進度 → 設定」可以留空，API Key 完全唔會落前端。
+
+### 通告報名（同一個後端）
+
+「通告」→「分享報名」：一撳 **WhatsApp** 分享（文字＋報名連結自動填好）、QR 圖可儲存落手機貼落群組、
+免登入報名頁 `notice.html?u=<旅團>&n=<通告>`；報名直接寫入後端 `報名` 分頁，執委喺「通告 → 所有報名」睇統計。
 
 ## 📊 活動通告出席與進度系統活動履歷 (VSBADGE Activity Log) 聯動評估與整合方案
 

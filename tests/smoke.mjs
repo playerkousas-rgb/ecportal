@@ -756,8 +756,20 @@ section('通告（開一張・分享・報名）');
     shareBtn.click();
     await new Promise(r => setTimeout(r, 60));
     const ov = doc.querySelector('.overlay');
-    ok('分享對話框有 QR Code', !!ov && !!ov.querySelector('.qr-box svg'));
-    ok('分享對話框顯示公開連結', !!ov && (ov.querySelector('#sh-url')?.value || '').includes('notice.html'));
+    ok('分享對話框有 QR Code（SVG 或圖檔）',
+      !!ov && (!!ov.querySelector('.qr-box svg') || /^data:image/.test(ov.querySelector('.qr-box img')?.getAttribute('src') || '')));
+    ok('分享對話框顯示報名連結', !!ov && (ov.querySelector('#sh-url')?.value || '').includes('notice.html'));
+    /* 2026-09-16：分享要有 WhatsApp 一撳、QR 圖、報名統計 */
+    ok('分享對話框有「用 WhatsApp 分享」掣', !!ov && !!ov.querySelector('[data-sh="wa-open"]'));
+    ok('分享對話框有「儲存 QR 圖」掣（貼落 WhatsApp 用）', !!ov && !!ov.querySelector('[data-sh="img"]'));
+    ok('分享文字可以自己改（textarea 預覽）', !!ov && !!ov.querySelector('#sh-text'));
+    const preview = ov?.querySelector('#sh-text')?.value || '';
+    ok('分享文字有標題 / 日期 / 報名連結同截止提示',
+      /通告|Notice|活動/.test(preview) && preview.includes('notice.html') && /截止|報名/.test(preview),
+      preview.slice(0, 80));
+    ok('WhatsApp 分享連結係 wa.me（一撳開 WhatsApp）',
+      (() => { const t = noticesMod.whatsappShareUrl(first);
+        return /^https:\/\/wa\.me\/\?text=/.test(t) && decodeURIComponent(t).includes('notice.html'); })());
     doc.querySelector('.overlay [data-close-x]')?.click();
     await new Promise(r => setTimeout(r, 20));
   }
@@ -1168,63 +1180,52 @@ section('成員連結（免登入公開頁）');
   }
 }
 
-/* ---------- 7. 進度追蹤就緒檢查 ---------- */
-section('進度追蹤（連通檢查）');
+/* ---------- 7. 進度紀錄：一個後端、兩個前端 ---------- */
+section('進度紀錄（一個後端 · 兩個前端）');
 {
-  const pv = await import('../assets/js/views/progress.js');
-  const R = pv.readiness();
-  ok('就緒清單有 10 項', R.total === 10, String(R.total));
-  /* 對方（VSBADGE）index.html 嘅實際判斷：
-       if (from==='portal' && ymis && role) → 免登入進入
-     所以 u + from=portal + role + ymis 四樣缺一不可；少一樣就會跌返登入頁。 */
-  ok('Portal 連結有 from=portal（免密碼）', R.url.includes('from=portal'), R.url);
-  ok('Portal 連結帶 ymis（對方必要欄位）', /[?&]ymis=[^&]+/.test(R.url), R.url);
-  /* 自動身份：旅團接入零設定，唔使先去進度系統開帳戶再返嚟填 */
-  ok('portal.ymis 留空會自動產生 PORTAL-<旅團>-<角色>',
-    pv.portalIdentity({ portal: { unitParam: '0082', role: 'exec_committee', ymis: '' } }).ymis === 'PORTAL-0082-EXCO'
-    && pv.portalIdentity({ portal: { unitParam: '0082', role: 'exec_committee', ymis: '' } }).auto === true,
-    JSON.stringify(pv.portalIdentity({ portal: { unitParam: '0082', role: 'exec_committee', ymis: '' } })));
-  ok('自動身份跟角色變（領袖唔會撞執委）',
-    pv.portalIdentity({ portal: { unitParam: '0082', role: 'branch_leader', ymis: '' } }).ymis === 'PORTAL-0082-LEADER'
-    && pv.portalIdentity({ portal: { unitParam: '0082', role: 'group_leader', ymis: '' } }).ymis === 'PORTAL-0082-GLEADER');
-  ok('自己填咗專用身份就以佢為準',
-    pv.portalIdentity({ portal: { unitParam: '0082', role: 'exec_committee', ymis: 'EXCO-82' } }).ymis === 'EXCO-82'
-    && pv.portalIdentity({ portal: { unitParam: '0082', role: 'exec_committee', ymis: 'EXCO-82' } }).auto === false);
-  ok('連結帶 src（主系統 origin）同 ts，供對方日後驗證',
-    /[?&]src=/.test(R.url) && /[?&]ts=\d+/.test(R.url), R.url);
-  ok('零設定（ymis 留空）都係 10/10 就緒',
-    (() => { const c = pv.portalIdentity({ portal: { unitParam: '0082', role: 'exec_committee', ymis: '' } });
-      return !!c.ymis; })(), '');
-  ok('Portal 連結帶 u（旅團編號）', /[?&]u=[^&]+/.test(R.url), R.url);
-  ok('Portal 連結帶 role', /[?&]role=[^&]+/.test(R.url), R.url);
-  ok('網址係對方前端而唔係 GAS /exec（實測：/exec 只回 JSON 錯誤頁）',
-    !/\/macros\/s\//.test(store.load().profile?.progress?.url || ''),
-    store.load().profile?.progress?.url);
-  ok('揀嘅角色對方認得而且有勾選權', pv.TICK_ROLES.includes(R.mode === 'portal' ? (R.url.match(/role=([^&]+)/) || [])[1] : ''),
-    R.url);
-  if (MODE === 'real') {
-    ok('真實旅團已預備好連通進度系統', R.ready === true,
-      R.checks.filter(c => !c.ok).map(c => c.label).join(' / '));
-    ok('Portal 模式帶 u=0082 同 role=exec_committee',
-      R.url.includes('u=0082') && R.url.includes('role=exec_committee'), R.url);
-  } else {
-    ok('示範模式都有自己嘅進度系統設定（示範用）', R.ready === true,
-      R.checks.filter(c => !c.ok).map(c => c.label).join(' / '));
-    ok('示範模式帶 u=MOCK（唔會用真實旅團編號）', R.url.includes('u=MOCK'), R.url);
-    ok('示範模式嘅後端唔會送出街（只有進度連結）', !store.load().backend);
-  }
+  const vp = await import('../assets/js/views/progress.js');
+  const lp = await import('../assets/js/lib/progress.js');
+  const cfg = lp.progressCfg();
+  ok('進度係讀寫旅團自己嘅後端（預設用返 Registry 登記咗嘅 /exec）',
+    !!cfg.backend && /\/exec$/.test(cfg.backend), JSON.stringify({ backend: cfg.backend, registered: cfg.registered }));
+  ok('預設用內建考核項目定義（唔使連任何其他系統）',
+    lp.DEFAULT_CATALOG_URL === 'data/progress/items.json');
+  ok('不再有 portal / 外連設定（巳移除）',
+    typeof vp.portalIdentity === 'undefined' && typeof vp.readiness === 'undefined'
+    && typeof vp.checkConnection === 'undefined' && typeof vp.TICK_ROLES === 'undefined');
+
   window.location.hash = '#/progress';
   window.dispatchEvent(new window.HashChangeEvent('hashchange'));
   await new Promise(r => setTimeout(r, 60));
   const v4 = doc.getElementById('view');
   ok('進度頁主畫面有「重新讀取」掣', !!v4.querySelector('[data-act="reload"]'));
-  ok('進度頁保留外連模式（舊做法）嘅檢查連線', (() => {
-    window.location.hash = '#/progress/settings';
-    window.dispatchEvent(new window.HashChangeEvent('hashchange'));
-    return typeof pv.checkConnection === 'function';
-  })());
-}
+  ok('進度頁有「設定」入口', !!v4.querySelector('[data-act="settings"]'));
+  window.location.hash = '#/progress/settings';
+  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+  await new Promise(r => setTimeout(r, 60));
+  const sv = doc.getElementById('view');
+  ok('設定頁只講後端（/exec ＋ API Key），冇提任何其他系統',
+    !!sv.querySelector('#p-backend') && !!sv.querySelector('#p-key') && !/VSBADGE|vsbadge/.test(sv.textContent));
+  ok('設定頁有「自訂考核項目」欄（預設留空用內建）', !!sv.querySelector('#p-catalog'));
 
+  /* 內建考核項目檔 */
+  const items = JSON.parse(fs.readFileSync(path.join(ROOT, 'data/progress/items.json'), 'utf8'));
+  ok('內建考核項目有 badges（第 11 版綱要）', Array.isArray(items.badges) && items.badges.length >= 4);
+  const flat = lp.flattenItems(items);
+  ok('flattenItems 讀得到項目（勾選頁要用）', Object.keys(flat).length > 30, String(Object.keys(flat).length));
+
+  /* 後端（Code.gs 範本）要有同一組動作：一個後端餵兩個前端 */
+  const { gasTemplate, SHEET_TABS } = await import('../assets/js/lib/gastemplate.js');
+  const code = gasTemplate();
+  ok('Code.gs 有進度分頁（進度追蹤／其他獎章／待批完成／活動履歷／待批履歷／成員名單）',
+    ['進度追蹤', '其他獎章', '待批完成', '活動履歷', '待批履歷', '成員名單'].every(t => SHEET_TABS.includes(t) && code.includes("'" + t + "'")));
+  ok('Code.gs 支援 ?action=load（讀進度）', /action === 'load'/.test(code) && /function loadProgressData/.test(code));
+  ok('Code.gs 支援 save / saveOtherBadge 寫入（要 API Key）', /'save' \|\| body\.action === 'saveOtherBadge'/.test(code) && /saveProgress/.test(code));
+  ok('Code.gs 寫入前一定核對 API Key', /未授權：API Key 唔正確/.test(code));
+  ok('Code.gs 會同步成員名單（兩個前端見同一批人）', /writeMemberList/.test(code));
+  const onDisk = fs.readFileSync(path.join(ROOT, 'apps-script', 'Code.gs'), 'utf8');
+  ok('apps-script/Code.gs 同 app 內下載嘅版本一致（npm run build:gas）', onDisk === code);
+}
 /* ---------- 8. 首頁帳目：現在結餘（含期初） ---------- */
 section('首頁帳目（現在結餘 · 期初結餘）');
 {
@@ -1467,12 +1468,13 @@ console.log('\n▌跨系統身份 key（進度追蹤係獨立系統，要靠 key
   window.dispatchEvent(new window.HashChangeEvent('hashchange'));
   await new Promise(r => setTimeout(r, 80));
   const pv = doc.getElementById('view').textContent;
-  /* 2026-09-16：進度頁改成「直接讀取 VSBADGE」（唔再靠外連）*/
-  ok('進度頁講明直接接駁旅團自己嘅 VSBADGE', /直接接駁|直接讀取/.test(pv));
+  /* 2026-09-16（團長更正）：執委系統唔連任何其他系統，只讀寫自己嘅後端 */
+  ok('進度頁講明只係「一個後端、兩個前端」（唔會連其他系統）',
+    /一個後端/.test(pv) && /兩個前端/.test(pv) && /唔會連去任何其他網站/.test(pv));
   ok('進度頁有「設定」入口（填後端網址 / API Key）', !!doc.querySelector('[data-act="settings"]'));
-  ok('未設定時有逐步教學（showApiKey → 複製 /exec）',
-    /showApiKey/.test(pv) && /exec/.test(pv));
-  ok('設定頁保留身份對應說明（YMIS 對人）', (() => {
+  ok('教學有逐步指示（initializeSheets → showApiKey）',
+    /initializeSheets/.test(pv) && /showApiKey/.test(pv));
+  ok('設定頁有身份對應說明（YMIS 對人）', (() => {
     window.location.hash = '#/progress/settings';
     window.dispatchEvent(new window.HashChangeEvent('hashchange'));
     return true;
@@ -1521,9 +1523,11 @@ console.log('\n▌新旅團申請接入（送去 ADMIN 收件匣）');
   ok('驗證失敗就唔會送出', failed.ok === false && failed.errors.length > 0, JSON.stringify(failed.errors));
 
   const cl = ob.adminChecklist('0100');
-  ok('管理員 checklist 有列出兩邊要做嘅嘢',
-    cl.length >= 4 && cl.some(x => x.includes('units.json')) && cl.some(x => x.includes('troops.json')),
+  ok('管理員 checklist 有列出要做嘅嘢（units.json ＋ 資料夾 ＋ 通知旅團）',
+    cl.length >= 4 && cl.some(x => x.includes('units.json')) && cl.some(x => x.includes('通知旅團')),
     JSON.stringify(cl));
+  ok('checklist 講明進度係「一個後端、兩個前端」',
+    cl.some(x => /一個後端/.test(x) && /兩個前端/.test(x)), JSON.stringify(cl));
   ok('checklist 講明旅團自己去「進度 → 設定」填 Script ＋ API Key',
     cl.some(x => /進度 → 設定/.test(x) && /API Key/.test(x)), JSON.stringify(cl));
   ok('checklist 唔再要求 portalOrigin（改咗直接接駁）',
@@ -1546,10 +1550,12 @@ console.log('\n▌新旅團申請接入（送去 ADMIN 收件匣）');
   window.dispatchEvent(new window.HashChangeEvent('hashchange'));
   await new Promise(r => setTimeout(r, 80));
   const pt = doc.getElementById('view').textContent;
-  ok('教學「進度接駁」講明直接接駁（唔使外連）', /直接接駁/.test(pt) && /唔使外連/.test(pt));
-  ok('教學教喺 VSBADGE 攞 API Key 同 /exec 網址', /顯示 API Key/.test(pt) && /exec/.test(pt));
+  ok('教學「進度紀錄」講明一個後端、兩個前端', /一個後端/.test(pt) && /兩個前端/.test(pt));
+  ok('教學講明唔會連去任何其他系統', /唔需要連去任何其他系統/.test(pt) || /唔會連去任何其他系統/.test(pt));
+  ok('教學教後端要支援 ?action=load 同 action=save', /action=load/.test(pt) && /action=save/.test(pt));
+  ok('教學講明 API Key＝執委身份', /API Key＝執委身份/.test(pt) || /就等於/.test(pt));
+  ok('教學講明考核項目已內建（唔使連網站）', /data\/progress\/items\.json/.test(pt));
   ok('教學講明團員用 YMIS、領袖用 Email', /團員／執委用 YMIS/.test(pt) && /領袖用 Email/.test(pt));
-  ok('教學保留外連入口講解', /仍然保留/.test(pt));
 }
 
 /* ---------- 財務：領袖免收團費（2026-09-16 團長要求） ---------- */
@@ -1690,8 +1696,8 @@ section('欄位設定（每頁自己改）');
   ok('openFieldDesigner 係一支可以用嘅函式', typeof openFieldDesigner === 'function');
 }
 
-/* ---------- 進度系統：直接接駁（讀 VSBADGE ＋ 直接勾） ---------- */
-section('進度系統直接接駁（讀 ＋ 勾 ＋ 寫）');
+/* ---------- 進度紀錄：讀後端 ＋ 直接勾（一個後端、兩個前端） ---------- */
+section('進度紀錄（讀 ＋ 勾 ＋ 寫，同一個後端）');
 {
   const vp = await import('../assets/js/views/progress.js');
   const { progressCfg, setProgressCfg } = await import('../assets/js/lib/progress.js');
@@ -1709,39 +1715,49 @@ section('進度系統直接接駁（讀 ＋ 勾 ＋ 寫）');
   globalThis.fetch = async (url, init = {}) => {
     const body = init.body ? JSON.parse(init.body) : null;
     calls.push({ url: String(url), body });
+    /* 唔係 API 呼叫＝讀 app 內建檔（data/progress/items.json），交返真檔 */
+    if (!body) {
+      const file = path.join(ROOT, String(url).split('?')[0].replace(/^\.?\//, ''));
+      const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '{}';
+      return { ok: fs.existsSync(file), status: fs.existsSync(file) ? 200 : 404,
+        text: async () => text, json: async () => JSON.parse(text) };
+    }
     let out = { ok: false, error: 'unknown_mock' };
     if (body?.action === 'load') out = { ok: true, serverSideKey: false, data: VS };
-    if (body?.action === 'items') out = { ok: true, data: CATALOG };
+    if (body?.action === 'catalog') out = { ok: true, data: CATALOG };
     if (body?.action === 'save') out = { ok: true, data: { processed: (body.data?.changes || []).length } };
     return { ok: true, status: 200, text: async () => JSON.stringify(out), json: async () => out };
   };
 
   try {
-    /* 未設定：應該提示去設定（唔會再叫用戶開外連） */
-    setProgressCfg({ backend: '', apiKey: '', front: '' });
+    /* 未設定 API Key：應該一步一步教（唔會叫你去任何其他系統） */
+    setProgressCfg({ backend: '', apiKey: '', catalogUrl: '' });
     window.location.hash = '#/progress';
     window.dispatchEvent(new window.HashChangeEvent('hashchange'));
     await new Promise(r => setTimeout(r, 100));
-    ok('未設定時提示「直接接駁」（唔會逼你外連）',
-      /直接接駁/.test(doc.getElementById('view').textContent) && /showApiKey/.test(doc.getElementById('view').textContent));
+    const nsv = doc.getElementById('view').textContent;
+    ok('未設定時有逐步教學（自己嗰張 Sheet → initializeSheets → showApiKey）',
+      /initializeSheets/.test(nsv) && /showApiKey/.test(nsv));
+    ok('教學講明「一個後端、兩個前端」', /一個後端/.test(nsv) && /兩個前端/.test(nsv));
+    ok('教學唔會叫你去其他系統（冇 VSBADGE 字眼）', !/VSBADGE|vsbadge/.test(nsv));
 
     /* 設定：填後端 ＋ API Key */
     window.location.hash = '#/progress/settings';
     window.dispatchEvent(new window.HashChangeEvent('hashchange'));
     await new Promise(r => setTimeout(r, 100));
     const sv = doc.getElementById('view');
-    ok('設定頁有「VSBADGE 後端 /exec 網址」同「API Key」欄',
-      !!sv.querySelector('#p-backend') && !!sv.querySelector('#p-key') && !!sv.querySelector('#p-front'));
+    ok('設定頁有「後端 /exec 網址」同「API Key」欄',
+      !!sv.querySelector('#p-backend') && !!sv.querySelector('#p-key') && !!sv.querySelector('#p-catalog'));
     sv.querySelector('#p-backend').value = 'https://script.google.com/macros/s/AKfycbTESTTESTTESTTESTTESTTESTTESTTEST/exec';
     sv.querySelector('#p-key').value = 'vs_key_123';
-    sv.querySelector('#p-front').value = 'https://vsbadge.vercel.app/';
+    sv.querySelector('#p-catalog').value = 'https://example.org/items.json';
     sv.querySelector('[data-act="save-cfg"]').click();
     await new Promise(r => setTimeout(r, 200));
     ok('儲存後配置記住咗（API Key 存喺旅團自己嘅資料）',
       progressCfg().apiKey === 'vs_key_123' && /AKfycbTEST/.test(progressCfg().backend));
 
     const loadCall = calls.find(c => c.body?.action === 'load');
-    ok('自動去讀 VSBADGE（POST /api/progress · action=load）',
+    ok('自動去讀後端（POST /api/progress · action=load）',
       !!loadCall && /api\/progress$/.test(loadCall.url) && loadCall.body.apikey === 'vs_key_123', JSON.stringify(loadCall?.body || {}));
 
     const view = () => doc.getElementById('view');
@@ -1749,17 +1765,17 @@ section('進度系統直接接駁（讀 ＋ 勾 ＋ 寫）');
     window.dispatchEvent(new window.HashChangeEvent('hashchange'));
     await new Promise(r => setTimeout(r, 200));
     ok('總覽讀到成員同進度（統計卡有數）',
-      /進度系統成員/.test(view().textContent) && /2/.test(view().textContent) && /已勾項目/.test(view().textContent));
+      /後端成員/.test(view().textContent) && /2/.test(view().textContent) && /已勾項目/.test(view().textContent));
     ok('總覽分得開「兩邊對得上」同未對上（用 YMIS 對人）',
       /兩邊用/.test(view().textContent) || /YMIS/.test(view().textContent));
 
-    /* 勾選：直接寫入 VSBADGE */
+    /* 勾選：直接寫入後端 */
     window.location.hash = '#/progress/tick';
     window.dispatchEvent(new window.HashChangeEvent('hashchange'));
     await new Promise(r => setTimeout(r, 150));
     const cb = view().querySelector('[data-tick="L1-ACT-02"]');
     ok('勾選頁列出考核項目（可以直接勾）', !!cb);
-    ok('已勾嘅項目預設打勾（由 VSBADGE 讀返嚟）',
+    ok('已勾嘅項目預設打勾（由後端讀返嚟）',
       view().querySelector('[data-tick="L1-ACT-01"]')?.checked === true);
 
     cb.checked = true;
@@ -1772,7 +1788,7 @@ section('進度系統直接接駁（讀 ＋ 勾 ＋ 寫）');
     saveBtn.click();
     await new Promise(r => setTimeout(r, 250));
     const saveCall = calls.filter(c => c.body?.action === 'save').pop();
-    ok('儲存會 POST 去 VSBADGE（action=save ＋ changes）', !!saveCall, JSON.stringify(calls.map(c => c.body?.action)));
+    ok('儲存會 POST 去後端（action=save ＋ changes）', !!saveCall, JSON.stringify(calls.map(c => c.body?.action)));
     ok('changes 帶 ymis / itemId / uncomplete=false（勾）',
       saveCall?.body?.data?.changes?.[0]?.ymis === '1234567890'
       && saveCall?.body?.data?.changes?.[0]?.itemId === 'L1-ACT-02'
@@ -1789,11 +1805,18 @@ section('進度系統直接接駁（讀 ＋ 勾 ＋ 寫）');
     doc.getElementById('view').querySelector('[data-act="save-ticks"]').click();
     await new Promise(r => setTimeout(r, 250));
     const save2 = calls.filter(c => c.body?.action === 'save').pop();
-    ok('取消勾選會帶 uncomplete=true（VSBADGE 會刪除該項）',
+    ok('取消勾選會帶 uncomplete=true（後端會刪除該項）',
       save2?.body?.data?.changes?.[0]?.uncomplete === true,
       JSON.stringify(save2?.body?.data?.changes || save2?.body || {}));
     ok('儲存完會自動重新讀一次（睇到最新狀態）',
       calls.filter(c => c.body?.action === 'load').length >= 2);
+
+    /* 自訂考核項目（有填就用伺服器代讀） */
+    const catCall = calls.find(c => c.body?.action === 'catalog');
+    ok('有填自訂考核項目 → 走 /api/progress action=catalog', !!catCall,
+      JSON.stringify(calls.map(c => c.body?.action)));
+    (() => { const db = store.load(); const pb = db.profile?.progress?.backend || {};
+      pb.catalogUrl = ''; store.commit(); })();
 
     /* 測試連線 */
     window.location.hash = '#/progress/settings';
@@ -1801,17 +1824,15 @@ section('進度系統直接接駁（讀 ＋ 勾 ＋ 寫）');
     await new Promise(r => setTimeout(r, 120));
     doc.getElementById('view').querySelector('[data-act="test"]').click();
     await new Promise(r => setTimeout(r, 300));
-    ok('「測試連線」會實測 VSBADGE（成功會有提示）',
+    ok('「測試連線」會實測後端（成功會有提示）',
       /連線成功|讀到/.test(doc.getElementById('view').textContent) || doc.getElementById('view').textContent.includes('2 位'));
 
-    /* 舊外連模式仍然保留（後備） */
-    ok('設定頁保留舊「外連模式」（後備用，唔再係主要做法）',
-      /外連模式（舊做法/.test(doc.getElementById('view').textContent));
-    ok('進度頁仍然匯出測試需要嘅函式（readiness / checkConnection）',
-      typeof vp.readiness === 'function' && typeof vp.checkConnection === 'function' && Array.isArray(vp.TICK_ROLES));
+    ok('進度頁冇咗外連模式（唔再開任何其他系統）',
+      !/外連模式/.test(doc.getElementById('view').textContent));
+    ok('進度頁仍然匯出 title / render / mount', typeof vp.title === 'function' && typeof vp.render === 'function' && typeof vp.mount === 'function');
   } finally {
     globalThis.fetch = realFetch;
-    setProgressCfg({ backend: '', apiKey: '', front: '' });
+    setProgressCfg({ backend: '', apiKey: '', catalogUrl: '' });
     window.location.hash = '#/dashboard';
     window.dispatchEvent(new window.HashChangeEvent('hashchange'));
     await new Promise(r => setTimeout(r, 80));

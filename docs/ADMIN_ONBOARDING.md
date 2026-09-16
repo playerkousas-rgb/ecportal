@@ -1,8 +1,8 @@
 # 管理員手冊：每個旅團申請接入時要 SET 乜
 
-最後核實：**2026-09-16**（進度系統改咗「直接接駁」——旅團自己填 VSBADGE `/exec` ＋ API Key，
-管理員唔再需要設 `portalOrigin`）。欄位名全部由 code 核對過（`assets/js/lib/units.js`、
-`assets/js/lib/store.js`、`api/_registry.js`、`api/progress.js`）。
+最後核實：**2026-09-16**（團長更正設計：**一個後端、兩個前端** —— 進度資料就喺旅團自己嘅後端
+（Google Sheet ＋ Apps Script）；執委管理系統同進度前端讀寫同一份，所以管理員**唔需要**設 `portalOrigin` 之類）。
+欄位名全部由 code 核對過（`assets/js/lib/units.js`、`assets/js/lib/store.js`、`api/_registry.js`、`api/progress.js`）。
 
 ---
 
@@ -90,29 +90,29 @@ inventory.json      ← 物資 / 借用
 meetings.json       ← 會議（可選）
 ```
 
-### 1c. `unit.json` 入面嘅進度系統設定（2026-09-16 起：直接接駁）
+### 1c. `unit.json` 入面嘅進度設定（2026-09-16：一個後端、兩個前端）
 
 **注意：`progress` 係由 `unit.json` 讀（`db.profile`），唔係 `units.json`。**
 `units.json` 嗰份只係做記錄／種子。
 
-新做法**唔使管理員代設**：旅團登入之後去「進度 → 設定」填自己嘅 VSBADGE `/exec` 網址同 API Key，
-儲存喺 `profile.progress.backend`（會跟 JSON 備份走，唔會出現在網址）。
+新做法**通常唔使填任何嘢**：執委管理系統會自動用返 `data/units.json` 登記嘅 `backend.gasUrl` / `backend.apiKey`
+（即係同一個後端）；要覆蓋先喺「進度 → 設定」填，儲存喺 `profile.progress.backend`（跟 JSON 備份走，唔會出現在網址）。
+執委系統**唔會連去任何其他系統** —— 只係讀／寫後端（`?action=load` / `action=save`）。
 
 ```jsonc
 "progress": {
-  "name": "深資童軍進度及行政平台 (VSBADGE)",
-  "url": "https://vsbadge.vercel.app/",   // ← 對方**前端**（只係做舊入口連結／揀考核項目定義）
+  "name": "進度追蹤（同一個後端）",
   "backend": {
-    "backend": "https://script.google.com/macros/s/…/exec",  // 旅團自己嘅 VSBADGE 後端
+    "backend": "https://script.google.com/macros/s/…/exec",  // 留空＝用 units.json 登記嘅旅團後端
     "apiKey": "…",                                            // API Key＝執委身份
-    "front": "https://vsbadge.vercel.app/",
+    "catalogUrl": "",                                          // 留空＝用內建 data/progress/items.json
     "unit": "0100"
   }
 }
 ```
 
-> 唔想旅團自己填？管理員可以用 Vercel env（伺服器端，優先於前端）：
-> `TROOP_<id>_PROGRESSBACKEND` / `TROOP_<id>_PROGRESSAPIKEY` / `TROOP_<id>_PROGRESSFRONT`。
+> 唔想 API Key 落前端？管理員可以用 Vercel env（伺服器端，優先於前端）：
+> `TROOP_<id>_PROGRESSBACKEND` / `TROOP_<id>_PROGRESSAPIKEY` / `TROOP_<id>_PROGRESSCATALOG`（自訂考核項目，可選）。
 
 ---
 
@@ -124,13 +124,12 @@ meetings.json       ← 會議（可選）
 "0100": {
   "name": "第 100 旅",
   "en": "100th Group",
-  "backend": "https://script.google.com/macros/s/AKfyc…/exec"   // ← 旅團自己嘅 VSBADGE 後端
+  "backend": "https://script.google.com/macros/s/AKfyc…/exec"   // ← 旅團嘅後端（兩個前端共用）
 }
 ```
 
-> `portalOrigin` / `portalRoles` **唔再需要**（2026-09-16 起改用直接接駁＋API Key）。
-> 舊嘅 portal 入口仍然行得通：想用嘅話先照
-> [`PROGRESS_PORTAL_HANDOFF.md`](PROGRESS_PORTAL_HANDOFF.md) 設定，否則直接開連結會出 `referer_mismatch`。
+> `portalOrigin` / `portalRoles` **唔再需要**：執委管理系統唔會外連，只讀寫後端。
+> 歷史設計記錄見 [`PROGRESS_PORTAL_HANDOFF.md`](PROGRESS_PORTAL_HANDOFF.md)。
 
 ### 2b. 或者用環境變數（優先於檔案）
 
@@ -163,13 +162,13 @@ TROOP_100_APIKEY
 □ 執委管理系統  data/units.json      加 units.<id>（code / name / dataPath / backend.gasUrl / backend.apiKey / notice.submitUrl / theme）
 □ 執委管理系統  data/units/<id>/     建資料夾（unit.json / members.json / constitution.json / finance.json / inventory.json）
 □ 執委管理系統  unit.json            填 progress.url（對方前端，揀考核項目定義用）
-□ VSBADGE    data/troops.json     加 <id>（name / backend / apikey）
-              或者 env            TROOP_<id>_BACKEND / TROOP_<id>_APIKEY
-□ （可選）進度用 env 代替旅團自填：TROOP_<id>_PROGRESSBACKEND / TROOP_<id>_PROGRESSAPIKEY / TROOP_<id>_PROGRESSFRONT
-□ 兩邊都 deploy 一次
-□ 通知旅團：登入 → 「進度 → 設定」填自己嘅 VSBADGE /exec + API Key → 撳「測試連線」
-        → 見到團員同進度就成功（之後可以直接勾進度）
-□ 實測：執委管理系統揀該旅團 → 登入 → 「帳號與系統 → 資料管理 → 總表同步」→ 應該寫入佢自己嘅 Sheet
+□ 執委管理系統  後端 Code.gs    用最新範本（npm run build:gas → apps-script/Code.gs）；
+                                 執行 initializeSheets 會建「進度追蹤／其他獎章／活動履歷／成員名單」等分頁
+□ （可選）進度用 env：TROOP_<id>_PROGRESSBACKEND / TROOP_<id>_PROGRESSAPIKEY / TROOP_<id>_PROGRESSCATALOG
+□ Deploy 一次（同一個 /exec 服務兩個前端）
+□ 實測：執委管理系統揀該旅團 → 登入 → 「進度」→ 見到團員同進度（讀後端）
+        → 「勾選進度」勾一項 → 去 Google Sheet「進度追蹤」分頁應該見到新一行
+□ 實測：執委管理系統 → 「帳號與系統 → 資料管理 → 總表同步」→ 應該寫入佢自己嘅 Sheet
 ```
 
 呢個 checklist 喺 app 入面都會自動列出（送出申請之後嘅確認對話框，

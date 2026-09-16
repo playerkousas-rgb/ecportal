@@ -4,7 +4,7 @@
    驗證 /api/progress 嘅安全規則同轉發行為：
      · 只接受 POST、action 白名單、後端一定要係 GAS /exec
      · load 用 GET + apikey；save / saveOtherBadge 用 POST + apikey
-     · items 只准公開 https（擋 localhost / 內網）
+     · catalog（自訂考核項目）只准公開 https（擋 localhost / 內網）
      · 伺服器端 registry（TROOP_<id>_PROGRESS*）優先，API Key 唔使經前端
      · 唔會 log API Key
    ============================================================ */
@@ -58,6 +58,7 @@ async function call(payload, method = 'POST') {
 /* ---------- 1. 基本規則 ---------- */
 ok('只接受 POST（GET 會 405）', (await call({ action: 'load' }, 'GET')).statusCode === 405);
 ok('未知 action 會 400', (await call({ action: 'deleteEverything' })).statusCode === 400);
+ok('舊嘅 items action 已經唔存在（唔再連去任何前端）', (await call({ action: 'items' })).statusCode === 400);
 ok('冇後端網址 → 提示去設定', (await call({ action: 'load' })).body?.reason === 'backend_missing');
 ok('非 GAS /exec 網址會被擋（唔會變成 open proxy）',
   (await call({ action: 'load', backend: 'https://evil.example.com/exec' })).body?.reason === 'backend_not_allowed');
@@ -107,23 +108,28 @@ ok('GAS /dev 網址都會被擋',
     r.statusCode === 200 && r.body.ok === false && /API Key/.test(r.body.error || ''), JSON.stringify(r.body));
 }
 
-/* ---------- 6. items（考核項目定義） ---------- */
+/* ---------- 6. catalog（自訂考核項目定義，可選） ---------- */
 {
   upstreamJson = { meta: {}, badges: [{ id: 'L1', name: '會員章', segments: [{ code: 'L1-ACT', name: '活動', items: [{ id: 'L1-ACT-01', name: '參加六次團活動' }] }] }] };
-  const r = await call({ action: 'items', unit: '0082', front: 'https://vsbadge.vercel.app/' });
-  ok('items 讀到 badges', r.statusCode === 200 && r.body.ok === true && r.body.data.badges.length === 1);
+  ok('冇填自訂定義 → 提示用內建（唔會亂 fetch）',
+    (await call({ action: 'catalog', unit: '0082' })).body?.reason === 'catalog_missing');
+  const r = await call({ action: 'catalog', unit: '0082', catalog: 'https://example.org/items.json' });
+  ok('catalog 讀到 badges', r.statusCode === 200 && r.body.ok === true && r.body.data.badges.length === 1);
   const c = calls[calls.length - 1];
-  ok('items 打 <front>/data/items.json', c.target === 'https://vsbadge.vercel.app/data/items.json', c.target);
-  ok('items 擋 http（只准 https）', (await call({ action: 'items', front: 'http://vsbadge.vercel.app/' })).statusCode === 400);
-  ok('items 擋 localhost', (await call({ action: 'items', front: 'https://localhost/' })).statusCode === 400);
-  ok('items 擋內網 IP', (await call({ action: 'items', front: 'https://192.168.1.10/' })).statusCode === 400);
+  ok('catalog 直接打自訂網址（app 內建唔需要經伺服器）', c.target === 'https://example.org/items.json', c.target);
+  ok('catalog 擋 http（只准 https）', (await call({ action: 'catalog', catalog: 'http://example.org/items.json' })).statusCode === 400);
+  ok('catalog 擋 localhost', (await call({ action: 'catalog', catalog: 'https://localhost/items.json' })).statusCode === 400);
+  ok('catalog 擋內網 IP', (await call({ action: 'catalog', catalog: 'https://192.168.1.10/items.json' })).statusCode === 400);
+  upstreamJson = { meta: {}, nope: [] };
+  ok('catalog 冇 badges 會報錯', (await call({ action: 'catalog', catalog: 'https://example.org/x.json' })).body?.ok === false);
+  upstreamJson = { success: true };
 }
 
 /* ---------- 7. 伺服器端 Registry（可選：唔使前端傳 key） ---------- */
 {
   process.env.TROOP_0082_PROGRESSBACKEND = BACKEND;
   process.env.TROOP_0082_PROGRESSAPIKEY = 'server_side_secret_key';
-  process.env.TROOP_0082_PROGRESSFRONT = 'https://vsbadge.vercel.app/';
+  process.env.TROOP_0082_PROGRESSCATALOG = 'https://example.org/items.json';
   upstreamJson = { success: true, members: [], progress: {} };
   const r = await call({ action: 'load', unit: '0082' });     // 前端冇帶 backend/apikey
   const c = calls[calls.length - 1];
@@ -132,7 +138,7 @@ ok('GAS /dev 網址都會被擋',
   ok('回覆標示 serverSideKey（前端可以交代「由管理員設定」）', r.body.serverSideKey === true);
   delete process.env.TROOP_0082_PROGRESSBACKEND;
   delete process.env.TROOP_0082_PROGRESSAPIKEY;
-  delete process.env.TROOP_0082_PROGRESSFRONT;
+  delete process.env.TROOP_0082_PROGRESSCATALOG;
 }
 
 /* ---------- 8. 唔會漏 API Key 落 log ---------- */
@@ -147,6 +153,8 @@ ok('GAS /dev 網址都會被擋',
 
 console.log = realLog;
 globalThis.fetch = realFetch;
+/* 有失敗就一定要睇到（測試期間 log 被攔截，所以要喺呢度補印） */
+if (fail) logLines.filter(l => l.includes('✗')).forEach(l => realLog(l));
 
 console.log(`\n──────── 進度接駁 API 測試結果：${pass} 通過 / ${fail} 失敗 ────────`);
 process.exit(fail ? 1 : 0);

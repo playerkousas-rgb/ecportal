@@ -114,8 +114,8 @@ export function adminChecklist(troopId = '<編號>') {
   return [
     `執委管理系統 → data/units.json：喺 units 加 "${troopId}" entry（code / name / dataPath / backend.gasUrl / backend.apiKey）`,
     `執委管理系統 → 建 data/units/${troopId}/ 資料夾（unit.json / members.json / constitution.json / finance.json / inventory.json）`,
-    `VSBADGE → data/troops.json：加 "${troopId}": { name, backend }（或者用環境變數 TROOP_${troopId}_BACKEND / TROOP_${troopId}_APIKEY）`,
-    `通知旅團：登入後去「進度 → 設定」填自己嘅 VSBADGE /exec 網址 + API Key（唔使等管理員喺對面系統登記入口網址）`,
+    `（進度）一個後端、兩個前端：旅團自己嘅後端 /exec 就係進度資料所在；團員用嘅進度前端讀同一個後端`,
+    `通知旅團：登入後去「進度 → 設定」填自己嘅 /exec 網址 + API Key，就可以喺執委系統直接讀寫進度`,
     '兩邊 deploy 一次，再由旅團喺「進度」撳「測試連線」實測（讀得到團員同進度就成功）'
   ];
 }

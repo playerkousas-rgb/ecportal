@@ -22,7 +22,7 @@
 // 另外支援伺服器端設定（可選，唔一定要用）：
 //   TROOP_<旅團編號>_PROGRESSBACKEND = https://script.google.com/macros/s/…/exec
 //   TROOP_<旅團編號>_PROGRESSAPIKEY  = …
-//   TROOP_<旅團編號>_PROGRESSFRONT   = https://vsbadge.vercel.app/
+//   TROOP_<旅團編號>_PROGRESSCATALOG = https://…/items.json（自訂考核項目，可選）
 //   有設就會優先採用（API Key 唔會出現在瀏覽器）。
 
 import { isTrustedExecUrl, getProgressRegistryEntry } from './_registry.js';
@@ -38,7 +38,7 @@ const MAX_DATA_BYTES = 1024 * 1024;        // 前端送上去嘅資料上限 1MB
 const MAX_ITEMS_BYTES = 2 * 1024 * 1024;   // items.json 上限 2MB
 
 // VSBADGE Code.gs 支援嘅 action（唔會放寬）
-const ACTIONS = new Set(['load', 'save', 'saveOtherBadge', 'items']);
+const ACTIONS = new Set(['load', 'save', 'saveOtherBadge', 'catalog']);
 
 function sendJson(res, status, obj) {
   res.setHeader('Cache-Control', 'no-store');
@@ -70,7 +70,7 @@ async function readRawBody(req) {
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch (e) { return null; }
 }
 
-/** 只准公開 https 位址（讀 VSBADGE 前端嘅 data/items.json 用）——擋 localhost / 內網 */
+/** 只准公開 https 位址（自訂考核項目定義用）——擋 localhost / 內網 / 非 https */
 function isSafePublicUrl(raw) {
   try {
     const u = new URL(String(raw));
@@ -124,46 +124,44 @@ export default async function handler(req, res) {
   }
 
   // ---- 1. 後端網址 / API Key / 前端網址：伺服器端 registry 優先，其次用前端填嘅 ----
-  const reg = unit ? getProgressRegistryEntry(unit) : { backend: '', apiKey: '', front: '' };
+  const reg = unit ? getProgressRegistryEntry(unit) : { backend: '', apiKey: '', catalog: '' };
   const backend = String(reg.backend || body.backend || '').trim();
   const apiKey = String(reg.apiKey || body.apikey || '').trim();
-  const front = String(reg.front || body.front || '').trim();
+  const catalogUrl = String(reg.catalog || body.catalog || '').trim();
 
   const usingServerSide = !!(reg.backend || reg.apiKey);
 
-  if (action === 'items') {
-    // 讀 VSBADGE 嘅考核項目定義（data/items.json）—— 由伺服器代讀，避免跨網域問題
-    const base = front.replace(/\/+$/, '');
-    if (!isSafePublicUrl(base)) {
-      return sendJson(res, 400, { ok: false, reason: 'front_not_allowed',
-        error: '請填 VSBADGE 前端網址（例：https://vsbadge.vercel.app/）先可以讀考核項目' });
+  if (action === 'catalog') {
+    /* 可選：旅團想用自己嘅考核項目定義（預設用 app 內建 data/progress/items.json，唔需要呢個） */
+    let target = catalogUrl || String(body.url || '').trim();
+    if (target && !isSafePublicUrl(target)) {
+      return sendJson(res, 400, { ok: false, reason: 'catalog_not_allowed',
+        error: '自訂考核項目網址唔安全（只准公開 https 網址，唔准 localhost／內網）' });
     }
-    const target = `${base}/data/items.json`;
+    if (!target) return sendJson(res, 400, { ok: false, reason: 'catalog_missing', error: '未填自訂考核項目網址（app 內建已經可以直接用）' });
     try {
       const up = await fetch(target, { redirect: 'follow', signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) });
       const text = await up.text();
-      if (text.length > MAX_ITEMS_BYTES) {
-        return sendJson(res, 502, { ok: false, error: '考核項目檔太大' });
-      }
+      if (text.length > MAX_ITEMS_BYTES) return sendJson(res, 502, { ok: false, error: '考核項目檔太大' });
       let json = null;
       try { json = JSON.parse(text); } catch (e) { /* ignore */ }
       if (!json || !Array.isArray(json.badges)) {
-        safeLog({ result: 'items_bad_response', status: up.status, ms: Date.now() - t0 });
-        return sendJson(res, 502, { ok: false, error: '讀唔到 VSBADGE 嘅考核項目（data/items.json）——請確認前端網址正確' });
+        safeLog({ result: 'catalog_bad_response', status: up.status, ms: Date.now() - t0 });
+        return sendJson(res, 502, { ok: false, error: '讀唔到考核項目定義（要有 badges 陣列）' });
       }
-      safeLog({ result: 'items_ok', status: up.status, ms: Date.now() - t0 });
+      safeLog({ result: 'catalog_ok', status: up.status, ms: Date.now() - t0 });
       return sendJson(res, 200, { ok: true, data: json });
     } catch (e) {
       const timeout = e && (e.name === 'TimeoutError' || e.name === 'AbortError');
-      safeLog({ result: timeout ? 'items_timeout' : 'items_fetch_error', ms: Date.now() - t0 });
-      return sendJson(res, timeout ? 504 : 502, { ok: false, error: timeout ? '讀取逾時' : '無法讀取 VSBADGE 考核項目' });
+      safeLog({ result: timeout ? 'catalog_timeout' : 'catalog_fetch_error', ms: Date.now() - t0 });
+      return sendJson(res, timeout ? 504 : 502, { ok: false, error: timeout ? '讀取逾時' : '無法讀取自訂考核項目' });
     }
   }
 
   // ---- 2. 旅團後端（GAS /exec）驗證 ----
   if (!backend) {
     return sendJson(res, 400, { ok: false, reason: 'backend_missing',
-      error: '未設定進度系統後端網址 —— 去「進度 → 設定」填入旅團自己嘅 Apps Script /exec 網址' });
+      error: '未設定後端網址 —— 去「進度 → 設定」填入旅團自己嘅 Apps Script /exec 網址（或者喺 data/units.json 登記）' });
   }
   if (!isTrustedExecUrl(backend)) {
     safeLog({ result: 'bad_backend', unit: unit.slice(0, 32), ms: Date.now() - t0 });

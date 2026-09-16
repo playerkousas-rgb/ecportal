@@ -140,7 +140,10 @@ export function getTrustedUnit(id) {
 // 有設就會優先採用（API Key 就唔會出現在瀏覽器）。
 // ============================================================
 export function getProgressRegistryEntry(id) {
-  const out = { backend: '', apiKey: '', front: '' };
+  /* 一個後端、兩個前端：進度資料就係旅團自己嘅後端（GAS /exec）。
+     伺服器端可以設定 TROOP_<id>_PROGRESSBACKEND / _PROGRESSAPIKEY，
+     設定咗就優先於前端輸入（API Key 唔使落前端）。 */
+  const out = { backend: '', apiKey: '', catalog: '' };
   if (typeof id !== 'string' || !/^[0-9A-Za-z_-]{1,32}$/.test(id)) return out;
   const idUpper = id.toUpperCase();
   const idNoZero = id.replace(/^0+/, '') || id;
@@ -150,10 +153,9 @@ export function getProgressRegistryEntry(id) {
   const backend = pick('PROGRESSBACKEND').trim();
   out.backend = isTrustedExecUrl(backend) ? backend : '';
   out.apiKey = pick('PROGRESSAPIKEY').trim();
-  out.front = normalizeOrigin(pick('PROGRESSFRONT'));
-  // 前端網址（origin）唔夠；items.json 要成條路徑，所以另外支援完整 URL
-  const frontFull = pick('PROGRESSFRONTURL').trim();
-  if (frontFull && /^https:\/\//i.test(frontFull)) out.front = frontFull.replace(/\/+$/, '');
+  // 可選：自訂考核項目定義（預設用 app 內建 data/progress/items.json）
+  const catalog = pick('PROGRESSCATALOG').trim();
+  if (catalog && /^https:\/\//i.test(catalog)) out.catalog = catalog;
   return out;
 }
 

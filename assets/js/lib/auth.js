@@ -88,7 +88,7 @@ export const PERMS = {
 
   /* 進度系統 */
   'progress.view':  { super: 1, leader: 1, exco: 1 },
-  'progress.tick':  { super: 1, leader: 1, exco: 1 },   // 直接勾 VSBADGE 進度（執委都可以）
+  'progress.tick':  { super: 1, leader: 1, exco: 1 },   // 直接勾進度（寫入旅團自己嘅後端）
   'progress.config':{ super: 1, leader: 1, exco: 0 },
 
   /* 通告 */

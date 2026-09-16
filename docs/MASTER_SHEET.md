@@ -127,7 +127,7 @@ https://script.google.com/macros/s/AKfycbySGLBg5KuWzgM9EySiOIppqnzrL0QASIYLlhbCI
 
 ---
 
-## 4.5 合併系統（執委管理系統 + VSBADGE 用同一條後端）
+## 4.5 合併系統（一個後端、兩個前端）
 
 ```
 成員手機 entry.html ─┐
@@ -138,7 +138,8 @@ https://script.google.com/macros/s/AKfycbySGLBg5KuWzgM9EySiOIppqnzrL0QASIYLlhbCI
 * 三邊都係同一個 payload 格式：`{ action, unit, source:'82venture', payload / tables, at }`
 * Apps Script 支援動作：`ping`（測試連線）、`status`、`sync`（全部表格）、`claim`（成員手機記帳）、`noticeSignup`（通告報名）
 * 唔識嘅 `action` 會回 `{ ok:false, error:'未知 action：…' }`，APP 嘅「同步紀錄」會顯示出嚟，方便對格式
-* 進度系統（VSBADGE）用**直接接駁**：喺「進度 → 設定」填 VSBADGE `/exec` ＋ API Key，經 `api/progress.js` 讀寫，同呢條總表後端可以並存（兩條 `/exec` 可以係同一個部署）
+* 進度紀錄：**同一個後端**（`?action=load` / `action=save`）—— 執委管理系統同進度前端係兩個前端、一份資料；
+  後端範本 `Code.gs` 已經兩邊都支援（`initializeSheets` 會建 `進度追蹤`／`其他獎章`／`活動履歷` 等分頁）
 
 ---
 

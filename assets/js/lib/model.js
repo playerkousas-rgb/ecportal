@@ -123,7 +123,7 @@ export function memberName(id) { return member(id)?.name || '—'; }
 export function activeMembers() { return members().filter(m => m.status !== 'alumni'); }
 
 /* ---------- 跨系統身份 key（同進度追蹤等外部系統對人用） ----------
-   對方（VSBADGE）嘅身份規則：**成員用 YMIS（10 位數字），領袖用 Email**。
+   進度資料嘅身份規則：**成員用 YMIS（10 位數字），領袖用 Email**。
    （佢登入頁：「成員：YMIS 10位數字 + 密碼；領袖：Email + 密碼」）
    所以唔可以一刀切要求所有人都有 YMIS —— 領袖本來就唔會有，
    把領袖當「未填 YMIS」係計錯。呢度按身份揀啱嘅 key。 */

@@ -1,27 +1,38 @@
 /* ============================================================
-   progress.js — 進度系統（VSBADGE）直接接駁（客戶端）
+   progress.js — 進度紀錄（一個後端、兩個前端）
    ------------------------------------------------------------
-   做法（2026-09-16 團長要求）：
-     · 唔用「外連」（唔開新分頁／唔用 portalOrigin 驗證）
-     · 旅團自己喺「進度 → 設定」填入**自己嘅** VSBADGE 後端 /exec 網址 + API Key
-     · 由本系統嘅伺服器（/api/progress）代讀／代寫，執委喺呢度直接睇進度、直接勾選
+   設計（2026-09-16 團長更正）：
+     · 唔連任何「其他系統」——進度資料本來就係寫入**旅團自己嘅後端**
+       （同一個 Google Sheet ＋ 同一支 Apps Script）
+     · 兩個前端餵同一個後端：
+         ① 執委管理系統（呢度）  ② 進度前端（團員／領袖用）
+     · 呢邊只做兩件事：讀後端（GET ?action=load）／寫後端（POST action=save）
+     · 預設就用返旅團已登記嘅後端（data/units.json → backend.gasUrl / apiKey），
+       所以通常唔使填任何嘢；要覆蓋就喺「進度 → 設定」自己填。
    安全：API Key 只會由瀏覽器傳去**同源** /api/progress，唔會經第三方；亦唔會出現在 log。
    ============================================================ */
 
 import { load, commit } from './store.js';
 import { profile } from './model.js';
+import { backendOf } from './units.js';
+
+/** 預設考核項目定義（app 內建，離線可用） */
+export const DEFAULT_CATALOG_URL = 'data/progress/items.json';
 
 /* ---------- 設定（跟旅團儲存；會跟 JSON 備份一齊走） ---------- */
 export function progressCfg() {
   const p = profile();
   const b = p.progress?.backend || {};
+  const unit = b.unit || load().unitCode || '';
+  const be = backendOf(unit) || {};
   return {
-    front: b.front || (p.progress?.url || ''),
-    backend: b.backend || '',
-    apiKey: b.apiKey || '',
-    unit: b.unit || load().unitCode || '',
-    role: p.progress?.portal?.role || 'exec_committee',
-    name: p.progress?.name || '深資童軍進度及行政平台 (VSBADGE)'
+    /* 後端：旅團自己填嘅 → 冇填就用返 Registry 登記咗嘅旅團後端（兩者其實係同一個後端） */
+    backend: b.backend || be.gasUrl || '',
+    apiKey: b.apiKey || (b.backend ? '' : (be.apiKey || '')),
+    unit,
+    name: p.progress?.name || '進度追蹤（同一個後端）',
+    catalogUrl: b.catalogUrl || '',
+    registered: !b.backend && !!be.gasUrl
   };
 }
 
@@ -40,6 +51,11 @@ export function setProgressCfg(patch = {}) {
 export function progressConfigured() {
   const c = progressCfg();
   return !!(c.backend && c.apiKey);
+}
+
+/** 後端係唔係已經登記好（未填都可以用，話畀用戶知係「自動用返旅團後端」） */
+export function progressIsRegistered() {
+  return progressCfg().registered === true;
 }
 
 /* ---------- 呼叫 /api/progress（同源） ---------- */
@@ -72,7 +88,7 @@ async function callApi(payload, { timeoutMs = 60000 } = {}) {
 
 const cfgPayload = () => {
   const c = progressCfg();
-  return { unit: c.unit, backend: c.backend, apikey: c.apiKey, front: c.front };
+  return { unit: c.unit, backend: c.backend, apikey: c.apiKey, catalog: c.catalogUrl };
 };
 
 /** 讀 VSBADGE 全部資料（成員／進度／待批／其他獎章／活動履歷） */
@@ -80,12 +96,23 @@ export async function loadRemote() {
   return callApi({ ...cfgPayload(), action: 'load' });
 }
 
-/** 讀考核項目定義（VSBADGE data/items.json，經伺服器代讀） */
+/** 讀考核項目定義：預設用 app 內建副本（同源讀檔，離線都用得）；有自訂網址就經伺服器代讀 */
 export async function loadItems() {
-  return callApi({ ...cfgPayload(), action: 'items' });
+  const c = progressCfg();
+  if (!c.catalogUrl) {
+    try {
+      const res = await fetch(DEFAULT_CATALOG_URL, { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const json = await res.json();
+      return { ok: true, local: true, data: json };
+    } catch (e) {
+      return { ok: false, reason: 'catalog_local_failed', error: '讀唔到內建考核項目（data/progress/items.json）' };
+    }
+  }
+  return callApi({ ...cfgPayload(), action: 'catalog' });
 }
 
-/** 勾／取消勾進度 —— 直接寫入 VSBADGE（同一個後端） */
+/** 勾／取消勾進度 —— 直接寫入旅團自己嘅後端（同進度前端同一個 Sheet） */
 export async function saveTicks(changes, confirmer = '') {
   return callApi({ ...cfgPayload(), action: 'save', data: { changes, confirmer } });
 }
@@ -144,7 +171,7 @@ export function memberDoneCount(data, ymis) {
   return p ? Object.keys(p).length : 0;
 }
 
-/** VSBADGE 成員（{ymis,name}）對應本系統名冊 */
+/** 後端嘅成員（{ymis,name}）對應本系統名冊 */
 export function matchLocalMember(members, remote) {
   const list = members || [];
   return list.find(m => m.ymis && String(m.ymis) === String(remote.ymis))

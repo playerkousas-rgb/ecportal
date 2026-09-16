@@ -5,6 +5,7 @@
 import { profile } from '../lib/model.js';
 import { accounts, currentRole, displayName, ROLES } from '../lib/auth.js';
 import { load, currentUnit, isMock } from '../lib/store.js';
+import { backendOf } from '../lib/units.js';
 import { esc, icon, copyText, toast } from '../lib/util.js';
 import { go } from '../lib/router.js';
 import { pageHead, tabs, noteBox, kv } from './ui.js';
@@ -23,7 +24,7 @@ const NAV = [
   ['mobile', '手機記帳與通告'],
   ['inventory', '物資與借用'],
   ['birthday', '生日提示'],
-  ['progress', '進度系統接駁'],
+  ['progress', '進度紀錄（同一個後端）'],
   ['mock', '示範資料（MOCK）'],
   ['multiunit', '多旅團部署'],
   ['tablesync', '插入自己嘅 Sheet 與總表同步'],
@@ -97,7 +98,7 @@ function startDoc() {
       <tr><td>財務</td><td>帳目、雙財政年度報告、團費、收支申報、預算、匯入舊帳</td></tr>
       <tr><td>團員</td><td>名冊、生日表、出席率、個人紀錄</td></tr>
       <tr><td>物資</td><td>物資登記、借用批核（自動加減庫存）、借用單</td></tr>
-      <tr><td>團章 / 進度 / 帳號與系統</td><td>團章編輯輸出、接駁進度系統、帳戶及資料管理</td></tr>
+      <tr><td>團章 / 進度 / 帳號與系統</td><td>團章編輯輸出、讀寫進度紀錄、帳戶及資料管理</td></tr>
     </tbody>
   </table>
   ${H('3. 想試下先？')}
@@ -292,16 +293,18 @@ function mobileDoc() {
     <div class="step"><div>相片太佔位？去「帳號與系統 → 資料管理 → 儲存用量」按「清理已入帳嘅相片（保留記錄）」</div></div>
   </div>
 
-  ${H('通告：每次開一張，分享出去畀人睇＋報名')}
+  ${H('通告：一撳 WhatsApp 分享 ＋ QR 報名')}
   <div class="steps">
     <div class="step"><div><b>通告 → 開新通告</b>：揀類型（活動／會議／招募／一般／AGM）</div></div>
     <div class="step"><div>填<b>中文標題</b>（英文標題可留空）；打內容（活動通告記得填日期、地點、費用、截止日期、名額）</div></div>
     <div class="step"><div>需要報名就開「<b>要報名</b>」→ 下面可以<b>自己加／改／刪報名欄目</b>（姓名、電話、飲食禁忌、備註…），剔「必填」</div></div>
-    <div class="step"><div>按「<b>發布並分享</b>」→ 有公開連結同 QR Code：貼 WhatsApp 群、印紙本派都得</div></div>
-    <div class="step"><div>成員／家長<b>免登入</b>打開就睇到通告全文，順手報名（有 QR，一掃即填）</div></div>
-    <div class="step"><div>返到 APP：通告 → 該通告 → <b>報名名單</b>可以睇／匯出 CSV／Word、列印簽到表</div></div>
+    <div class="step"><div>按「<b>發布並分享</b>」→ 彈出<b>分享對話框</b></div></div>
+    <div class="step"><div>撳「<b>用 WhatsApp 分享</b>」：即刻開 WhatsApp，標題／日期／地點／費用／截止／內容重點同<b>報名連結</b>都自動填好（可以改完先送）</div></div>
+    <div class="step"><div>要貼圖就用「<b>儲存 QR 圖</b>」（存落手機相簿再貼落群組），或者「列印 QR 海報」貼喺團址</div></div>
+    <div class="step"><div>成員／家長<b>免登入</b>撳連結／掃 QR 就睇到通告全文，順手報名</div></div>
+    <div class="step"><div>返到 APP：通告 → 該通告 → <b>報名名單</b>（出席／唔出席／未回覆）可以睇／匯出 CSV／Word、列印簽到表</div></div>
   </div>
-  ${noteBox('公開頁係獨立嘅 <code>notice.html?u=0082&amp;n=通告編號</code>：只顯示該張通告，唔會露出其他資料。<b>每次分享一張</b>，到期就喺 APP 內改狀態，或者直接開新一張。', 'info')}
+  ${noteBox('公開頁係獨立嘅 <code>notice.html?u=0082&amp;n=通告編號</code>：只顯示該張通告，唔會露出其他資料。<b>每次分享一張</b>，到期就喺 APP 內改狀態，或者直接開新一張。報名會直接寫入旅團後端（同一個後端、兩個前端）。', 'info')}
 
   ${H('常見問題')}
   ${P('<b>冇網絡？</b>APP 同公開頁都係靜態檔案，載入之後照用得；送出嘅紀錄會先存喺裝置，之後再傳畀司庫。')}
@@ -346,7 +349,7 @@ function tablesDoc() {
     <div class="step"><div>按「<b>測試連線</b>」→ 成功後按「<b>立即同步全部</b>」（或者開「每次改動後自動同步」）</div></div>
     <div class="step"><div>專屬 Sheet 會自動建立／更新分頁：帳目、物資、團員、收支申報、通告、報名、會議、同步紀錄</div></div>
   </div>
-  ${noteBox('<b>重要原則：絕不混合單一試算表。</b>「執委管理系統」同「深資童軍進度追蹤 (VSBADGE)」必須各自擁有獨立試算表，權限隔離，架構升級互不影響。相片唔會直接塞入 Sheet（只記數量），如果想存相就喺 Code.gs 頂部填 <code>DRIVE_FOLDER_ID</code>，相片會自動上載去 Drive 再貼連結落 Sheet。', 'brand')}
+  ${noteBox('<b>一個後端、兩個前端。</b>每個旅團一張 Google Sheet ＋ 一支 Apps Script：執委管理系統同進度前端共用同一份資料（進度追蹤／其他獎章／活動履歷等分頁由 <code>initializeSheets</code> 建立）。相片唔會直接塞入 Sheet（只記數量），如果想存相就喺 Code.gs 頂部填 <code>DRIVE_FOLDER_ID</code>，相片會自動上載去 Drive 再貼連結落 Sheet。', 'brand')}
 
   ${H('④ 儲存與備份')}
   ${P('所有資料存喺<b>你自己嘅瀏覽器</b>（localStorage，大約 5MB）。相片最佔位，所以：')}
@@ -399,37 +402,56 @@ function progressDoc() {
   const u = p.progress || {};
   const b = u.backend || {};
   const masked = b.apiKey ? '已設定（' + '•'.repeat(8) + '）' : '（未設定）';
-  const shownBackend = b.backend ? String(b.backend).replace(/\/macros\/s\/[^/]+/, '/macros/s/…') : '（未設定）';
+  const be = backendOf(load().unitCode) || {};
+  const shownBackend = b.backend ? maskExec(b.backend) : (be.gasUrl ? maskExec(be.gasUrl) + '（用返旅團登記嘅後端）' : '（未設定）');
   return `
-  ${H('做法：直接接駁（唔使外連）')}
-  ${P('本系統直接同<b>旅團自己嘅 VSBADGE 後端</b>（Google Apps Script 網頁應用程式）通話 —— 喺呢邊<b>讀進度</b>、'
-    + '<b>直接勾進度</b>，唔使彈去對面系統。每次都由本系統嘅伺服器（<code>/api/progress</code>）代為轉發，'
-    + '所以 API Key 唔會出現在網址、亦唔會交畀第三方。')}
-  ${noteBox('每個旅團有自己嘅 Script 同 API Key（同 VSBADGE 用同一個後端）。旅團喺「進度 → 設定」自己填入，唔使等平台管理員改設定。', 'brand')}
+  ${H('設計：一個後端、兩個前端')}
+  ${P('旅團只有<b>一個後端</b> —— 一張 Google Sheet ＋ 一支 Apps Script（<code>/exec</code>）。'
+    + '<b>執委管理系統</b>同<b>進度前端</b>（團員／領袖用嗰個）係<b>兩個前端</b>，讀寫同一份資料。')}
+  ${noteBox('所以執委管理系統<b>唔需要連去任何其他系統</b>：唔開分頁、唔用 portal、唔會出 <code>referer_mismatch</code>。'
+    + '進度資料本身就係寫入旅團自己嘅後端。', 'brand')}
+  ${P('呢邊做兩件事：')}
+  <ul style="padding-left:18px;line-height:1.9" class="sm">
+    <li><b>讀</b>：<code>GET ?action=load</code> —— 成員、進度、待批完成、其他獎章、活動履歷</li>
+    <li><b>寫</b>：<code>POST {action:'save'|'saveOtherBadge', apikey}</code> —— 直接勾／取消勾</li>
+  </ul>
+  ${P('<b>API Key＝執委身份</b>：Key 對得上就讀得、勾得。Key 只會由瀏覽器傳去<b>同源</b> <code>/api/progress</code>，'
+    + '唔會出現在網址、唔會交畀第三方、亦唔會寫入 log。')}
 
-  ${H('三個步驟')}
+  ${H('點設定（通常唔使填）')}
   <div class="steps">
-    <div class="step"><div>去 VSBADGE（或佢嘅 Google Sheet 選單）撳「<b>顯示 API Key</b>」複製 API Key</div></div>
-    <div class="step"><div>複製 VSBADGE 嘅 Apps Script <b>網頁應用程式 <code>/exec</code> 網址</b>（部署：執行身分「我」、存取權「任何人」）</div></div>
-    <div class="step"><div>「進度 → 設定」貼上兩樣 → 撳「測試連線」→ 見到團員同進度就成功</div></div>
+    <div class="step"><div>如果旅團後端已經登記喺 <code>data/units.json</code>（<code>backend.gasUrl</code> / <code>apiKey</code>），'
+      + '「進度」頁會自動用返佢 —— 咩都唔使填</div></div>
+    <div class="step"><div>未登記就喺「<b>進度 → 設定</b>」填 <b>/exec 網址</b> ＋ <b>API Key</b>（執行 <code>showApiKey()</code> 複製）</div></div>
+    <div class="step"><div>撳「測試連線」→ 見到成員同進度就成功；之後喺「勾選進度」直接勾</div></div>
   </div>
-  ${noteBox('<b>API Key 就等於執委身份</b> —— 有 Key 就可以讀同勾進度。Key 只會儲存在本旅團嘅資料，唔會寫入網址或分享出去；唔想畀人用就喺 VSBADGE 換 Key。', 'warn')}
-  ${noteBox('本機開發用 <code>npm run dev</code>（內建 API）。部署喺 Vercel 就自動有。純靜態伺服器（例如 <code>python -m http.server</code>）冇 API，進度接駁會停用。', 'info')}
+  ${noteBox('後端要係本系統嘅 <code>Code.gs</code>（或者已經支援 <code>?action=load</code> 同 <code>action=save</code> 嘅版本）：'
+    + '「帳號與系統 → 資料管理 → 總表同步」可以下載最新範本，執行一次 <code>initializeSheets</code> 會建好'
+    + '「進度追蹤／其他獎章／活動履歷」等分頁。', 'info')}
+  ${noteBox('唔想 API Key 落前端：管理員可以用 Vercel 環境變數 <code>TROOP_&lt;旅團&gt;_PROGRESSBACKEND</code> / '
+    + '<code>TROOP_&lt;旅團&gt;_PROGRESSAPIKEY</code>，設定咗就以伺服器端為準。', 'info')}
 
-  ${H('兩邊點對上同一個人')}
-  ${P('進度追蹤係<b>獨立系統</b>，兩邊靠身份欄對人。對方規矩：<b>團員／執委用 YMIS（10 位數字）、領袖用 Email</b>。'
-    + '喺「用戶」度逐個補，用戶頁會顯示覆蓋率同「未對上」名單；未補嘅只可以用姓名配對（會撞名、會漏）。')}
+  ${H('考核項目定義')}
+  ${P('項目定義（第 11 版綱要）已經<b>內建</b>喺 <code>data/progress/items.json</code>，離線都用得，唔使連任何網站。'
+    + '如果旅團自己改過項目，喺「設定 → 自訂考核項目定義」填一條公開 https 網址就得。')}
 
-  ${H('仍然想開網頁睇？')}
-  ${P('原本嘅「執委入口連結」仍然保留，喺「進度 → 設定」最底 —— 需要去 VSBADGE 用佢自己嘅介面（例如審批）時可以用。')}
+  ${H('身份對應（兩邊用同一批人）')}
+  ${P('<b>團員／執委用 YMIS（10 位數字）、領袖用 Email</b>。喺「用戶」度逐個補，'
+    + '用戶頁會顯示覆蓋率同「未對上」名單；未補嘅只可以用姓名配對（會撞名、會漏）。')}
 
   ${H('目前設定')}
   <pre><code>${esc(JSON.stringify({
     backend: shownBackend,
     apiKey: masked,
-    front: b.front || u.url || '（未設定）',
-    unit: b.unit || currentUnit()
+    unit: b.unit || currentUnit(),
+    catalog: b.catalogUrl || '（內建 data/progress/items.json）',
+    mode: '同一個後端（直接讀寫）'
   }, null, 2))}</code></pre>`;
+}
+
+/** /exec 只顯示頭段，避免成條 deployment id 喺教學出現 */
+function maskExec(u) {
+  return String(u || '').replace(/\/macros\/s\/[^/]+/, '/macros/s/…');
 }
 
 function mockDoc() {
@@ -463,7 +485,7 @@ function mockDoc() {
 
 function multiUnitDoc() {
   return `
-  ${H('多旅團架構（參考 VSBADGE 做法）')}
+  ${H('多旅團架構（每個旅團一個後端）')}
   <pre><code>data/
   units.json                 ← 旅團 Registry（邊幾個旅團、資料路徑）
   units/0082/                ← 每個旅團一個資料夾
@@ -482,9 +504,9 @@ function multiUnitDoc() {
     <div class="step"><div>部署做<b>網頁應用程式</b>（執行身分：我；存取權：任何人），複製 <code>/exec</code> 網址</div></div>
     <div class="step"><div>打開呢個系統 → 旅團選擇畫面 → 撳「<b>新旅團申請接入</b>」→ 填編號／名稱／<code>/exec</code> 網址／API Key → 送出</div></div>
     <div class="step"><div>平台管理員收到申請 → 加進本系統嘅 Registry（<code>data/units.json</code> ＋ <code>data/units/旅團編號/</code>）→ 完成開戶</div></div>
-    <div class="step"><div>旅團登入 → 「進度 → 設定」填自己嘅 VSBADGE /exec 網址同 API Key → 測試連線（由旅團自己搞，唔使管理員代設）</div></div>
+    <div class="step"><div>旅團登入 → 「進度 → 設定」填自己嘅後端 <code>/exec</code> 網址同 API Key → 測試連線（通常已經自動用返 Registry 登記嘅後端，唔使填）</div></div>
   </div>
-  ${noteBox('申請會連<b>主系統網址</b>一齊送出，方便管理員核對。進度系統<b>唔再需要</b> <code>portalOrigin</code>：新旅團登入之後，喺「進度 → 設定」自行填入 VSBADGE 嘅 Script 網址同 API Key 就得。', 'info')}
+  ${noteBox('申請會連<b>主系統網址</b>一齊送出，方便管理員核對。進度資料就喺旅團自己嘅後端（一個後端、兩個前端），所以其他系統嘅 <code>portalOrigin</code> 之類設定一概唔需要。', 'info')}
 
   ${H('管理員手工加（進階）')}
   <div class="steps">

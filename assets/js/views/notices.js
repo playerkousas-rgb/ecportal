@@ -5,8 +5,8 @@
    ============================================================ */
 
 import { collection, add, update, remove, commit, load, find } from '../lib/store.js';
-import { esc, icon, modal, confirmDlg, toast, toastAction, uid, fmtDate, todayISO, nowStamp, copyText, qrSvg, photoViewer } from '../lib/util.js';
-import { toWord, printDoc, toCSV, toMarkdown, toStandaloneHtml, download as dlFile, stamp } from '../lib/exporter.js';
+import { esc, icon, modal, confirmDlg, toast, toastAction, uid, fmtDate, todayISO, nowStamp, copyText, qrSvg, qrImg, photoViewer } from '../lib/util.js';
+import { toWord, printDoc, toCSV, toMarkdown, toStandaloneHtml, download as dlFile, downloadQrImage, downloadQrSvg, stamp } from '../lib/exporter.js';
 import { go, parse, setQuery } from '../lib/router.js';
 import { can, current } from '../lib/auth.js';
 import { profile, settings, members } from '../lib/model.js';
@@ -265,8 +265,8 @@ function detail(id, query) {
           <button class="btn btn-block" data-act="export-full-pdf">${icon('print', 16)} 通告＋出席回覆（PDF）</button>
           <button class="btn btn-block" data-act="export-attend">${icon('table', 16)} 出席回覆表（CSV）</button>
           <button class="btn btn-block" data-act="export-attend-word">${icon('download', 16)} 出席回覆表（Word）</button>
-          <div class="xs semibold muted mt-8">進度系統聯動 (VSBADGE)</div>
-          <button class="btn btn-block" data-act="export-vsbadge-csv">${icon('table', 16)} 匯出活動履歷（VSBADGE CSV）</button>
+          <div class="xs semibold muted mt-8">活動履歷（進度系統格式）</div>
+          <button class="btn btn-block" data-act="export-vsbadge-csv">${icon('table', 16)} 匯出活動履歷（CSV）</button>
           <button class="btn btn-block" data-act="export-vsbadge-json">${icon('download', 16)} 匯出活動履歷（JSON）</button>
           <div class="xs semibold muted mt-8">只出通告</div>
           <button class="btn btn-block" data-act="export-word">${icon('download', 16)} 通告（Word）</button>
@@ -277,19 +277,22 @@ function detail(id, query) {
       </div>
 
       <div class="card">
-        <div class="card-head"><div class="card-title">分享（免登入公開頁）</div>
-          <div class="card-sub">團員／家長掃 QR 就睇到通告同回覆出席</div></div>
+        <div class="card-head"><div><div class="card-title">分享報名（WhatsApp）</div>
+          <div class="card-sub">貼落 WhatsApp 群 → 團員／家長一撳就開通告同報名表（免登入）</div></div></div>
         <div style="padding:14px 16px">
           ${published(n) ? `
-            <div class="qr-box" style="width:170px;margin:0 auto 12px"><div id="noticeQr">${qrSvg(url, 4, 1)}</div></div>
+            <div class="qr-box" style="width:180px;margin:0 auto 10px" id="noticeQr">${qrImg(url, 180)}</div>
             <div class="xs mono" style="word-break:break-all;text-align:center">${esc(url)}</div>
+            ${n.needSignup ? `<div class="xs center faint mt-8">已報名 ${s.length} 份${n.quota ? ` · 名額 ${n.quota}` : ''}${n.deadline ? ` · 截止 ${esc(n.deadline)}` : ''}</div>` : ''}
             <div class="col gap-6 mt-12">
-              <button class="btn btn-sm btn-block" data-act="copy-link">${icon('copy', 15)} 複製連結</button>
-              <button class="btn btn-sm btn-block" data-act="share-text">${icon('send', 15)} 複製 WhatsApp 文字</button>
-              <button class="btn btn-sm btn-block" data-act="qr-svg">${icon('download', 15)} 下載 QR Code</button>
+              <button class="btn btn-sm btn-block btn-primary" data-act="wa-share">${icon('send', 15)} 用 WhatsApp 分享</button>
+              <button class="btn btn-sm btn-block" data-act="copy-link">${icon('copy', 15)} 複製報名連結</button>
+              <button class="btn btn-sm btn-block" data-act="share-text">${icon('copy', 15)} 複製 WhatsApp 文字</button>
+              <button class="btn btn-sm btn-block" data-act="qr-image">${icon('download', 15)} 儲存 QR 圖（分享用）</button>
+              <button class="btn btn-sm btn-block" data-act="qr-svg">${icon('download', 15)} 下載 QR Code（SVG）</button>
               <button class="btn btn-sm btn-block" data-act="qr-poster">${icon('print', 15)} 列印 QR 海報</button>
             </div>` : `
-            <div class="sm muted mb-12">發布之後先有分享連結。</div>
+            <div class="sm muted mb-12">發布之後先有分享連結同 QR Code。</div>
             ${can('notice.publish') ? `<button class="btn btn-primary btn-block" data-act="publish" data-id="${n.id}">${icon('megaphone', 16)} 立即發布</button>` : ''}`}
         </div>
       </div>
@@ -609,6 +612,36 @@ export function publicUrl(n) {
   const sep = file.includes('?') ? '&' : '?';
   return `${file}${sep}u=${encodeURIComponent(load().unitCode)}&n=${encodeURIComponent(n.id)}`;
 }
+/* ============================================================
+   分享（執委貼落 WhatsApp 群 → 團員／家長直接報名）
+   ============================================================ */
+/** 一段可以直接貼落 WhatsApp 嘅通告文字（只抽最重要嘅欄位） */
+export function shareText(n) {
+  if (!n) return '';
+  const L = [];
+  const title = n.title?.zh || '通告';
+  L.push(`【${profile().name || ''}】${typeLabel(n.type)}：${title}`);
+  if (n.title?.en) L.push(n.title.en);
+  const rows = [
+    ['日期', n.eventDate], ['地點', n.venue], ['費用', n.fee],
+    ['名額', n.quota ? `${n.quota} 人` : ''], ['截止', n.deadline]
+  ].filter(([, v]) => v !== undefined && v !== null && String(v).trim() !== '');
+  if (rows.length) L.push(rows.map(([k, v]) => `${k}：${v}`).join('\n'));
+  const body = String(n.body?.zh || '').trim();
+  if (body) {
+    const lines = body.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+    L.push('', lines.slice(0, 6).join('\n') + (lines.length > 6 ? '…' : ''));
+  }
+  L.push('', n.needSignup ? `👉 報名（免登入）：${publicUrl(n)}` : `👉 詳情（免登入）：${publicUrl(n)}`);
+  if (n.needSignup && n.deadline) L.push(`（截止 ${n.deadline} 前）`);
+  return L.join('\n');
+}
+
+/** WhatsApp 分享連結（一撳就開 WhatsApp，文字同連結都幫你填好） */
+export function whatsappShareUrl(n) {
+  return 'https://wa.me/?text=' + encodeURIComponent(shareText(n));
+}
+
 function typeLabel(t) { return (TYPES.find(x => x[0] === t) || ['', '通告'])[1]; }
 function fieldTypeLabel(t) { return (FIELD_TYPES.find(x => x[0] === t) || ['', t])[1]; }
 
@@ -720,19 +753,22 @@ export function mount(root, params) {
     if (act === 'copy-link') {
       if (await copyText(publicUrl(n))) toast('已複製通告連結', 'ok'); else toast('複製失敗', 'err');
     }
+    if (act === 'wa-share') {
+      const w = window.open(whatsappShareUrl(n), '_blank', 'noopener');
+      if (!w) toast('彈窗被封鎖 —— 用「複製 WhatsApp 文字」再貼落群組', 'warn');
+    }
+    if (act === 'qr-image') {
+      toast('正在準備 QR 圖…');
+      const done = await downloadQrImage(publicUrl(n), `通告QR_${n.id}`, 12, 4);
+      toast(done ? '已儲存 QR 圖 —— 可以直接貼落 WhatsApp' : '未能產生 QR 圖', done ? 'ok' : 'err');
+    }
     if (act === 'share-text') {
-      const url = publicUrl(n);
-      const txt = `【${profile().name || ''}】${n.title?.zh || '通告'}\n`
-        + (n.eventDate ? `日期：${n.eventDate}\n` : '')
-        + (n.deadline ? `報名截止：${n.deadline}\n` : '')
-        + (n.venue ? `地點：${n.venue}\n` : '')
-        + (n.fee ? `費用：${n.fee}\n` : '')
-        + (n.needSignup ? `\n報名／詳情：${url}` : `\n詳情：${url}`);
-      if (await copyText(txt)) toast('已複製 WhatsApp 文字', 'ok'); else toast('複製失敗', 'err');
+      if (await copyText(shareText(n))) toast('已複製 WhatsApp 文字（連報名連結）', 'ok');
+      else toast('複製失敗', 'err');
     }
     if (act === 'qr-svg') {
-      const svg = qrSvg(publicUrl(n), 8, 3);
-      dlFile(`通告QR_${n.id}.svg`, '<?xml version="1.0" encoding="UTF-8"?>' + svg, 'image/svg+xml;charset=utf-8');
+      if (downloadQrSvg(publicUrl(n), `通告QR_${n.id}.svg`, 8, 3)) toast('已下載 QR Code（SVG）', 'ok');
+      else toast('未能產生 QR Code', 'err');
     }
     if (act === 'export-word') exportNoticeWord(n);
     if (act === 'export-pdf') printNotice(n);
@@ -926,30 +962,47 @@ async function shareDialog(n) {
     n = find('notices', n.id);
   }
   const url = publicUrl(n);
+  const A = attendanceSummary(n);
   await modal({
-    title: '分享通告', sub: n.title?.zh || '', wide: true,
+    title: '分享通告（WhatsApp 報名）', sub: n.title?.zh || '', wide: true,
     body: `
       <div class="grid g-2" style="gap:14px">
-        <div class="center"><div class="qr-box" style="width:200px;margin:0 auto">${qrSvg(url, 5, 2)}</div>
-          <div class="xs faint mt-8">團員／家長掃 QR 就開到通告同報名表</div></div>
+        <div class="center"><div class="qr-box" style="width:220px;margin:0 auto">${qrImg(url, 220)}</div>
+          <div class="xs faint mt-8">團員／家長掃 QR 就開到通告${n.needSignup ? '同報名表' : ''}</div>
+          ${n.needSignup ? `<div class="xs faint mt-4">已報名 ${signupsOf(n).length} 份 · 出席 ${A.yes} · 唔出席 ${A.no} · 未回覆 ${A.none}</div>` : ''}
+        </div>
         <div class="col gap-10">
-          <div class="field"><label class="label">公開連結</label>
+          <div class="field"><label class="label">${n.needSignup ? '報名連結（免登入）' : '通告連結（免登入）'}</label>
             <input class="input" id="sh-url" value="${esc(url)}" readonly></div>
-          <button class="btn btn-primary btn-block" data-sh="copy">${icon('copy', 15)} 複製連結</button>
-          <button class="btn btn-block" data-sh="wa">${icon('send', 15)} 複製 WhatsApp 文字</button>
+          <button class="btn btn-primary btn-block" data-sh="wa-open">${icon('send', 15)} 用 WhatsApp 分享</button>
+          <button class="btn btn-block" data-sh="copy">${icon('copy', 15)} 複製連結</button>
+          <button class="btn btn-block" data-sh="wa-copy">${icon('copy', 15)} 複製 WhatsApp 文字</button>
+          <button class="btn btn-block" data-sh="img">${icon('download', 15)} 儲存 QR 圖（PNG / GIF）</button>
           <button class="btn btn-block" data-sh="svg">${icon('download', 15)} 下載 QR Code（SVG）</button>
-          <div class="hint">貼落 WhatsApp 群／發通告紙本都得。公開頁免登入，只顯示通告內容。</div>
+          <div class="field"><label class="label">文字預覽（可以自己改完再複製）</label>
+            <textarea class="textarea" id="sh-text" rows="7">${esc(shareText(n))}</textarea></div>
+          <div class="hint">「用 WhatsApp 分享」會直接開 WhatsApp（手機／網頁版），文字同連結已經填好；
+            團員撳連結就開通告${n.needSignup ? '、填名報名' : ''}，免登入。</div>
         </div>
       </div>`,
     actions: [{ label: '關閉', class: 'btn', value: null }],
     onMount: el => {
+      const txt = () => el.querySelector('#sh-text')?.value || shareText(n);
+      el.querySelector('[data-sh="wa-open"]')?.addEventListener('click', () => {
+        const w = window.open('https://wa.me/?text=' + encodeURIComponent(txt()), '_blank', 'noopener');
+        if (!w) toast('彈窗被封鎖 —— 可以撳「複製 WhatsApp 文字」再貼落群組', 'warn');
+      });
       el.querySelectorAll('[data-sh]').forEach(b => b.addEventListener('click', async () => {
         const a = b.dataset.sh;
-        if (a === 'copy') { if (await copyText(url)) toast('已複製', 'ok'); }
-        if (a === 'svg') dlFile(`通告QR_${n.id}.svg`, '<?xml version="1.0" encoding="UTF-8"?>' + qrSvg(url, 8, 3), 'image/svg+xml;charset=utf-8');
-        if (a === 'wa') {
-          const txt = `【${profile().name || ''}】${n.title?.zh || '通告'}\n${n.eventDate ? `日期：${n.eventDate}\n` : ''}${n.deadline ? `截止：${n.deadline}\n` : ''}${n.needSignup ? `報名：${url}` : `詳情：${url}`}`;
-          if (await copyText(txt)) toast('已複製 WhatsApp 文字', 'ok');
+        if (a === 'copy') { if (await copyText(url)) toast('已複製連結', 'ok'); }
+        if (a === 'wa-copy') { if (await copyText(txt())) toast('已複製 WhatsApp 文字（連報名連結）', 'ok'); }
+        if (a === 'svg') {
+          if (downloadQrSvg(url, `通告QR_${n.id}.svg`, 8, 3)) toast('已下載 QR Code（SVG）', 'ok');
+        }
+        if (a === 'img') {
+          toast('正在準備 QR 圖…');
+          const done = await downloadQrImage(url, `通告QR_${n.id}`, 12, 4);
+          toast(done ? '已儲存 QR 圖 —— 可以直接貼落 WhatsApp' : '未能產生 QR 圖', done ? 'ok' : 'err');
         }
       }));
     }
