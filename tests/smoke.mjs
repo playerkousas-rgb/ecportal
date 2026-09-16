@@ -1122,9 +1122,9 @@ section('通告詳情（輸出連出席回覆）');
   ok('有「通告＋出席回覆（Word）」輸出掣', !!v2.querySelector('[data-act="export-full-word"]'));
   ok('有「通告＋出席回覆（PDF）」輸出掣', !!v2.querySelector('[data-act="export-full-pdf"]'));
   ok('有「出席回覆表（CSV）」輸出掣', !!v2.querySelector('[data-act="export-attend"]'));
-  ok('有「活動履歷 CSV」輸出掣', !!v2.querySelector('[data-act="export-vsbadge-csv"]'));
-  ok('有「活動履歷 JSON」輸出掣', !!v2.querySelector('[data-act="export-vsbadge-json"]'));
-  const payload = nv.vsbadgeActivityPayload(store.find('notices', n0.id));
+  ok('有「活動履歷 CSV」輸出掣', !!v2.querySelector('[data-act="export-activity-csv"]'));
+  ok('有「活動履歷 JSON」輸出掣', !!v2.querySelector('[data-act="export-activity-json"]'));
+  const payload = nv.activityRecordPayload(store.find('notices', n0.id));
   ok('活動履歷 payload 包含旅團與活動資料', payload.unit && payload.activity.title === '測試通告（出席）', JSON.stringify(payload.activity));
   ok('活動履歷 payload 正確記錄出席名單', payload.attendees.some(a => a.attended && a.name === ms2[0].name), JSON.stringify(payload.attendees[0]));
   ok('詳情頁列出每位用戶嘅回覆', v2.querySelectorAll('[data-attend]').length >= 2,

@@ -266,8 +266,8 @@ function detail(id, query) {
           <button class="btn btn-block" data-act="export-attend">${icon('table', 16)} 出席回覆表（CSV）</button>
           <button class="btn btn-block" data-act="export-attend-word">${icon('download', 16)} 出席回覆表（Word）</button>
           <div class="xs semibold muted mt-8">活動履歷（進度系統格式）</div>
-          <button class="btn btn-block" data-act="export-vsbadge-csv">${icon('table', 16)} 匯出活動履歷（CSV）</button>
-          <button class="btn btn-block" data-act="export-vsbadge-json">${icon('download', 16)} 匯出活動履歷（JSON）</button>
+          <button class="btn btn-block" data-act="export-activity-csv">${icon('table', 16)} 匯出活動履歷（CSV）</button>
+          <button class="btn btn-block" data-act="export-activity-json">${icon('download', 16)} 匯出活動履歷（JSON）</button>
           <div class="xs semibold muted mt-8">只出通告</div>
           <button class="btn btn-block" data-act="export-word">${icon('download', 16)} 通告（Word）</button>
           <button class="btn btn-block" data-act="export-pdf">${icon('print', 16)} 通告（PDF / 列印）</button>
@@ -776,8 +776,8 @@ export function mount(root, params) {
     if (act === 'export-full-pdf') { printNoticeFull(n); }
     if (act === 'export-attend') { if (!n) return; exportAttendanceCsv(n); }
     if (act === 'export-attend-word') { if (!n) return; exportAttendanceWord(n); }
-    if (act === 'export-vsbadge-csv') { if (!n) return; exportVsbadgeActivityCsv(n); }
-    if (act === 'export-vsbadge-json') { if (!n) return; exportVsbadgeActivityJson(n); }
+    if (act === 'export-activity-csv') { if (!n) return; exportActivityCsv(n); }
+    if (act === 'export-activity-json') { if (!n) return; exportActivityJson(n); }
     if (act === 'export-md') { if (!n) return; exportNoticeMarkdown(n); }
     if (act === 'export-html') { if (!n) return; exportNoticeStandalone(n); }
     if (act === 'qr-poster') { if (!n) return; qrPoster(n); }
@@ -1026,8 +1026,8 @@ async function exportDialog(n) {
             <button class="btn btn-block" data-ex="full-pdf">${icon('print', 15)} 通告＋出席回覆（PDF / 列印）</button>
             <button class="btn btn-block" data-ex="attend-csv">${icon('table', 15)} 出席回覆表（CSV）</button>
             <button class="btn btn-block" data-ex="attend-word">${icon('download', 15)} 出席回覆表（Word）</button>
-            <button class="btn btn-block" data-ex="vsbadge-csv">${icon('table', 15)} 匯出活動履歷（CSV）</button>
-            <button class="btn btn-block" data-ex="vsbadge-json">${icon('download', 15)} 匯出活動履歷（JSON）</button>
+            <button class="btn btn-block" data-ex="activity-csv">${icon('table', 15)} 匯出活動履歷（CSV）</button>
+            <button class="btn btn-block" data-ex="activity-json">${icon('download', 15)} 匯出活動履歷（JSON）</button>
           </div>
           <div class="hint mt-8">出席 ${A.yes} · 唔出席 ${A.no} · 未回覆 ${A.none}（名冊 ${A.rosterCount} 位）</div>
         </div>
@@ -1050,8 +1050,8 @@ async function exportDialog(n) {
         if (k === 'full-pdf') printNoticeFull(n);
         if (k === 'attend-csv') exportAttendanceCsv(n);
         if (k === 'attend-word') exportAttendanceWord(n);
-        if (k === 'vsbadge-csv') exportVsbadgeActivityCsv(n);
-        if (k === 'vsbadge-json') exportVsbadgeActivityJson(n);
+        if (k === 'activity-csv') exportActivityCsv(n);
+        if (k === 'activity-json') exportActivityJson(n);
         if (k === 'word') { exportNoticeWord(n); toast('已輸出（Word）', 'ok'); }
         if (k === 'pdf') printNotice(n);
         if (k === 'md') exportNoticeMarkdown(n);
@@ -1249,7 +1249,7 @@ export function exportAllSignupsWord() {
 /* ============================================================
    活動履歷匯出（進度紀錄用）
    ============================================================ */
-export function vsbadgeActivityPayload(n) {
+export function activityRecordPayload(n) {
   const db = load();
   const unit = db.unitCode || '0082';
   const rows = attendanceRows(n);
@@ -1293,8 +1293,8 @@ export function vsbadgeActivityPayload(n) {
   };
 }
 
-export function exportVsbadgeActivityCsv(n) {
-  const payload = vsbadgeActivityPayload(n);
+export function exportActivityCsv(n) {
+  const payload = activityRecordPayload(n);
   const rows = payload.attendees.map(a => [
     payload.unit,
     payload.activity.id,
@@ -1317,8 +1317,8 @@ export function exportVsbadgeActivityCsv(n) {
   toast('已匯出活動履歷 CSV（可直接匯入後端）', 'ok');
 }
 
-export function exportVsbadgeActivityJson(n) {
-  const payload = vsbadgeActivityPayload(n);
+export function exportActivityJson(n) {
+  const payload = activityRecordPayload(n);
   dlFile(
     `進度系統活動履歷_${payload.unit}_${(n.title?.zh || n.id).slice(0, 15)}_${stamp()}.json`,
     JSON.stringify(payload, null, 2),
