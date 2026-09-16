@@ -209,7 +209,8 @@ async function openDeployGuideModal() {
           <ol class="xs mono" style="padding-left:18px;line-height:1.8">
             <li>在 Apps Script 函數下拉選單選擇 <code>initializeSheets</code></li>
             <li>點擊「▶ 執行」，依照 Google 提示完成授權（進階 → 前往 → 允許）</li>
-            <li>系統自動建立 9 個棗紅主題工作表（帳目、物資、團員、收支申報、通告、報名、物資借用、會議、同步紀錄）</li>
+            <li>系統自動建立全部工作表（帳目、物資、團員、通告、報名、會議…＋同進度前端共用嘅
+              <b>進度追蹤／其他獎章／活動履歷／待批完成／待批履歷／成員名單</b>）</li>
             <li>彈窗會顯示專屬 <b>API Key</b>，請複製保存（日後可執行 <code>showApiKey</code> 再次查看）</li>
           </ol>
         </div>
@@ -224,9 +225,12 @@ async function openDeployGuideModal() {
         </div>
 
         <div class="card" style="padding:14px">
-          <div class="semibold mb-4">第 5 步：登記至 Git 與 Vercel（或點擊申請接入）</div>
+          <div class="semibold mb-4">第 5 步：提交登記（撳申請表自動送出）</div>
           <div class="xs faint mb-8">
-            將 <b>旅團編號</b>、<b>旅團名稱</b>、<b>Apps Script /exec URL</b>、<b>API Key</b> 提交給 Git 負責人登記至 <code>data/units.json</code>（或 Vercel 環境變數 <code>TROOP_{ID}_BACKEND</code>），完成後即可正式登入使用！
+            將 <b>旅團編號</b>、<b>旅團名稱</b>、<b>Apps Script /exec URL</b>、<b>API Key</b> 送出，
+            系統管理員會將你嘅旅團加入平台（Vercel 環境變數 <code>TROOP_&lt;編號&gt;_*</code>），完成後即可正式登入。
+            <br>之後：想埋讀「進度追蹤」＝登入後去「進度 → 設定」貼 <code>/exec</code> ＋ API Key（或者交畀管理員一齊設定）；
+            通告一開就可以用 QR／WhatsApp 分享收報名，報名直接入你自己嘅 Sheet。
           </div>
           <button class="btn btn-sm" id="guide-apply-btn">${icon('plus', 15)} 填寫申請表自動送出</button>
         </div>

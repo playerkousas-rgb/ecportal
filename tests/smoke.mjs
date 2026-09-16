@@ -1303,16 +1303,22 @@ section('開新旅團教學（只限超管）');
   await new Promise(r => setTimeout(r, 80));
   const leadUnits = doc.getElementById('view');
   ok('領袖登入：旅團設定冇「即刻產生環境變數」掣', !leadUnits.querySelector('[data-act="env-template"]'));
-  ok('領袖登入：旅團設定講明新旅團要交畀超管',
-    /超級管理員/.test(leadUnits.textContent) && /交畀系統管理員/.test(leadUnits.textContent));
+  ok('領袖登入：旅團設定完全冇開新旅團／環境變數嘅教學',
+    !/開新旅團/.test(leadUnits.textContent) && !/TROOP_/.test(leadUnits.textContent)
+    && !/超級管理員/.test(leadUnits.textContent));
 
   window.location.hash = '#/docs/multiunit';
   await new Promise(r => setTimeout(r, 60));
   window.dispatchEvent(new window.HashChangeEvent('hashchange'));
   await new Promise(r => setTimeout(r, 80));
   const multiTxt = doc.getElementById('view').textContent;
-  ok('領袖登入：多旅團章節睇唔到管理員專用嘅 Git 步驟',
-    /多旅團架構/.test(multiTxt) && !/Commit & push/.test(multiTxt) && !/ADMIN_ONBOARDING/.test(multiTxt));
+  ok('領袖登入：多旅團章節只講架構，冇接入步驟／Git 步驟',
+    /多旅團架構/.test(multiTxt)
+    && !/Commit & push/.test(multiTxt)
+    && !/新旅團點接入（推薦/.test(multiTxt)
+    && !/ADMIN_ONBOARDING/.test(multiTxt));
+  ok('領袖登入：指路去登入前嘅「部署指南」（毋須登入都睇得到）',
+    /部署指南/.test(multiTxt) && /毋須登入/.test(multiTxt));
 
   /* 直接打網址／亂入 #/docs/newunit 一樣唔會見到教學內容 */
   window.location.hash = '#/docs/newunit';

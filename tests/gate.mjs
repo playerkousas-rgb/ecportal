@@ -82,6 +82,28 @@ ok('撳「申請接入」會開對話框', /新旅團申請接入/.test(apBody) 
 ok('申請表有齊欄位（編號／名稱／後端網址／API Key／聯絡人）',
   ['ap-id','ap-name','ap-url','ap-key','ap-contact','ap-note'].every(id => !!doc.getElementById(id)),
   ['ap-id','ap-name','ap-url','ap-key','ap-contact','ap-note'].filter(id => !doc.getElementById(id)).join(','));
+/* 部署指南（登入前就睇得到）—— 一般開新旅團教學嘅所在地 */
+{
+  doc.querySelector('[data-act="guide"]')?.click();
+  await wait(250);
+  /* 申請表對話框已經開住 → 攞最新嗰個 overlay（部署指南） */
+  const ovs = [...doc.querySelectorAll('.overlay')];
+  const gOv = ovs[ovs.length - 1];
+  const g = gOv?.querySelector('.modal, [role="dialog"]');
+  const gt = g?.textContent || '';
+  ok('旅團閘有「部署指南」（毋須登入都睇得到）', !!g && /部署指南/.test(gt));
+  ok('指南有 5 步（下載 Code.gs → 貼上 → initializeSheets → 部署 → 提交登記）',
+    /第 1 步/.test(gt) && /第 2 步/.test(gt) && /第 3 步/.test(gt)
+    && /第 4 步/.test(gt) && /第 5 步/.test(gt) && /initializeSheets/.test(gt));
+  ok('指南講明後端同進度前端共用（進度追蹤／活動履歷等分頁一齊建）',
+    /進度追蹤/.test(gt) && /共用/.test(gt));
+  ok('指南第 5 步提到管理員會加 TROOP_<編號>_* 設定',
+    /TROOP_/.test(gt) && /環境變數/.test(gt));
+  ok('指南有下載／複製 Code.gs 掣', !!g.querySelector('#guide-dl-btn') && !!g.querySelector('#guide-copy-btn'));
+  [...(g?.querySelectorAll('button') || [])].find(b => /關閉/.test(b.textContent || ''))?.click();
+  await wait(120);
+}
+
 ok('申請表教埋點起後端（Code.gs → initializeSheets → 部署）',
   /Code\.gs/.test(apBody) && /initializeSheets/.test(apBody) && /網頁應用程式/.test(apBody));
 ok('申請表自動帶主系統網址（方便管理員核對）', /主系統網址/.test(apBody));

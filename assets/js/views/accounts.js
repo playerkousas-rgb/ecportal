@@ -220,7 +220,7 @@ function unitView() {
                 <button class="btn btn-sm btn-primary" data-go="#/docs/newunit">${icon('note', 15)} 開新旅團逐步教學（含變數範本）</button>
                 <button class="btn btn-sm" data-act="env-template">${icon('copy', 15)} 即刻產生環境變數</button>
               </div>`
-            : `${noteBox('新旅團要由<b>超級管理員</b>開（要改 Vercel 設定）。將旅團嘅 <code>/exec</code> 網址同 API Key 交畀系統管理員就得。', 'info')}`}
+            : ''}
           <button class="btn btn-sm btn-block mt-12" data-act="add-local-unit">${icon('plus', 15)} 新增本地旅團（測試用，只存呢部機）</button>
         </div>
       </div>

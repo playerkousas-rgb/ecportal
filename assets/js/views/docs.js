@@ -517,6 +517,31 @@ function adminGitSteps() {
   ${P('<span class="xs faint">詳細欄位名同每次收到申請嘅 checklist：見 repo 入面 <code>docs/ADD_NEW_UNIT.md</code> 同 <code>docs/ADMIN_ONBOARDING.md</code>。</span>')}`;
 }
 
+/* 新旅團接入步驟（步驟 1–5 喺登入前嘅「部署指南」已經有；呢度俾超管睇返完整流程） */
+function multiUnitOnboardSteps() {
+  return `
+  ${H('新旅團點接入（推薦：用申請表）')}
+  ${P('<b>每個旅團用自己嘅 Google Sheet 做後端</b>，唔係共用一張總表。流程：')}
+  <div class="steps">
+    <div class="step"><div><b>起後端</b> —— 「帳號與系統 → 資料管理 → 總表同步」下載 <code>Code.gs</code> → 建一張新 Google Sheet → 擴充功能 → Apps Script → 貼上</div></div>
+    <div class="step"><div>執行 <code>initializeSheets</code>（會建好全部分頁），複製 <b>API Key</b></div></div>
+    <div class="step"><div>部署做<b>網頁應用程式</b>（執行身分：我；存取權：任何人），複製 <code>/exec</code> 網址</div></div>
+    <div class="step"><div>旅團喺登入前嘅旅團閘撳「<b>新旅團申請接入</b>」（或者直接將 <code>/exec</code> ＋ Key 交畀你）</div></div>
+    <div class="step"><div>你收到之後 → 「教學 → <b>開新旅團（唔使改 Git）</b>」加 5 個 <code>TROOP_&lt;編號&gt;_*</code> 環境變數 → Redeploy</div></div>
+    <div class="step"><div>通知旅團更新 <code>Code.gs</code>（同自己嗰張 Sheet 對齊）＋ 登入試一次</div></div>
+  </div>`;
+}
+
+/* 非超管：唔需要接入教學（登入前已經有齊），只留一句指路 */
+function multiUnitOnboardNote() {
+  return `
+  ${H('新旅團點接入？')}
+  ${noteBox('旅團自己申請接入嘅步驟（起後端 → initializeSheets → 部署 → 送出申請）'
+    + '喺<b>登入前嘅旅團閘「部署指南」</b>已經有齊，毋須登入都睇得到。<br>'
+    + '呢個平台嘅旅團登記（<code>TROOP_&lt;編號&gt;_*</code> 設定）由<b>超級管理員</b>負責 —— '
+    + '將你嘅 <code>/exec</code> 網址同 API Key 交畀佢就得。', 'info')}`;
+}
+
 function multiUnitDoc() {
   return `
   ${H('多旅團架構（每個旅團一個後端）')}
@@ -530,18 +555,7 @@ function multiUnitDoc() {
     inventory.json           ← 物資 / 借用
     meetings.json            ← 會議（可選）
   mock/                      ← 示範資料（同真資料分離）</code></pre>
-  ${H('新旅團點接入（推薦：用申請表）')}
-  ${P('<b>每個旅團用自己嘅 Google Sheet 做後端</b>，唔係共用一張總表。流程：')}
-  <div class="steps">
-    <div class="step"><div><b>起後端</b> —— 「帳號與系統 → 資料管理 → 總表同步」下載 <code>Code.gs</code> → 建一張新 Google Sheet → 擴充功能 → Apps Script → 貼上</div></div>
-    <div class="step"><div>執行 <code>initializeSheets</code>（會建好全部分頁），複製 <b>API Key</b></div></div>
-    <div class="step"><div>部署做<b>網頁應用程式</b>（執行身分：我；存取權：任何人），複製 <code>/exec</code> 網址</div></div>
-    <div class="step"><div>打開呢個系統 → 旅團選擇畫面 → 撳「<b>新旅團申請接入</b>」→ 填編號／名稱／<code>/exec</code> 網址／API Key → 送出</div></div>
-    <div class="step"><div>平台管理員收到申請 → 加進本系統嘅 Registry（<code>data/units.json</code> ＋ <code>data/units/旅團編號/</code>）→ 完成開戶</div></div>
-    <div class="step"><div>旅團登入 → 「進度 → 設定」填自己嘅後端 <code>/exec</code> 網址同 API Key → 測試連線（通常已經自動用返 Registry 登記嘅後端，唔使填）</div></div>
-  </div>
-  ${noteBox('申請會連<b>主系統網址</b>一齊送出，方便管理員核對。進度資料就喺旅團自己嘅後端（一個後端、兩個前端），所以其他系統嘅 <code>portalOrigin</code> 之類設定一概唔需要。', 'info')}
-
+  ${isSuper() ? multiUnitOnboardSteps() : multiUnitOnboardNote()}
   ${isSuper() ? adminGitSteps() : ''}
   ${H('資料隔離')}
   ${P('每個旅團嘅資料存喺 <code>venture82.unit.&lt;編號&gt;.db.v2</code>，互相睇唔到、改唔到。團章公開頁用 <code>constitution.html?u=編號</code>，QR Code 亦會自動帶旅團編號。')}
