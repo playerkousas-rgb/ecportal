@@ -7,6 +7,8 @@
 
    讀：POST { action:'load', unit, backend, apikey }  → GET 後端 ?action=load
    寫：POST { action:'save' | 'saveOtherBadge', … }   → POST 後端 action=save
+   批：POST { action:'reviewRequest' | 'reviewLogRequest', … }
+        → 審批中心：批／拒團員申報（待批完成／待批履歷），批准會寫入進度／活動履歷
    可選：POST { action:'catalog', catalog }            → 自訂考核項目定義（公開 https）
         （預設唔用：app 內建 data/progress/items.json，離線都讀得）
 
@@ -33,7 +35,7 @@ const MAX_DATA_BYTES = 1024 * 1024;        // 前端送上去嘅資料上限 1MB
 const MAX_ITEMS_BYTES = 2 * 1024 * 1024;   // items.json 上限 2MB
 
 // 旅團後端（Code.gs）支援嘅 action（唔會放寬）
-const ACTIONS = new Set(['load', 'save', 'saveOtherBadge', 'catalog']);
+const ACTIONS = new Set(['load', 'save', 'saveOtherBadge', 'catalog', 'reviewRequest', 'reviewLogRequest']);
 
 function sendJson(res, status, obj) {
   res.setHeader('Cache-Control', 'no-store');

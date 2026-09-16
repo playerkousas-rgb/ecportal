@@ -154,6 +154,22 @@ function doPost(e) {
       return json({ ok: pbo.success === true, success: pbo.success === true, processed: pbo.processed || 0, error: pbo.error || '' });
     }
 
+    /* ---- 審批中心（執委系統內直接批；同一個 API Key＝執委身份）---- */
+    if (body.action === 'reviewRequest' || body.action === 'reviewLogRequest') {
+      if (!expectedKey || key !== expectedKey) {
+        return json({ ok: false, success: false, error: '未授權：API Key 唔正確' });
+      }
+      if (body.action === 'reviewRequest') {
+        var rq = reviewProgressRequest(body.request_id, body.decision, body.review_note,
+          body.reviewer || '執委管理系統', body.confirmed_date);
+        return json({ ok: rq.success === true, success: rq.success === true,
+          message: rq.message || '', error: rq.error || '' });
+      }
+      var lq = reviewLogRequest(body.request_id, body.decision, body.review_note, body.reviewer || '執委管理系統');
+      return json({ ok: lq.success === true, success: lq.success === true,
+        message: lq.message || '', record_id: lq.record_id || '', error: lq.error || '' });
+    }
+
     if (body.action === 'ping') return json({ ok: true, msg: 'pong', unit: body.unit, at: body.at });
     if (body.action === 'noticeSignup') {
       appendSignup(body);
@@ -179,7 +195,7 @@ function doPost(e) {
       var c2 = syncAll(body);
       return json({ ok: true, msg: '已寫入總表（無 action，當 sync）', counts: c2, unit: body.unit });
     }
-    return json({ ok: false, error: '未知 action：' + body.action, got: Object.keys(body || {}), hint: '支援 action: ping / sync / status / claim / noticeSignup / loan / save / saveOtherBadge' });
+    return json({ ok: false, error: '未知 action：' + body.action, got: Object.keys(body || {}), hint: '支援 action: ping / sync / status / claim / noticeSignup / loan / save / saveOtherBadge / reviewRequest / reviewLogRequest' });
   } catch (err) {
     return json({ ok: false, error: String(err) });
   }
@@ -507,6 +523,109 @@ function saveOtherBadges(records) {
     }
   });
   return { success: true, processed: processed };
+}
+
+/* ============================================================
+   審批中心：待批完成（團員申報 → 執委／領袖喺執委管理系統批）
+   批准＝寫入「進度追蹤」（同一個後端、兩個前端都即刻見到）
+   ============================================================ */
+function reviewProgressRequest(reqId, decision, note, reviewer, confirmedDate) {
+  reqId = textOf(reqId);
+  if (!reqId) return { success: false, error: '缺少 request_id' };
+  if (decision !== 'approved' && decision !== 'rejected') return { success: false, error: '無效決定' };
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName('待批完成');
+  if (!sheet) return { success: false, error: '搵唔到「待批完成」分頁（請先執行 initializeSheets）' };
+  var rows = sheet.getDataRange().getValues();
+  for (var i = 1; i < rows.length; i++) {
+    if (textOf(rows[i][0]) !== reqId) continue;
+    if (textOf(rows[i][7]) !== 'pending') return { success: false, error: '呢個申請已經處理過' };
+    var reqDate = dateOf(rows[i][5]);
+    var finalDate = textOf(confirmedDate) || reqDate || dateOf(new Date());
+    sheet.getRange(i + 1, 8).setValue(decision);
+    sheet.getRange(i + 1, 10).setValue(textOf(reviewer));
+    sheet.getRange(i + 1, 11).setValue(new Date());
+    sheet.getRange(i + 1, 12).setValue(textOf(note));
+    sheet.getRange(i + 1, 13).setValue(finalDate);
+    if (decision !== 'approved') return { success: true, message: '已拒絕' };
+    var ymis = textOf(rows[i][1]);
+    var itemId = textOf(rows[i][3]);
+    var pSheet = ss.getSheetByName('進度追蹤');
+    if (!pSheet) return { success: false, error: '搵唔到「進度追蹤」分頁' };
+    var prow = pSheet.getDataRange().getValues();
+    var hit = -1;
+    for (var k = 1; k < prow.length; k++) {
+      if (textOf(prow[k][0]) === ymis && textOf(prow[k][1]) === itemId) { hit = k; break; }
+    }
+    var memo = '由申請轉入：' + textOf(note);
+    if (hit >= 0) {
+      pSheet.getRange(hit + 1, 3).setValue(finalDate);
+      pSheet.getRange(hit + 1, 4).setValue(new Date());
+      pSheet.getRange(hit + 1, 5).setValue(textOf(reviewer));
+      pSheet.getRange(hit + 1, 6).setValue(memo);
+    } else {
+      pSheet.appendRow([ymis, itemId, finalDate, new Date(), textOf(reviewer), memo]);
+    }
+    return { success: true, message: '已批准並寫入進度' };
+  }
+  return { success: false, error: '搵唔到申請（可能已經處理）' };
+}
+
+/* 待批履歷：團員自行申報活動履歷 → 執委／領袖批准 */
+function reviewLogRequest(reqId, decision, note, reviewer) {
+  reqId = textOf(reqId);
+  if (!reqId) return { success: false, error: '缺少 request_id' };
+  if (decision !== 'approved' && decision !== 'rejected') return { success: false, error: '無效決定' };
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName('待批履歷');
+  if (!sheet) return { success: false, error: '搵唔到「待批履歷」分頁（請先執行 initializeSheets）' };
+  var rows = sheet.getDataRange().getValues();
+  var rowIndex = -1, row = null;
+  for (var i = 1; i < rows.length; i++) {
+    if (textOf(rows[i][0]) === reqId) { rowIndex = i + 1; row = rows[i]; break; }
+  }
+  if (!row) return { success: false, error: '搵唔到申報' };
+  if (textOf(row[12]) !== 'pending') return { success: false, error: '呢個申報已經處理過' };
+  var kind = textOf(row[1]) || 'new';
+  var rec = {
+    type: textOf(row[3]) || 'activity', ymis: textOf(row[4]), name: textOf(row[5]),
+    date: dateOf(row[6]), title: textOf(row[7]), role: textOf(row[8]), hours: textOf(row[9]),
+    cert_no: textOf(row[10]), detail: textOf(row[11])
+  };
+  if (decision !== 'approved') {
+    sheet.getRange(rowIndex, 13).setValue('rejected');
+    sheet.getRange(rowIndex, 15).setValue(textOf(reviewer));
+    sheet.getRange(rowIndex, 16).setValue(new Date());
+    sheet.getRange(rowIndex, 17).setValue(textOf(note));
+    return { success: true, message: '已拒絕申報' };
+  }
+  var lSheet = ss.getSheetByName('活動履歷');
+  if (!lSheet) return { success: false, error: '搵唔到「活動履歷」分頁' };
+  var recordId = '';
+  var recorder = '';
+  if (kind === 'edit') {
+    var targetId = textOf(row[2]);
+    var ld = lSheet.getDataRange().getValues();
+    var li = -1;
+    for (var j = 1; j < ld.length; j++) { if (textOf(ld[j][0]) === targetId) { li = j; break; } }
+    if (li < 0) return { success: false, error: '搵唔到原紀錄（可能已被刪除）' };
+    recorder = textOf(ld[li][10]);
+    lSheet.getRange(li + 1, 2, 1, 12).setValues([[
+      rec.type, rec.ymis, rec.name, rec.date, rec.title, rec.role,
+      rec.hours, rec.cert_no, rec.detail, recorder, textOf(ld[li][11]), new Date()
+    ]]);
+    recordId = targetId;
+  } else {
+    recordId = 'LOG_' + new Date().getTime() + '_' + Math.random().toString(36).substr(2, 5);
+    recorder = rec.name + '（自行申報）';
+    lSheet.appendRow([recordId, rec.type, rec.ymis, rec.name, rec.date, rec.title, rec.role,
+      rec.hours, rec.cert_no, rec.detail, recorder, new Date(), '']);
+  }
+  sheet.getRange(rowIndex, 13).setValue('approved');
+  sheet.getRange(rowIndex, 15).setValue(textOf(reviewer));
+  sheet.getRange(rowIndex, 16).setValue(new Date());
+  sheet.getRange(rowIndex, 17).setValue(textOf(note));
+  return { success: true, message: kind === 'edit' ? '已批准修改並更新紀錄' : '已批准並寫入活動履歷', record_id: recordId };
 }
 
 /** 成員名單：由執委系統嘅名冊更新（唔會刪人，進度紀錄照樣對得返） */

@@ -5,6 +5,7 @@
      · 只接受 POST、action 白名單、後端一定要係 GAS /exec
      · load 用 GET + apikey；save / saveOtherBadge 用 POST + apikey
      · catalog（自訂考核項目）只准公開 https（擋 localhost / 內網）
+     · 審批中心：reviewRequest / reviewLogRequest 照樣帶 apikey 轉發，業務錯誤唔會當成功
      · 伺服器端 registry（TROOP_<id>_PROGRESS*）優先，API Key 唔使經前端
      · 唔會 log API Key
    ============================================================ */
@@ -98,6 +99,33 @@ ok('GAS /dev 網址都會被擋',
   await call({ action: 'saveOtherBadge', unit: '0082', backend: BACKEND, apikey: APikey, data: { records: [{ ymis: '1', badgeId: 'SVC', name: '服務' }] } });
   const c = calls[calls.length - 1];
   ok('saveOtherBadge 帶 records 陣列', c.body?.action === 'saveOtherBadge' && Array.isArray(c.body?.records));
+}
+
+/* ---------- 4b. 審批中心（批／拒團員申報） ---------- */
+{
+  upstreamJson = { success: true, message: '已批准並寫入進度' };
+  const r = await call({ action: 'reviewRequest', unit: '0082', backend: BACKEND, apikey: APikey,
+    data: { request_id: 'RQ_1', decision: 'approved', review_note: '', reviewer: '陳團長', confirmed_date: '2026-09-16' } });
+  const c = calls[calls.length - 1];
+  ok('reviewRequest 用 POST 送去後端（帶 request_id／decision／reviewer）',
+    r.statusCode === 200 && c.method === 'POST' && c.body?.action === 'reviewRequest'
+    && c.body?.request_id === 'RQ_1' && c.body?.decision === 'approved' && c.body?.reviewer === '陳團長');
+  ok('reviewRequest 帶埋 API Key（＝執委身份）', c.body?.apikey === APikey);
+
+  upstreamJson = { success: true, message: '已批准並寫入活動履歷', record_id: 'LOG_X' };
+  const r2 = await call({ action: 'reviewLogRequest', unit: '0082', backend: BACKEND, apikey: APikey,
+    data: { request_id: 'LR_1', decision: 'approved', reviewer: '陳團長' } });
+  const c2 = calls[calls.length - 1];
+  ok('reviewLogRequest 一樣照轉發（批准會寫入活動履歷）',
+    r2.statusCode === 200 && c2.body?.action === 'reviewLogRequest' && c2.body?.request_id === 'LR_1');
+
+  ok('審批一樣擋非 GAS /exec 網址',
+    (await call({ action: 'reviewRequest', backend: 'https://evil.example.com/exec', data: {} })).body?.reason === 'backend_not_allowed');
+  upstreamJson = { success: false, error: '呢個申請已經處理過' };
+  const r3 = await call({ action: 'reviewRequest', unit: '0082', backend: BACKEND, apikey: APikey, data: { request_id: 'RQ_1', decision: 'approved' } });
+  ok('後端話已處理過 → 前端睇到錯誤（唔會當成功）',
+    r3.body?.ok === false && /已經處理過/.test(r3.body?.error || ''), JSON.stringify(r3.body));
+  upstreamJson = { success: true };
 }
 
 /* ---------- 5. GAS 業務錯誤（例：API Key 錯）---------- */

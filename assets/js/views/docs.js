@@ -410,13 +410,26 @@ function progressDoc() {
     + '<b>執委管理系統</b>同<b>進度前端</b>（團員／領袖用嗰個）係<b>兩個前端</b>，讀寫同一份資料。')}
   ${noteBox('所以執委管理系統<b>唔需要連去任何其他系統</b>：唔開分頁、唔用 portal、唔會出 <code>referer_mismatch</code>。'
     + '進度資料本身就係寫入旅團自己嘅後端。', 'brand')}
-  ${P('呢邊做兩件事：')}
+  ${P('呢邊做三件事：')}
   <ul style="padding-left:18px;line-height:1.9" class="sm">
     <li><b>讀</b>：<code>GET ?action=load</code> —— 成員、進度、待批完成、其他獎章、活動履歷</li>
     <li><b>寫</b>：<code>POST {action:'save'|'saveOtherBadge', apikey}</code> —— 直接勾／取消勾</li>
+    <li><b>批</b>：<code>POST {action:'reviewRequest'|'reviewLogRequest'}</code> —— 「審批中心」批准／拒絕團員申報；
+      批准即刻寫入「進度追蹤」／「活動履歷」</li>
   </ul>
   ${P('<b>API Key＝執委身份</b>：Key 對得上就讀得、勾得。Key 只會由瀏覽器傳去<b>同源</b> <code>/api/progress</code>，'
     + '唔會出現在網址、唔會交畀第三方、亦唔會寫入 log。')}
+
+  ${H('審批中心（批團員嘅申報）')}
+  ${P('團員喺進度前端自己申報「我完成咗某項」之後，會入後端嘅「待批完成」分頁；'
+    + '執委／領袖喺<b>「進度記錄 → 審批中心」</b>就會見到，直接撳<b>批准</b>或<b>拒絕</b>。')}
+  <ul style="padding-left:18px;line-height:1.9" class="sm">
+    <li><b>批准</b>＝寫入「進度追蹤」（唔會重複開新行；已有紀錄就更新完成日期）</li>
+    <li><b>拒絕</b>＝狀態改「已拒絕」，團員可以重新申報；紀錄唔會被刪</li>
+    <li>同一版仲有<b>待批履歷</b>（團員自行申報嘅服務／活動紀錄），批准會寫入「活動履歷」</li>
+    <li>要喺有<b>勾選權限</b>嘅帳號先批得（睇得到、但批唔到）</li>
+  </ul>
+  ${noteBox('團員嗰邊只需要專心自己嘅紀錄冊（申報、睇進度）；批核、勾選、通告、財務全部喺執委管理系統搞掂，唔使兩個系統跳來跳去。', 'brand')}
 
   ${H('點設定（通常唔使填）')}
   <div class="steps">

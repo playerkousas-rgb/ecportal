@@ -1222,6 +1222,11 @@ section('進度紀錄（一個後端 · 兩個前端）');
   ok('Code.gs 支援 ?action=load（讀進度）', /action === 'load'/.test(code) && /function loadProgressData/.test(code));
   ok('Code.gs 支援 save / saveOtherBadge 寫入（要 API Key）', /'save' \|\| body\.action === 'saveOtherBadge'/.test(code) && /saveProgress/.test(code));
   ok('Code.gs 寫入前一定核對 API Key', /未授權：API Key 唔正確/.test(code));
+  ok('Code.gs 有審批中心（reviewRequest / reviewLogRequest，要 API Key）',
+    /body\.action === 'reviewRequest' \|\| body\.action === 'reviewLogRequest'/.test(code)
+    && /function reviewProgressRequest/.test(code) && /function reviewLogRequest/.test(code));
+  ok('批准待批完成會寫入「進度追蹤」（同一個後端）',
+    /已批准並寫入進度/.test(code) && /由申請轉入/.test(code));
   ok('Code.gs 會同步成員名單（兩個前端見同一批人）', /writeMemberList/.test(code));
   const onDisk = fs.readFileSync(path.join(ROOT, 'apps-script', 'Code.gs'), 'utf8');
   ok('apps-script/Code.gs 同 app 內下載嘅版本一致（npm run build:gas）', onDisk === code);
@@ -1555,6 +1560,9 @@ console.log('\n▌新旅團申請接入（送去 ADMIN 收件匣）');
   ok('教學教後端要支援 ?action=load 同 action=save', /action=load/.test(pt) && /action=save/.test(pt));
   ok('教學講明 API Key＝執委身份', /API Key＝執委身份/.test(pt) || /就等於/.test(pt));
   ok('教學講明考核項目已內建（唔使連網站）', /data\/progress\/items\.json/.test(pt));
+  ok('教學有「審批中心」（批准寫入進度追蹤、拒絕唔會刪紀錄）',
+    /審批中心/.test(pt) && /reviewRequest/.test(pt) && /已拒絕/.test(pt));
+  ok('教學講明團員只專心紀錄冊、批核喺執委系統', /專心/.test(pt) && /執委管理系統/.test(pt));
   ok('教學講明團員用 YMIS、領袖用 Email', /團員／執委用 YMIS/.test(pt) && /領袖用 Email/.test(pt));
 }
 
@@ -1709,7 +1717,16 @@ section('進度紀錄（讀 ＋ 勾 ＋ 寫，同一個後端）');
       { ymis: '1234567891', name: '李小明' }
     ],
     progress: { '1234567890': { 'L1-ACT-01': { date: '2026-09-01', confirmer: '團長' } } },
-    pendingRequests: [], logs: [], logRequests: [], otherBadges: {}
+    pendingRequests: [{
+      request_id: 'RQ_1', ymis: '1234567891', name: '李小明',
+      item_id: 'L1-ACT-02', item_name: '服務一次', requested_date: '2026-09-10',
+      evidence: 'https://example.org/photo.jpg', status: 'pending', created_at: '2026-09-11'
+    }],
+    logs: [], logRequests: [{
+      request_id: 'LR_1', kind: 'new', type: 'service', ymis: '1234567890', name: '陳大文',
+      date: '2026-08-30', title: '公益賣旗', role: '組員', hours: '3', detail: '', status: 'pending', created_at: '2026-09-02'
+    }],
+    logsSupported: true, logRequestsSupported: true, otherBadges: {}
   };
   const CATALOG = { badges: [{ id: 'L1', name: '會員章', icon: '🥇', segments: [{ code: 'L1-ACT', name: '活動', items: [{ id: 'L1-ACT-01', name: '參加六次團集會' }, { id: 'L1-ACT-02', name: '服務一次' }] }] }] };
   globalThis.fetch = async (url, init = {}) => {
@@ -1726,6 +1743,8 @@ section('進度紀錄（讀 ＋ 勾 ＋ 寫，同一個後端）');
     if (body?.action === 'load') out = { ok: true, serverSideKey: false, data: VS };
     if (body?.action === 'catalog') out = { ok: true, data: CATALOG };
     if (body?.action === 'save') out = { ok: true, data: { processed: (body.data?.changes || []).length } };
+    if (body?.action === 'reviewRequest') out = { ok: true, data: { success: true, message: body.data?.decision === 'approved' ? '已批准並寫入進度' : '已拒絕' } };
+    if (body?.action === 'reviewLogRequest') out = { ok: true, data: { success: true, message: '已批准並寫入活動履歷', record_id: 'LOG_TEST' } };
     return { ok: true, status: 200, text: async () => JSON.stringify(out), json: async () => out };
   };
 
@@ -1810,6 +1829,43 @@ section('進度紀錄（讀 ＋ 勾 ＋ 寫，同一個後端）');
       JSON.stringify(save2?.body?.data?.changes || save2?.body || {}));
     ok('儲存完會自動重新讀一次（睇到最新狀態）',
       calls.filter(c => c.body?.action === 'load').length >= 2);
+
+    /* 審批中心：睇到待批 ＋ 直接批（寫返自己後端） */
+    window.location.hash = '#/progress/review';
+    window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+    await new Promise(r => setTimeout(r, 150));
+    const rv = doc.getElementById('view');
+    ok('審批中心列出待批完成（團員／項目／申報日期）',
+      /待批完成/.test(rv.textContent) && /李小明/.test(rv.textContent) && /服務一次/.test(rv.textContent));
+    ok('審批中心列出待批履歷（服務紀錄）',
+      /待批履歷/.test(rv.textContent) && /公益賣旗/.test(rv.textContent));
+    ok('審批中心有批准／拒絕掣', !!rv.querySelector('[data-rev-id][data-rev-decision="approved"]')
+      && !!rv.querySelector('[data-rev-id][data-rev-decision="rejected"]'));
+    ok('總覽／分頁標籤顯示待批數（1＋1）', /審批中心（2）/.test(doc.getElementById('view').textContent)
+      || /審批中心（2）/.test(doc.body.textContent));
+
+    const apprBtn = doc.getElementById('view').querySelector('[data-rev-kind="req"][data-rev-decision="approved"]');
+    apprBtn.click();
+    await new Promise(r => setTimeout(r, 300));
+    const revCall = calls.filter(c => c.body?.action === 'reviewRequest').pop();
+    ok('批准會 POST /api/progress action=reviewRequest（帶 request_id／decision）',
+      revCall?.body?.data?.request_id === 'RQ_1' && revCall?.body?.data?.decision === 'approved',
+      JSON.stringify(revCall?.body?.data || {}));
+    ok('審批用同一個 API Key（唔會出現在網址）',
+      revCall?.body?.apikey === 'vs_key_123' && !/vs_key_123/.test(String(revCall?.url || '')));
+
+    const rejBtn = doc.getElementById('view').querySelector('[data-rev-kind="log"][data-rev-decision="rejected"]');
+    rejBtn.click();
+    await new Promise(r => setTimeout(r, 200));
+    const confirmBtn = [...doc.querySelectorAll('.modal button, [role="dialog"] button')]
+      .find(b => /確認拒絕/.test(b.textContent || ''));
+    ok('拒絕之前要確認（防手誤）', !!confirmBtn);
+    confirmBtn?.click();
+    await new Promise(r => setTimeout(r, 300));
+    const logRev = calls.filter(c => c.body?.action === 'reviewLogRequest').pop();
+    ok('拒絕履歷申報會 POST action=reviewLogRequest（decision=rejected）',
+      logRev?.body?.data?.request_id === 'LR_1' && logRev?.body?.data?.decision === 'rejected',
+      JSON.stringify(logRev?.body?.data || {}));
 
     /* 自訂考核項目（有填就用伺服器代讀） */
     const catCall = calls.find(c => c.body?.action === 'catalog');

@@ -122,6 +122,22 @@ export async function saveOtherBadges(records) {
   return callApi({ ...cfgPayload(), action: 'saveOtherBadge', data: { records } });
 }
 
+/**
+ * 審批中心：批／拒「待批完成」（團員申報嘅考核項目）
+ * 批准＝寫入後端嘅「進度追蹤」，兩個前端都即刻見到。
+ */
+export async function reviewRequest(requestId, { decision = 'approved', note = '', reviewer = '', confirmedDate = '' } = {}) {
+  return callApi({ ...cfgPayload(), action: 'reviewRequest',
+    data: { request_id: requestId, decision, review_note: note, reviewer,
+      confirmed_date: confirmedDate } });
+}
+
+/** 審批中心：批／拒「待批履歷」（團員自行申報嘅活動／服務紀錄） */
+export async function reviewLogRequest(requestId, { decision = 'approved', note = '', reviewer = '' } = {}) {
+  return callApi({ ...cfgPayload(), action: 'reviewLogRequest',
+    data: { request_id: requestId, decision, review_note: note, reviewer } });
+}
+
 /** 測試連線：讀一次 load，睇下 API Key 對唔對 */
 export async function testConnection() {
   const started = Date.now();

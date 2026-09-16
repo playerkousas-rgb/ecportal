@@ -131,13 +131,14 @@ meetings.json       ← 會議（可選）
 ```
 □ 執委管理系統  data/units.json      加 units.<id>（code / name / dataPath / backend.gasUrl / backend.apiKey / notice.submitUrl / theme）
 □ 執委管理系統  data/units/<id>/     建資料夾（unit.json / members.json / constitution.json / finance.json / inventory.json）
-□ 執委管理系統  unit.json            填 progress.url（對方前端，揀考核項目定義用）
+□ 執委管理系統  unit.json            （可選）填 progress.backend（後端 /exec ＋ API Key 覆蓋用；唔填就用 units.json 登記嗰個）
 □ 執委管理系統  後端 Code.gs    用最新範本（npm run build:gas → apps-script/Code.gs）；
                                  執行 initializeSheets 會建「進度追蹤／其他獎章／活動履歷／成員名單」等分頁
 □ （可選）進度用 env：TROOP_<id>_PROGRESSBACKEND / TROOP_<id>_PROGRESSAPIKEY / TROOP_<id>_PROGRESSCATALOG
 □ Deploy 一次（同一個 /exec 服務兩個前端）
 □ 實測：執委管理系統揀該旅團 → 登入 → 「進度」→ 見到團員同進度（讀後端）
         → 「勾選進度」勾一項 → 去 Google Sheet「進度追蹤」分頁應該見到新一行
+        → 「審批中心」睇到團員申報 → 撳「批准」→ 「進度追蹤」分頁多一行（或者更新咗完成日期）
 □ 實測：執委管理系統 → 「帳號與系統 → 資料管理 → 總表同步」→ 應該寫入佢自己嘅 Sheet
 ```
 

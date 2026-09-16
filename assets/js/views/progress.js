@@ -12,7 +12,7 @@
    寫：POST /api/progress { action:'save'|'saveOtherBadge' }
        （API Key 只會去同源 /api/progress，唔會出現在網址，亦唔會寫入 log）
 
-   分頁：總覽 / 成員進度 / 勾選進度 / 設定
+   分頁：總覽 / 成員進度 / 勾選進度 / 審批中心 / 設定
    ============================================================ */
 
 import { load } from '../lib/store.js';
@@ -23,7 +23,8 @@ import { can, current } from '../lib/auth.js';
 import { pageHead, tabs, stat, empty, noteBox, kv, chipbar, progressBar } from './ui.js';
 import {
   progressCfg, setProgressCfg, progressConfigured, progressIsRegistered,
-  loadRemote, loadItems, saveTicks, flattenItems, summarizeRemote, memberDetail
+  loadRemote, loadItems, saveTicks, flattenItems, summarizeRemote, memberDetail,
+  reviewRequest, reviewLogRequest
 } from '../lib/progress.js';
 
 /* ---------- 狀態 ---------- */
@@ -38,6 +39,8 @@ let pending = {};         // { 'ymis|itemId': true/false } 未儲存嘅改動
 let tickDate = '';        // 勾選日期
 let memberSearch = '';
 let checking = false;     // 測試連線中
+let reviewing = false;    // 審批中
+let reviewDate = '';      // 審批：確認日期（留空＝用申報日期）
 
 export function title() { return '進度紀錄'; }
 export function refresh() { window.dispatchEvent(new CustomEvent('v82:refresh')); }
@@ -92,6 +95,12 @@ function needSetup() {
   </div>`;
 }
 
+/** 待批總數（分頁標籤用） */
+function reviewCount() {
+  const d = remote?.data || {};
+  return (d.pendingRequests || []).length + (d.logRequests || []).length;
+}
+
 const maskUrl = u => String(u || '').replace(/\/macros\/s\/[^/]+/, '/macros/s/…');
 
 /* ---------- 總覽 ---------- */
@@ -141,8 +150,9 @@ function overviewView() {
       </div>` : `<div class="note-box">${icon('alert', 15)}<div>未讀到考核項目定義（<code>data/progress/items.json</code>）。喺「設定」可以填自訂定義。</div></div>`}
 
       <div class="card">
-        <div class="card-head"><div><div class="card-title">待領袖確認（${pendingReqs.length}）</div>
-          <div class="card-sub">團員自己申報、等確認嘅項目（由後端讀取；確認要喺有勾選權嘅帳號做）</div></div></div>
+        <div class="card-head"><div><div class="card-title">待批（${pendingReqs.length + logReqs.length}）</div>
+          <div class="card-sub">團員自己申報、等批嘅項目同履歷 —— 喺「審批中心」直接批（同一個後端）</div></div>
+          <button class="btn btn-sm ${pendingReqs.length + logReqs.length ? 'btn-primary' : ''}" data-go="#/progress/review">${icon('check', 15)} 去審批中心</button></div>
         ${pendingReqs.length ? `<div class="scroll-x"><table class="table table-compact">
           <thead><tr><th>申請日期</th><th>團員</th><th>項目</th><th>申報日期</th></tr></thead>
           <tbody>${pendingReqs.slice(0, 20).map(r => `<tr>
@@ -150,7 +160,9 @@ function overviewView() {
             <td class="sm">${esc(r.name || r.ymis || '')}</td>
             <td class="sm">${esc(r.item_name || r.item_id || '')}</td>
             <td class="mono sm">${esc(r.requested_date || '')}</td></tr>`).join('')}</tbody>
-        </table></div>` : `<div style="padding:16px" class="sm faint">冇待確認項目</div>`}
+        </table></div>` : `<div style="padding:16px" class="sm faint">冇待批完成申請</div>`}
+        ${logReqs.length ? `<div style="padding:12px 16px;border-top:1px solid var(--line-2)" class="sm muted">
+          另有 <b>${logReqs.length}</b> 條活動履歷申報等批（一樣喺「審批中心」處理）</div>` : ''}
       </div>
     </div>
 
@@ -317,6 +329,76 @@ async function openMemberDetail(ymis) {
   });
 }
 
+/* ---------- 審批中心（批／拒團員申報 —— 批准＝寫入後端） ---------- */
+function reviewView() {
+  if (!progressConfigured()) return needSetup();
+  if (!remote) return empty('check', '未讀取後端', '按右上「重新讀取」');
+  const reqs = remote.data.pendingRequests || [];
+  const logReqs = remote.data.logRequests || [];
+  const supported = remote.data.logRequestsSupported !== false;
+  const canTick = can('progress.tick');
+
+  const actions = (kind, id) => canTick ? `
+    <div class="row gap-6">
+      <button class="btn btn-xs btn-primary" data-rev-kind="${kind}" data-rev-id="${esc(id)}"
+        data-rev-decision="approved" ${reviewing ? 'disabled' : ''}>批准</button>
+      <button class="btn btn-xs" data-rev-kind="${kind}" data-rev-id="${esc(id)}"
+        data-rev-decision="rejected" ${reviewing ? 'disabled' : ''}>拒絕</button>
+    </div>` : '<span class="xs faint">需要勾選權限</span>';
+
+  if (!reqs.length && !logReqs.length) {
+    return `${noteBox('後端冇待批嘅申請 —— 團員喺進度前端申報之後，就會自動出現在呢度，唔使去其他系統。', 'ok')}
+      <div class="row gap-8 mt-12"><button class="btn" data-act="reload">${icon('refresh', 15)} 重新讀取</button></div>`;
+  }
+
+  return `
+  ${noteBox(canTick
+    ? '喺呢度<b>直接批</b>：批准＝即時寫入旅團自己嘅後端（進度追蹤／活動履歷），兩個前端都即刻見到。'
+    : '你冇勾選／審批權限 —— 可以睇，但要領袖或執委先批得。',
+    canTick ? 'ok' : 'warn')}
+
+  <div class="row-between wrap gap-12 mt-12 mb-12">
+    <div class="sm muted">待批完成 <b>${reqs.length}</b> 項 · 待批履歷 <b>${logReqs.length}</b> 條</div>
+    <div class="field" style="margin:0"><label class="label xs">確認日期（批准時用；留空＝用申報日期）</label>
+      <input class="input" id="rv-date" type="date" value="${esc(reviewDate)}" style="width:auto"></div>
+  </div>
+
+  <div class="card mb-16">
+    <div class="card-head"><div><div class="card-title">待批完成（${reqs.length}）</div>
+      <div class="card-sub">團員自己申報嘅考核項目 —— 批准就會寫入「進度追蹤」</div></div></div>
+    ${reqs.length ? `<div class="scroll-x"><table class="table table-compact">
+      <thead><tr><th>團員</th><th>YMIS</th><th>項目</th><th>申報日期</th><th>證明／備註</th><th>申請時間</th><th class="right">審批</th></tr></thead>
+      <tbody>${reqs.map(r => `<tr>
+        <td class="semibold sm">${esc(r.name || '')}</td>
+        <td class="mono xs">${esc(r.ymis || '')}</td>
+        <td class="sm">${esc(r.item_name || '')}<div class="xs faint mono">${esc(r.item_id || '')}</div></td>
+        <td class="mono sm">${esc(r.requested_date || '')}</td>
+        <td class="sm">${r.evidence ? `<a href="${esc(r.evidence)}" target="_blank" rel="noopener" class="xs">連結</a>` : '<span class="faint xs">—</span>'}</td>
+        <td class="mono xs">${esc(r.created_at || '')}</td>
+        <td class="right">${actions('req', r.request_id)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>` : `<div style="padding:16px" class="sm faint">冇待批完成申請</div>`}
+  </div>
+
+  <div class="card">
+    <div class="card-head"><div><div class="card-title">待批履歷（${logReqs.length}）</div>
+      <div class="card-sub">團員自行申報嘅服務／活動紀錄 —— 批准就會寫入「活動履歷」</div></div></div>
+    ${!supported ? `<div style="padding:16px" class="sm muted">後端未建「待批履歷」分頁 —— 去 Apps Script 執行一次 <code>initializeSheets</code> 就會有。</div>`
+      : logReqs.length ? `<div class="scroll-x"><table class="table table-compact">
+      <thead><tr><th>種類</th><th>團員</th><th>日期</th><th>標題</th><th>角色／時數</th><th>申請時間</th><th class="right">審批</th></tr></thead>
+      <tbody>${logReqs.map(r => `<tr>
+        <td class="sm">${esc(r.kind === 'edit' ? '修改' : '新增')}</td>
+        <td class="semibold sm">${esc(r.name || '')}<div class="xs faint mono">${esc(r.ymis || '')}</div></td>
+        <td class="mono sm">${esc(String(r.date || '').slice(0, 10))}</td>
+        <td class="sm">${esc(r.title || '')}${r.detail ? `<div class="xs faint">${esc(String(r.detail).slice(0, 60))}</div>` : ''}</td>
+        <td class="sm">${esc(r.role || '')}${r.hours ? ` · ${esc(r.hours)} 小時` : ''}</td>
+        <td class="mono xs">${esc(r.created_at || '')}</td>
+        <td class="right">${actions('log', r.request_id)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>` : `<div style="padding:16px" class="sm faint">冇待批履歷申報</div>`}
+  </div>`;
+}
+
 /* ---------- 設定 ---------- */
 function settingsView() {
   const c = progressCfg();
@@ -392,7 +474,7 @@ function settingsView() {
    頁面
    ============================================================ */
 export function render(params) {
-  if (params?.id && ['overview', 'members', 'tick', 'settings'].includes(params.id)) tab = params.id;
+  if (params?.id && ['overview', 'members', 'tick', 'review', 'settings'].includes(params.id)) tab = params.id;
   else tab = 'overview';   // 由側邊欄入返嚟時，返去總覽
   const configured = progressConfigured();
 
@@ -411,7 +493,8 @@ export function render(params) {
     ['overview', '總覽'],
     ...(configured ? [
       ['members', `成員進度${remote ? `（${(remote.data.members || []).length}）` : ''}`],
-      ['tick', can('progress.tick') ? '勾選進度' : '勾選進度（無權限）', Object.keys(pending).length || undefined]
+      ['tick', can('progress.tick') ? '勾選進度' : '勾選進度（無權限）', Object.keys(pending).length || undefined],
+      ['review', `審批中心${reviewCount() ? `（${reviewCount()}）` : ''}`]
     ] : []),
     ['settings', configured ? '設定' : '設定（未接駁）']
   ], tab)}
@@ -420,6 +503,7 @@ export function render(params) {
     : !configured ? needSetup()
     : tab === 'members' ? membersView()
     : tab === 'tick' ? tickView()
+    : tab === 'review' ? reviewView()
     : overviewView()}`;
 }
 
@@ -486,6 +570,34 @@ export function mount(root, params) {
     pending = {};
     await fetchAll({ silent: true });
   });
+
+  /* 審批中心：批准 / 拒絕 */
+  const rvDate = root.querySelector('#rv-date');
+  if (rvDate) rvDate.addEventListener('change', () => { reviewDate = rvDate.value; });
+  root.querySelectorAll('[data-rev-id]').forEach(b => b.addEventListener('click', async () => {
+    if (!can('progress.tick')) { toast('你冇審批權限（要領袖或執委）', 'err'); return; }
+    if (reviewing) return;
+    const kind = b.dataset.revKind;
+    const id = b.dataset.revId;
+    const decision = b.dataset.revDecision;
+    if (decision === 'rejected') {
+      const yes = await modal({
+        title: '拒絕呢個申報？', danger: true,
+        body: '<p class="sm">拒絕之後，申請狀態會改成「已拒絕」，團員可以重新申報。紀錄唔會被刪。</p>',
+        actions: [{ label: '取消', class: 'btn', value: false }, { label: '確認拒絕', class: 'btn-accent', value: true }]
+      });
+      if (!yes) return;
+    }
+    reviewing = true; refresh();
+    const reviewer = current()?.name || '執委管理系統';
+    const r = kind === 'log'
+      ? await reviewLogRequest(id, { decision, reviewer })
+      : await reviewRequest(id, { decision, reviewer, confirmedDate: reviewDate });
+    reviewing = false;
+    if (!r.ok) { toast(r.error || '審批失敗', 'err'); refresh(); return; }
+    toast(r.data?.message || (decision === 'approved' ? '已批准 ✓' : '已拒絕'), 'ok');
+    await fetchAll({ silent: true });
+  }));
 
   /* 設定 */
   const readCfg = () => {

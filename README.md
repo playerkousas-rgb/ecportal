@@ -61,7 +61,7 @@ python3 -m http.server 8000     # 或用任何靜態伺服器（必須用 http:/
 | 5 | 生日內建、可改可輸出、當月＋前 7 日提示（顯示邊位） | `data/units/0082/members.json`（16 位，其中 1 位未填生日）、「用戶 → 生日」頁（月曆／年表／下載 .ics）、儀表板提示卡（會顯示姓名） |
 | 6 | 物資紀錄＋借用面板，任何已登入帳戶可批核，借出／歸還自動加減庫存 | 「物資」頁：物資清單、借用與批核、盤點紀錄；`inv.approve` 三個角色都有；庫存由 `model.itemTotals()` 即時計算（批准即鎖定、歸還即回復） |
 | 7 | 財務內建，取代 Google Form；**出兩條數**（旅 31/3 年結 vs 旅團 AGM 起計） | 「財務」頁：帳目／財政年度報告／**團費收款表（每年每人 $360，逐人記錄邊個交咗）**／申報／預算／匯入；`assets/js/lib/fiscal.js` 同時計算**童軍年度（4/1–3/31）**同**旅年度（AGM → 下屆 AGM 前一日）**；AGM 日期**逐年輸入**（每年唔同） |
-| 8 | 進度紀錄（**一個後端、兩個前端**） | 旅團只有**一個後端**（Google Sheet ＋ Apps Script）：**執委管理系統**同**進度前端**都係前端，讀寫同一份資料。呢邊**唔連任何其他系統** —— 直接讀後端（`?action=load`）／寫後端（`action=save`），通常用返 Registry 登記嘅後端，API Key＝執委身份；分頁有總覽／成員進度／勾選進度／設定 |
+| 8 | 進度紀錄（**一個後端、兩個前端**） | 旅團只有**一個後端**（Google Sheet ＋ Apps Script）：**執委管理系統**同**進度前端**都係前端，讀寫同一份資料。呢邊**唔連任何其他系統** —— 直接讀後端（`?action=load`）／寫後端（`action=save`），通常用返 Registry 登記嘅後端，API Key＝執委身份；分頁有總覽／成員進度／勾選進度／審批中心／設定 |
 | 9 | MOCK 與真實資料完全分離；多旅團系統（Git Registry） | `data/mock/*.json` vs `data/units/<編號>/*.json`；`data/units.json` 係 Git Registry，每個旅團一個資料夾 |
 | 10 | 成員用手機**影相＋揀欄目**就入得帳（取代 Google Form）；領袖／執委亦可在 APP 內填 | 公開收集頁 **`entry.html?u=0082`**（免登入：影相 → 揀欄目 → 金額 → 送出）＋ APP 內「儀表板 → 影相記一筆」／「財務 → 收支申報」；相機會自動壓縮，送出可經 Apps Script 直接入總表 |
 | 11 | 每個旅團可以**插入自己嘅 SHEET** 取代預設；欄目可改名／加減（內建類 Google Sheet） | 每個模組頁右上「**欄位**」掣（帳目／物資／借用／團員／通告／會議）：改名／加欄／改類型／必填／隱藏／排序／還原；「**插入自己嘅 Sheet**」搬去「**帳號與系統 → 資料管理**」 |
@@ -198,6 +198,8 @@ Word／PDF／Markdown／單一 HTML／JSON 匯出、QR Code、
 
 * **讀**：`GET ?action=load` → 成員、進度、待批完成、其他獎章、活動履歷（經同源 `/api/progress` 轉發）
 * **寫**：`POST {action:'save'|'saveOtherBadge', apikey, changes|records}` → 直接勾／取消勾，寫入同一個 Sheet
+* **批**：`POST {action:'reviewRequest'|'reviewLogRequest', apikey, request_id, decision}` → **審批中心**批准／拒絕團員申報；
+  批准即刻寫入「進度追蹤」（已有紀錄會更新完成日期）／「活動履歷」，拒絕只改狀態、唔會刪紀錄
 * **設定**：通常唔使填 —— 旅團後端登記喺 `data/units.json`（`backend.gasUrl` / `apiKey`）就會自動用返；
   未登記就去「進度 → 設定」填 `/exec` ＋ API Key（Apps Script 執行 `showApiKey()` 複製）。**API Key＝執委身份**
 * **考核項目**：第 11 版綱要已經**內建**喺 `data/progress/items.json`（離線可用，唔使連任何網站）；
