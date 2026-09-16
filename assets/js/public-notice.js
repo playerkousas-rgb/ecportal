@@ -63,8 +63,17 @@ async function boot() {
       if (!meta.name && data.unitName) meta.name = data.unitName;
     } catch (e) { list = []; }
 
-    /* 靜態檔未有（或者新通告未入 Git）→ 直接讀旅團自己後端嘅「通告全文」 */
-    if (!list.length) list = await fetchBackendNotices();
+    /* 靜態 Git 檔只有「已入 Git 嘅通告」；app 開新／改咗嘅通告喺旅團自己
+       後端（Sheet「通告全文」分頁）。兩邊都要讀，再按 id 合併（**後端為準**）——
+       唔係淨係「靜態檔全冇先讀後端」：0082 呢類有靜態通告檔嘅旅團，
+       app 新開嘅通告就會喺公開頁永遠睇唔到（報名都測唔到）。 */
+    const backendList = await fetchBackendNotices();
+    if (backendList.length) {
+      const m = new Map();
+      list.forEach(n => m.set(String(n.id), n));
+      backendList.forEach(n => m.set(String(n.id), n));   // 同 id：後端覆蓋靜態
+      list = [...m.values()];
+    }
 
     notice = noticeId
       ? list.find(x => String(x.id) === String(noticeId)) || list.find(x => String(x.publicId) === String(noticeId))
