@@ -3,7 +3,7 @@
    ============================================================ */
 
 import { profile } from '../lib/model.js';
-import { accounts, currentRole, displayName, ROLES } from '../lib/auth.js';
+import { accounts, currentRole, displayName, isSuper, ROLES } from '../lib/auth.js';
 import { load, currentUnit, isMock } from '../lib/store.js';
 import { backendOf } from '../lib/units.js';
 import { envUnitTemplate, envUnitSteps } from '../lib/onboard.js';
@@ -34,7 +34,10 @@ const NAV = [
 ];
 
 export function render(params) {
-  if (NAV.some(([k]) => k === params.id)) section = params.id;
+  /* 開新旅團嘅設定只有超級管理員做到（其他人冇 Vercel 權限），所以只俾超管見到 */
+  const nav = NAV.filter(([k]) => k !== 'newunit' || isSuper());
+  if (params.id === 'newunit' && !isSuper()) section = 'newunit';          // 直接打網址入嚟 → 下面會顯示「只限超管」
+  else if (nav.some(([k]) => k === params.id)) section = params.id;
   return `
   ${pageHead({
     title: '使用教學',
@@ -46,7 +49,7 @@ export function render(params) {
     <div class="card no-print" style="align-self:start">
       <div class="card-head"><div class="card-title">目錄</div></div>
       <div style="padding:8px 0">
-        ${NAV.map(([k, l]) => `<div class="list-item" style="cursor:pointer" data-sec="${k}">
+        ${nav.map(([k, l]) => `<div class="list-item" style="cursor:pointer" data-sec="${k}">
           <div class="li-main"><div class="li-t sm ${section === k ? 'semibold' : ''}" style="${section === k ? 'color:var(--brand-700)' : ''}">${esc(l)}</div></div>
           ${section === k ? icon('chevronR', 15) : ''}
         </div>`).join('')}
@@ -73,7 +76,7 @@ function body() {
     case 'progress': return progressDoc();
     case 'mock': return mockDoc();
     case 'multiunit': return multiUnitDoc();
-    case 'newunit': return newUnitDoc();
+    case 'newunit': return isSuper() ? newUnitDoc() : superOnlyDoc();
     case 'backup': return backupDoc();
     default: return startDoc();
   }
@@ -501,6 +504,19 @@ function mockDoc() {
   ${P('其他檔案：<code>unit.json</code>（設定／主色／AGM 日期）、<code>constitution.json</code>（團章）、<code>finance.json</code>（帳目／團費／申報／預算）、<code>inventory.json</code>（物資／借用）、<code>meetings.json</code>（會議）。欄位可參考現有檔案。')}`;
 }
 
+/* 管理員專用（方法 A：Git Registry）—— 普通用戶冇 Git／Vercel 權限，唔需要見到 */
+function adminGitSteps() {
+  return `
+  ${H('管理員手工加（進階 · 方法 A）')}
+  <div class="steps">
+    <div class="step"><div>最快嘅做法係<b>方法 B</b>（Vercel 環境變數）—— 睇「教學 → <b>開新旅團（唔使改 Git）</b>」有逐步教學同可複製嘅環境變數範本</div></div>
+    <div class="step"><div>方法 A：喺 <code>data/units.json</code> 嘅 <code>units</code> 加一個編號，例如 <code>"0100": { "code": "0100", "name": "第一百旅深資童軍團", "dataPath": "data/units/0100/", "backend": { "gasUrl": "…/exec", "apiKey": "…" } }</code></div></div>
+    <div class="step"><div>建立 <code>data/units/0100/</code> 資料夾，複製 0082 嘅檔案再改內容</div></div>
+    <div class="step"><div>Commit &amp; push（如果用 GitHub Pages / Vercel，會自動部署）→ 旅團選擇器就會見到新旅團</div></div>
+  </div>
+  ${P('<span class="xs faint">詳細欄位名同每次收到申請嘅 checklist：見 repo 入面 <code>docs/ADD_NEW_UNIT.md</code> 同 <code>docs/ADMIN_ONBOARDING.md</code>。</span>')}`;
+}
+
 function multiUnitDoc() {
   return `
   ${H('多旅團架構（每個旅團一個後端）')}
@@ -526,14 +542,7 @@ function multiUnitDoc() {
   </div>
   ${noteBox('申請會連<b>主系統網址</b>一齊送出，方便管理員核對。進度資料就喺旅團自己嘅後端（一個後端、兩個前端），所以其他系統嘅 <code>portalOrigin</code> 之類設定一概唔需要。', 'info')}
 
-  ${H('管理員手工加（進階）')}
-  <div class="steps">
-    <div class="step"><div>喺 <code>data/units.json</code> 嘅 <code>units</code> 加一個編號，例如 <code>"0100": { "code": "0100", "name": "第一百旅深資童軍團", "dataPath": "data/units/0100/", "backend": { "gasUrl": "…/exec", "apiKey": "…" } }</code></div></div>
-    <div class="step"><div>建立 <code>data/units/0100/</code> 資料夾，複製 0082 嘅檔案再改內容（<code>unit.json</code> 入面記得填 <code>progress</code>）</div></div>
-    <div class="step"><div>Commit & push（如果用 GitHub Pages / Vercel，會自動部署）</div></div>
-    <div class="step"><div>打開系統 → 旅團選擇器 → 揀新旅團（或者用 <code>?u=0100</code> 連結）</div></div>
-  </div>
-  ${P('<span class="xs faint">詳細欄位名同每次收到申請嘅 checklist：見 repo 入面 <code>docs/ADMIN_ONBOARDING.md</code>。</span>')}
+  ${isSuper() ? adminGitSteps() : ''}
   ${H('資料隔離')}
   ${P('每個旅團嘅資料存喺 <code>venture82.unit.&lt;編號&gt;.db.v2</code>，互相睇唔到、改唔到。團章公開頁用 <code>constitution.html?u=編號</code>，QR Code 亦會自動帶旅團編號。')}
   ${H('權限')}
@@ -546,6 +555,14 @@ function multiUnitDoc() {
    呢章係「驚唔記得點做」用嘅：步驟、可以複製嘅變數範本、
    檢查清單全部喺度。同樣內容亦可以喺「帳號與系統 → 旅團設定」撳入嚟。
    ============================================================ */
+function superOnlyDoc() {
+  return `
+  ${H('呢一章只限超級管理員')}
+  ${noteBox('「開新旅團」要改 Vercel 環境變數（`TROOP_<編號>_*`），<b>只有超級管理員做得到</b>。'
+    + '如果你要開新旅團，將旅團嘅 <code>/exec</code> 網址同 API Key 交畀系統管理員就得。', 'warn')}
+  ${P('日常團務請睇：<b>快速開始</b>、<b>進度紀錄（同一個後端）</b>、<b>財務</b>、<b>日常點輸入</b>等章節。')}`;
+}
+
 function newUnitDoc() {
   return `
   ${H('開新旅團：方法 B（唔使改 Git，最快）')}

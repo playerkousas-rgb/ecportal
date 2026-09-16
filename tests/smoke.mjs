@@ -1231,9 +1231,16 @@ section('伺服器 Registry 旅團（Vercel 環境變數開）');
   }
 }
 
-/* ---------- 開新旅團教學（App 內睇得到） ---------- */
-section('開新旅團教學（教學頁 ＋ 帳號與系統）');
+/* ---------- 開新旅團教學（只限超級管理員 sheep） ---------- */
+section('開新旅團教學（只限超管）');
 {
+  /* 兩種模式都用得到嘅登入輔助（示範模式冇真實帳戶） */
+  const loginAs = async role => {
+    if (MODE === 'mock') { auth.loginAsMock(role); return { ok: true }; }
+    return role === 'super' ? auth.login('exco', 'sheep', '0728') : auth.login('leader', 'leader', '8202');
+  };
+  await loginAs('super');      // 以超管身份睇
+  ok('以 sheep 登入 ＝ 超級管理員身份', auth.isSuper() === true);
   const ob = await import('../assets/js/lib/onboard.js');
   const t = ob.envUnitTemplate('0081', '第八十一旅深資童軍團', 'https://script.google.com/macros/s/AKfycbTESTTESTTESTTESTTESTTESTTESTTEST/exec', 'k81');
   ok('環境變數範本產生器（5 個變數齊）',
@@ -1280,10 +1287,44 @@ section('開新旅團教學（教學頁 ＋ 帳號與系統）');
   [...doc.querySelectorAll('.modal button, [role="dialog"] button')].find(b => /關閉/.test(b.textContent || ''))?.click();
   await new Promise(r => setTimeout(r, 80));
 
-  /* 旅團閘（未登入）都有指路 */
-  const mainSrc = fs.readFileSync(path.join(ROOT, 'assets/js/main.js'), 'utf8');
-  ok('旅團閘有提示管理員去邊度睇開團教學', /開新旅團（唔使改 Git）/.test(mainSrc));
+  /* ---- 非超管（領袖／執委）睇唔到 ---- */
+  await loginAs('leader');
+  window.location.hash = '#/docs';
+  await new Promise(r => setTimeout(r, 60));
+  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+  await new Promise(r => setTimeout(r, 80));
+  const leadNav = [...doc.querySelectorAll('[data-sec]')].map(x => x.dataset.sec);
+  ok('領袖登入：教學目錄冇「開新旅團」章節', !leadNav.includes('newunit'), leadNav.join(','));
+  ok('領袖登入：教學全文唔會出現 TROOP_ 環境變數範本',
+    !/TROOP_0081_BACKEND/.test(doc.getElementById('view').textContent));
 
+  window.location.hash = '#/admin/unit';
+  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+  await new Promise(r => setTimeout(r, 80));
+  const leadUnits = doc.getElementById('view');
+  ok('領袖登入：旅團設定冇「即刻產生環境變數」掣', !leadUnits.querySelector('[data-act="env-template"]'));
+  ok('領袖登入：旅團設定講明新旅團要交畀超管',
+    /超級管理員/.test(leadUnits.textContent) && /交畀系統管理員/.test(leadUnits.textContent));
+
+  window.location.hash = '#/docs/multiunit';
+  await new Promise(r => setTimeout(r, 60));
+  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+  await new Promise(r => setTimeout(r, 80));
+  const multiTxt = doc.getElementById('view').textContent;
+  ok('領袖登入：多旅團章節睇唔到管理員專用嘅 Git 步驟',
+    /多旅團架構/.test(multiTxt) && !/Commit & push/.test(multiTxt) && !/ADMIN_ONBOARDING/.test(multiTxt));
+
+  /* 直接打網址／亂入 #/docs/newunit 一樣唔會見到教學內容 */
+  window.location.hash = '#/docs/newunit';
+  await new Promise(r => setTimeout(r, 60));
+  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+  await new Promise(r => setTimeout(r, 80));
+  const sneak = doc.getElementById('view').textContent;
+  ok('非超管直接入 #/docs/newunit → 顯示「只限超級管理員」',
+    /只限超級管理員/.test(sneak) && !/TROOP_0081_BACKEND/.test(sneak) && !/Vercel → Settings/.test(sneak));
+
+  /* 還原做超管（後面章節用） */
+  await loginAs('super');
   window.location.hash = '#/dashboard';
   window.dispatchEvent(new window.HashChangeEvent('hashchange'));
   await new Promise(r => setTimeout(r, 60));

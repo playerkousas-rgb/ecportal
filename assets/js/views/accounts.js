@@ -212,13 +212,15 @@ function unitView() {
             </div>`).join('')}
         </div>
         <div style="padding:14px 16px;border-top:1px solid var(--line-2)">
-          ${noteBox('<b>想開新旅團？</b>最快嘅方法 B：喺 Vercel 加 5 個 '
-            + '<code>TROOP_&lt;編號&gt;_*</code> 環境變數 → Redeploy，唔使改 Git。'
-            + '（方法 A：喺 <code>data/units.json</code> ＋ <code>data/units/&lt;編號&gt;/</code> 加檔案，可以預載資料。）', 'info')}
-          <div class="row gap-8 wrap mt-12">
-            <button class="btn btn-sm btn-primary" data-go="#/docs/newunit">${icon('note', 15)} 開新旅團逐步教學（含變數範本）</button>
-            <button class="btn btn-sm" data-act="env-template">${icon('copy', 15)} 即刻產生環境變數</button>
-          </div>
+          ${isSuper()
+            ? `${noteBox('<b>想開新旅團？</b>（只限超級管理員）最快嘅方法 B：喺 Vercel 加 5 個 '
+                + '<code>TROOP_&lt;編號&gt;_*</code> 環境變數 → Redeploy，唔使改 Git。'
+                + '（方法 A：喺 <code>data/units.json</code> ＋ <code>data/units/&lt;編號&gt;/</code> 加檔案，可以預載資料。）', 'info')}
+              <div class="row gap-8 wrap mt-12">
+                <button class="btn btn-sm btn-primary" data-go="#/docs/newunit">${icon('note', 15)} 開新旅團逐步教學（含變數範本）</button>
+                <button class="btn btn-sm" data-act="env-template">${icon('copy', 15)} 即刻產生環境變數</button>
+              </div>`
+            : `${noteBox('新旅團要由<b>超級管理員</b>開（要改 Vercel 設定）。將旅團嘅 <code>/exec</code> 網址同 API Key 交畀系統管理員就得。', 'info')}`}
           <button class="btn btn-sm btn-block mt-12" data-act="add-local-unit">${icon('plus', 15)} 新增本地旅團（測試用，只存呢部機）</button>
         </div>
       </div>
@@ -450,6 +452,7 @@ export function mount(root) {
       toast('已儲存旅團資料', 'ok'); refresh(); return;
     }
     if (act === 'env-template') {
+      if (!isSuper()) { toast('只有超級管理員可以開新旅團（要改 Vercel 設定）', 'err'); return; }
       const r = await modal({
         title: '產生環境變數（開新旅團）', sub: '方法 B：唔使改 Git，貼落 Vercel 就得',
         body: `<div class="grid g-2" style="gap:12px">
