@@ -1,0 +1,297 @@
+/* ============================================================
+   tests/remote.mjs — 後端儲存（資料真正寫入旅團自己嘅 Sheet）
+   ------------------------------------------------------------
+   呢個係團長回報嘅頭號問題：「資料只能瀏覽器儲存，唔能寫入後端」。
+   呢度驗證整條來回路：
+     ① api/proxy 放行 saveDb / loadDb / dbInfo，並且照樣做旅團白名單
+     ② Code.gs 有「資料庫」分頁同 saveDb / loadDb / dbInfo，而且分段邏輯正確
+     ③ 端到端：app 改資料 → 自動寫入後端 → 換一部「新機」→ 讀返同一份資料
+     ④ 嚴格隔離：新旅團唔會借用 0082 嘅後端（唔會見到 82 旅嘅資料）
+   用法：node tests/remote.mjs
+   ============================================================ */
+
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import proxyHandler from '../api/proxy.js';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const t0 = Date.now();
+let pass = 0, fail = 0;
+function ok(name, cond, extra = '') {
+  if (cond) { pass++; console.log('  ✓ ' + name); }
+  else { fail++; console.log('  ✗ ' + name + (extra ? '  → ' + extra : '')); }
+}
+function section(t) { console.log('\n▌' + t); }
+
+const GAS = 'https://script.google.com/macros/s/AKfycbySGLBg5KuWzgM9EySiOIppqnzrL0QASIYLlhbCIHocGHcLHKbkMdvmhJvam3baG___/exec';
+
+function mockRes() {
+  const r = { statusCode: 0, headers: {}, body: null };
+  r.setHeader = (k, v) => { r.headers[k] = v; return r; };
+  r.status = (s) => { r.statusCode = s; return r; };
+  r.json = (o) => { r.body = o; return r; };
+  return r;
+}
+
+/* ============================================================
+   ① api/proxy 放行新 action
+   ============================================================ */
+section('同源 Proxy 支援「整份資料庫」讀寫');
+{
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (target, init = {}) => {
+    const body = init.body ? JSON.parse(init.body) : null;
+    calls.push({ target: String(target), body });
+    return { status: 200, async text() { return JSON.stringify({ ok: true, success: true, found: true, db: { schema: 2, members: [] } }); } };
+  };
+  const realLog = console.log;
+  const logLines = [];
+  console.log = (...a) => { logLines.push(a.join(' ')); };
+
+  const call = async (payload) => {
+    const res = mockRes();
+    await proxyHandler({ method: 'POST', body: payload }, res);
+    return res;
+  };
+
+  const rSave = await call({ action: 'saveDb', unit: '0082', db: { schema: 2, members: [{ name: '測試' }] } });
+  const rLoad = await call({ action: 'loadDb', unit: '0082' });
+  const rInfo = await call({ action: 'dbInfo', unit: '0082' });
+  const rBad = await call({ action: 'dropEverything', unit: '0082' });
+  const rUnknownUnit = await call({ action: 'loadDb', unit: '9999' });
+
+  console.log = realLog;
+  globalThis.fetch = realFetch;
+
+  ok('saveDb 可以經 proxy 轉發', rSave.statusCode === 200 && rSave.body?.ok === true, JSON.stringify(rSave.body));
+  ok('loadDb 可以經 proxy 轉發', rLoad.statusCode === 200 && rLoad.body?.ok === true);
+  ok('dbInfo 可以經 proxy 轉發', rInfo.statusCode === 200 && rInfo.body?.ok === true);
+  ok('未知 action 仍然會被擋', rBad.statusCode === 400);
+  ok('未登記旅團唔會轉發（唔會寫錯去人哋張 Sheet）', rUnknownUnit.statusCode === 404, JSON.stringify(rUnknownUnit.body));
+  ok('轉發目的地係旅團自己嘅 /exec', calls[0]?.target === GAS, calls[0]?.target);
+  ok('saveDb 有把整個資料庫帶上去', Array.isArray(calls[0]?.body?.db?.members));
+  ok('Proxy log 唔會記低資料庫內容（唔外洩團員姓名）',
+    !logLines.join('\n').includes('測試'), logLines.join(' | ').slice(0, 120));
+}
+
+/* ============================================================
+   ② Code.gs 後端範本
+   ============================================================ */
+section('Apps Script 範本（Code.gs）');
+{
+  const code = fs.readFileSync(path.join(ROOT, 'apps-script', 'Code.gs'), 'utf8');
+  ok('有「資料庫」分頁（app 真正嘅儲存）', /var DB_TAB = '資料庫'/.test(code));
+  ok('initializeSheets 會建立「資料庫」分頁', /\{ name: '資料庫', headers:/.test(code));
+  ok('有 saveDb（寫入整份資料庫）', /function saveDb\(body\)/.test(code));
+  ok('有 loadDb（讀返整份資料庫）', /function loadDb\(unit\)/.test(code));
+  ok('有 dbInfo（只問 meta，唔使拉成份落嚟）', /function dbInfo\(unit\)/.test(code));
+  ok('doPost 有處理 saveDb / loadDb / dbInfo',
+    /body\.action === 'saveDb' \|\| body\.action === 'loadDb' \|\| body\.action === 'dbInfo'/.test(code));
+  ok('doGet 都讀得（換機時用瀏覽器直接開都拎得返）', /action === 'loadDb' \|\| action === 'dbInfo'/.test(code));
+  ok('寫入用 LockService 包住（兩個執委同時改都唔會爛）',
+    /withLock\(function \(\) \{ return saveDb\(body\); \}\)/.test(code));
+  ok('寫入前會刪走舊段（唔會殘留舊資料）', /sh\.deleteRow\(i \+ 1\)/.test(code));
+  ok('分段大小喺 Sheet 單格上限之內（50000）', /var DB_CHUNK = 45000;/.test(code));
+  ok('sync 一併存埋整份資料庫（報表 ＋ 可讀返嘅資料庫）', /if \(body\.db && typeof body\.db === 'object'\)/.test(code));
+  ok('寫入資料庫要 API Key（唔係人人改得）',
+    /寫入資料庫需要 API Key/.test(code) || /未授權：API Key 唔正確/.test(code));
+}
+
+/* ============================================================
+   ③ 分段／拼合邏輯（直接跑 Code.gs 嘅演算法）
+   ============================================================ */
+section('分段寫入／拼合（大資料都唔會爛）');
+{
+  const DB_CHUNK = 45000;
+  const big = { schema: 2, members: Array.from({ length: 2000 }, (_, i) => ({ id: 'm' + i, name: '團員' + i, ymis: String(2020000000 + i) })) };
+  const text = JSON.stringify(big);
+  const chunks = [];
+  for (let p = 0; p < text.length; p += DB_CHUNK) chunks.push(text.substring(p, p + DB_CHUNK));
+
+  ok('大資料會分段（超過單格上限）', text.length > DB_CHUNK && chunks.length > 1, `${text.length} 字元 → ${chunks.length} 段`);
+  ok('每段都喺 Sheet 單格上限（50000）之內', chunks.every(c => c.length <= 50000));
+
+  // 模擬亂序讀返（Sheet 行序唔保證）再排返
+  const rows = chunks.map((c, i) => ({ seq: i + 1, text: c })).sort(() => Math.random() - 0.5);
+  rows.sort((a, b) => a.seq - b.seq);
+  const rebuilt = JSON.parse(rows.map(r => r.text).join(''));
+  ok('拼返之後同原本一模一樣（冇甩欄、冇走樣）',
+    rebuilt.members.length === 2000 && rebuilt.members[1999].name === '團員1999' && rebuilt.members[0].ymis === '2020000000');
+}
+
+/* ============================================================
+   ④ 端到端（真 HTTP、兩個獨立 process ＝ 兩部真‧唔同嘅機）
+   ------------------------------------------------------------
+   流程：假 GAS ← dev-server(/api/proxy) ← 裝置 A / 裝置 B
+   ============================================================ */
+section('端到端：換機／清 cache 都唔會冇咗資料（真 HTTP）');
+{
+  const { spawn } = await import('node:child_process');
+  const net0 = await import('node:net');
+  /* 用隨機空閒 port：唔會撞到之前跑剩低嘅伺服器（撞到就會讀到舊資料，測試假失敗） */
+  const freePort = () => new Promise((resolve, reject) => {
+    const srv = net0.createServer();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => { const { port } = srv.address(); srv.close(() => resolve(port)); });
+  });
+  const GAS_PORT = await freePort();
+  const WEB_PORT = await freePort();
+  const BASE = `http://127.0.0.1:${WEB_PORT}`;
+  const FAKE_EXEC = `http://127.0.0.1:${GAS_PORT}/exec`;
+
+  const procs = [];
+  const spawnBg = (args, env = {}) => {
+    const p = spawn(process.execPath, args, { cwd: ROOT, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    procs.push(p);
+    return p;
+  };
+  const waitPort = async (port, ms = 8000) => {
+    const net = await import('node:net');
+    const t = Date.now();
+    while (Date.now() - t < ms) {
+      const up = await new Promise(r => {
+        const s = net.connect(port, '127.0.0.1');
+        s.on('connect', () => { s.destroy(); r(true); });
+        s.on('error', () => r(false));
+      });
+      if (up) return true;
+      await new Promise(r => setTimeout(r, 120));
+    }
+    return false;
+  };
+
+  /* 用假 /exec 覆蓋 0082 嘅後端（唔會掂真 Google），
+     並開啟 V82_PROXY_TEST 令 proxy 接受本機網址 */
+  const ENV = {
+    TROOP_0082_BACKEND: FAKE_EXEC,
+    TROOP_0082_APIKEY: 'test_key_0082',
+    V82_PROXY_TEST: '1',
+    PORT: String(WEB_PORT)
+  };
+
+  try {
+    spawnBg([path.join(ROOT, 'tests', '_fakegas.mjs'), String(GAS_PORT)]);
+    spawnBg([path.join(ROOT, 'dev-server.mjs')], ENV);
+    const gasUp = await waitPort(GAS_PORT);
+    const webUp = await waitPort(WEB_PORT);
+    ok('測試用假後端已啟動', gasUp);
+    ok('本機 dev-server（連 /api/proxy）已啟動', webUp);
+
+    const runDevice = (plan) => new Promise((resolve) => {
+      const p = spawn(process.execPath, [path.join(ROOT, 'tests', '_device.mjs'), BASE, JSON.stringify(plan)],
+        { cwd: ROOT, env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+      let buf = '', err = '';
+      p.stdout.on('data', d => { buf += d; });
+      p.stderr.on('data', d => { err += d; });
+      const done = (r) => { try { p.kill('SIGKILL'); } catch { /* ignore */ } resolve(r); };
+      const guard = setTimeout(() => done({ ok: false, error: '裝置逾時（30 秒）' }), 30000);
+      p.on('close', () => {
+        clearTimeout(guard);
+        const m = buf.match(/@@RESULT@@([\s\S]*?)@@END@@/);
+        if (!m) return resolve({ ok: false, error: (err || buf).slice(-600) });
+        try { resolve(JSON.parse(m[1])); } catch (e) { resolve({ ok: false, error: 'parse: ' + e.message }); }
+      });
+    });
+
+    /* ---- 裝置 A：清走種子資料 → 加人加帳 → 寫後端 ---- */
+    const A = await runDevice({ steps: [
+      { op: 'wipe' },
+      { op: 'addMember', name: '陳大文', ymis: '2026000001' },
+      { op: 'addTx', date: '2026-09-17', type: 'income', item: '團費', amount: 360 },
+      { op: 'push' },
+      { op: 'snapshot' }
+    ] });
+    ok('裝置 A 開得機、後端設定自動帶入', A.ok === true && A.configured === true,
+      (A.error || JSON.stringify(A.cfg || {})).slice(0, 200));
+    const pushStep = (A.steps || []).find(s => s.op === 'push');
+    ok('裝置 A 把整個資料庫寫入後端', pushStep?.ok === true, JSON.stringify(pushStep));
+    ok('寫入成功後 pending 清零（介面顯示「已存到後端」）', pushStep?.pending === 0, String(pushStep?.pending));
+    const snapA = (A.steps || []).find(s => s.op === 'snapshot');
+    ok('裝置 A 本機有 1 個團員、1 筆帳目', snapA?.members === 1 && snapA?.transactions === 1, JSON.stringify(snapA));
+
+    /* ---- 裝置 B ＝ 全新一部機（全新 process、全新 localStorage） ---- */
+    const B = await runDevice({ steps: [
+      { op: 'info' },
+      { op: 'pull' },
+      { op: 'snapshot' }
+    ] });
+    ok('裝置 B（新機）開得機', B.ok === true, (B.error || '').slice(0, 300));
+    const infoB = (B.steps || []).find(s => s.op === 'info');
+    ok('新機問後端：有資料', infoB?.ok === true && infoB?.found === true, JSON.stringify(infoB));
+    ok('後端報返啱數（1 個團員、1 筆帳目）',
+      infoB?.counts?.members === 1 && infoB?.counts?.transactions === 1, JSON.stringify(infoB?.counts));
+
+    const pullB = (B.steps || []).find(s => s.op === 'pull');
+    ok('新機讀得返整份資料庫', pullB?.ok === true && !!pullB?.adopted, JSON.stringify(pullB).slice(0, 200));
+    ok('新機見返同一個團員（換機冇冇咗資料）',
+      pullB?.adopted?.names?.includes('陳大文') && pullB?.adopted?.members === 1,
+      JSON.stringify(pullB?.adopted));
+    ok('新機見返同一筆帳目', pullB?.adopted?.transactions === 1);
+    ok('採用後端資料之後唔會即刻又寫返上去（唔會來回打交）',
+      pullB?.adopted?.pending === 0, String(pullB?.adopted?.pending));
+
+    /* ---- 裝置 C：自動儲存（改完唔使撳掣） ---- */
+    const C = await runDevice({ steps: [
+      { op: 'pull' },                                   // 先拉後端（＝1 個團員）
+      { op: 'snapshot' },
+      { op: 'autosave', name: '李小明', ymis: '2026000002', waitMs: 6000 }
+    ] });
+    const snapC = (C.steps || []).find(s => s.op === 'snapshot');
+    ok('裝置 C 拉完後端之後只有後端嗰 1 個團員（種子資料唔會撈返轉頭）',
+      snapC?.members === 1, JSON.stringify(snapC?.names));
+    const auto = (C.steps || []).find(s => s.op === 'autosave');
+    ok('改完資料會自動寫入後端（唔使記得撳同步）',
+      auto?.pending === 0 && auto?.state === 'saved', JSON.stringify(auto));
+
+    /* ---- 裝置 D：確認自動儲存真係入咗後端 ---- */
+    const D = await runDevice({ steps: [{ op: 'info' }, { op: 'pull' }] });
+    const pullD = (D.steps || []).find(s => s.op === 'pull');
+    ok('第三部機見到裝置 C 自動儲存嘅新團員（＝自動儲存真係入咗後端）',
+      pullD?.adopted?.names?.includes('李小明') && pullD?.adopted?.names?.includes('陳大文') &&
+      pullD?.adopted?.members === 2,
+      JSON.stringify(pullD?.adopted?.names));
+  } finally {
+    procs.forEach(p => { try { p.kill('SIGKILL'); } catch { /* ignore */ } });
+  }
+}
+
+/* ============================================================
+   ⑤ 嚴格隔離：新旅團唔會見到／寫入 0082 嘅資料
+   ============================================================ */
+section('旅團隔離（新旅團唔會見到 82 旅嘅資料）');
+{
+  const units = await import('../assets/js/lib/units.js?iso=1');
+  const reg = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'units.json'), 'utf8'));
+
+  ok('Registry 頂層仲有共用 backend 欄（舊資料）', !!reg.backend?.gasUrl);
+
+  /* 扮一個「已登記但未交後端」嘅新旅團 */
+  globalThis.localStorage = {
+    _d: {},
+    getItem(k) { return this._d[k] ?? null; },
+    setItem(k, v) { this._d[k] = String(v); },
+    removeItem(k) { delete this._d[k]; }
+  };
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (/api\/units/.test(u)) return { ok: false, status: 404 };
+    if (/units\.json/.test(u)) {
+      const withNew = { ...reg, units: { ...reg.units, '0077': { code: '0077', name: '第七十七旅深資童軍團' } } };
+      return { ok: true, status: 200, json: async () => withNew, text: async () => JSON.stringify(withNew) };
+    }
+    return { ok: false, status: 404 };
+  };
+  await units.loadRegistry(true);
+
+  const newTroop = units.backendOf('0077');
+  ok('未交後端嘅新旅團 ＝ 冇後端（唔會借用 82 旅張 Sheet）', newTroop === null, JSON.stringify(newTroop));
+  ok('0082 自己嘅後端照樣讀得到', (units.backendOf('0082') || {}).gasUrl === GAS);
+  ok('0082 唔會被標記做「共用」後端', units.backendOf('0082')?.shared === false);
+  ok('新旅團冇靜態資料夾（唔會讀到 0082 嘅團員檔）',
+    units.dataPathOf('0077') === 'data/units/0077/' && !fs.existsSync(path.join(ROOT, 'data', 'units', '0077')));
+}
+
+console.log(`\n──────── 後端儲存測試結果：${pass} 通過 / ${fail} 失敗（${Date.now() - t0} ms）────────\n`);
+process.exit(fail ? 1 : 0);

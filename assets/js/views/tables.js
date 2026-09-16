@@ -481,12 +481,40 @@ function syncView() {
   const s = load().sync || {};
   const backend = load().backend || null;
   const log = s.log || [];
+  const pending = Number(s.pending || 0);
+  const lastPush = s.lastPushAt ? String(s.lastPushAt).slice(0, 19).replace('T', ' ') : '';
+  const lastPull = s.lastPullAt ? String(s.lastPullAt).slice(0, 19).replace('T', ' ') : '';
   return `
   <div class="note-box mb-16">${icon('cloud', 15)}<div>
-    目標：<b>一張 Sheet 統管整個 Venture</b>。每個旅團嘅 app 將自己嘅資料 POST 去 Apps Script，
-    由 Script 寫入你嘅總 Sheet（每個旅團分開分頁，或者用「旅團」欄分辨）。<br>
-    <span class="xs">同一個後端仲會處理 <b>成員手機記帳</b>（entry.html）同 <b>通告報名</b>（notice.html）—— 三條路都入同一張總表。</span>
+    <b>資料真正嘅家係你自己嘅 Google Sheet。</b>
+    App 每次改動都會自動把<b>整個資料庫</b>寫入 Sheet 嘅「<b>資料庫</b>」分頁；
+    開機會由後端讀返最新版本 —— 所以<b>換手機、換瀏覽器、清 cache 都唔會冇咗資料</b>。<br>
+    <span class="xs">其他分頁（帳目／團員／物資…）係攤平出嚟畀你自己睇同用公式嘅「報表」。
+    同一個後端仲會處理 <b>成員手機記帳</b>（entry.html）同 <b>通告報名</b>（notice.html）。</span>
   </div></div>
+
+  ${backend ? `<div class="card mb-16"><div class="card-head">
+    <div><div class="card-title">${icon('shield', 15)} 儲存狀態</div>
+      <div class="card-sub">資料有冇真係入咗後端</div></div>
+    ${pending ? `<span class="badge b-warn"><span class="dot"></span>${pending} 項改動未儲存</span>`
+      : `<span class="badge b-ok"><span class="dot"></span>全部已儲存</span>`}
+  </div>
+  <div style="padding:12px 16px" class="sm muted">
+    <div class="kv-row"><span>最後寫入後端</span><span>${esc(lastPush || '（未試過）')}</span></div>
+    <div class="kv-row"><span>最後由後端讀取</span><span>${esc(lastPull || '（未試過）')}</span></div>
+    ${s.lastError ? `<div class="kv-row"><span>上次錯誤</span><span style="color:var(--danger)">${esc(String(s.lastError).slice(0, 120))}</span></div>` : ''}
+    <div class="row gap-8 mt-12 wrap">
+      <button class="btn btn-primary btn-sm" data-act="push-db">${icon('cloud', 15)} 立即儲存到後端</button>
+      <button class="btn btn-sm" data-act="pull-db">${icon('download', 15)} 由後端還原資料</button>
+      <button class="btn btn-sm" data-act="db-info">${icon('search', 15)} 睇後端有咩資料</button>
+    </div>
+    <div class="hint mt-8">「由後端還原」會<b>用後端嘅資料覆蓋呢部機</b>（換咗新手機／清咗 cache 就用呢個）。</div>
+  </div></div>` : `
+  <div class="note-box danger mb-16">${icon('alert', 15)}<div>
+    <b>未設定後端 —— 你嘅資料而家淨係存喺呢部機嘅瀏覽器。</b>
+    清 cache、換手機、甚至瀏覽器自動清理都會令資料<b>永久消失</b>。
+    請喺下面填你旅團嘅 Apps Script <code>/exec</code> 網址。
+  </div></div>`}
 
   ${backend ? `<div class="card mb-16"><div class="card-head">
     <div><div class="card-title">${icon('check', 15)} 後端已連接${backend.shared ? '（跟 Registry 共用）' : '（本旅團專用）'}</div>
@@ -511,8 +539,8 @@ function syncView() {
           <div class="field"><label class="label">API Key（可留空）</label>
             <input class="input" id="y-key" value="${esc(s.apiKey || '')}" placeholder="範本預設 v82-demo-key"></div>
         </div>
-        <label class="check mt-12"><input type="checkbox" id="y-auto" ${s.auto ? 'checked' : ''}> 改動後<b>排隊</b>等同步（防呆：唔會即時送出，要撳「立即同步」先寫入總表）</label>
-        ${Number(s.pending) ? `<div class="hint" style="color:var(--warn)">有 <b>${Number(s.pending)}</b> 次改動仲未送去總表。</div>` : ''}
+        <label class="check mt-12"><input type="checkbox" id="y-auto" ${s.auto !== false ? 'checked' : ''}> <b>改動後自動儲存到後端</b>（強烈建議開；熄咗就要自己撳「立即儲存」，唔記得就會冇咗）</label>
+        ${pending ? `<div class="hint" style="color:var(--warn)">有 <b>${pending}</b> 次改動仲未寫入後端。</div>` : ''}
         <label class="check mt-6"><input type="checkbox" id="y-share" ${(load().settings?.publicEntry?.submitUrl || load().settings?.notice?.submitUrl) === s.url ? 'checked' : ''}> <b>同一條網址共用</b>畀「手機記帳」同「通告報名」</label>
         <div class="row gap-8 mt-12 wrap">
           <button class="btn btn-primary" data-act="save-sync">${icon('save', 16)} 儲存設定</button>
@@ -720,7 +748,7 @@ export function buildPayload({ sample = false } = {}) {
     tables[d.collection] = sample ? rows.slice(0, 3) : rows;
   });
   const s = db.sync || {};
-  return {
+  const payload = {
     action: sample ? 'ping' : 'sync',
     unit: s.unit || db.unitCode,
     unitName: db.profile?.name || db.unit?.name || '',
@@ -730,6 +758,10 @@ export function buildPayload({ sample = false } = {}) {
     counts: Object.fromEntries(Object.entries(tables).map(([k, v]) => [k, v.length])),
     tables
   };
+  /* 真正嘅同步：除咗攤平嘅報表，仲要帶埋**整個資料庫**（原樣 JSON），
+     後端會存入「資料庫」分頁 —— 咁先讀得返、換機先唔會冇咗。 */
+  if (!sample) payload.db = db;
+  return payload;
 }
 
 export async function pushToMaster({ silent = false } = {}) {
@@ -758,7 +790,10 @@ export async function pushToMaster({ silent = false } = {}) {
     });
     const txt = (await res.text()).slice(0, 300);
     const ok = res.ok;
-    if (ok) { const d = load(); d.sync = { ...(d.sync || {}), pending: 0 }; }
+    if (ok) {
+      const d = load();
+      d.sync = { ...(d.sync || {}), pending: 0, lastPushAt: new Date().toISOString(), lastError: '' };
+    }
     log(`${ok ? '✓' : '✗'} HTTP ${res.status} · ${payload.counts ? Object.values(payload.counts).reduce((a, b) => a + b, 0) : 0} 筆 · ${txt.replace(/\s+/g, ' ').slice(0, 80)}`);
     if (!silent) toast(ok ? '已同步到總表' : '同步失敗（' + res.status + '）', ok ? 'ok' : 'err');
     return { ok, msg: txt };
@@ -1044,8 +1079,65 @@ export function mount(root, params) {
         refresh();
       }
       if (act === 'push-sync') {
-        if (!(await confirmDlg({ title: '立即同步', okText: '開始同步', message: '會將全部表格資料送去你嘅 Apps Script（寫入總 Sheet）。' }))) return;
+        if (!(await confirmDlg({ title: '立即同步', okText: '開始同步', message: '會將全部表格資料送去你嘅 Apps Script（寫入總 Sheet），同時把整個資料庫存入「資料庫」分頁。' }))) return;
         pushToMaster(); refresh();
+      }
+
+      /* ---- 整個資料庫：寫入／還原／檢視（真正嘅後端儲存） ---- */
+      if (act === 'push-db') {
+        const remote = await import('../lib/remote.js');
+        const old = b.innerHTML;
+        b.disabled = true; b.textContent = '儲存中…';
+        const r = await remote.flush();
+        b.disabled = false; b.innerHTML = old;
+        toast(r.ok ? '已把整個資料庫儲存到後端' : '儲存失敗：' + (r.error || '未知錯誤'), r.ok ? 'ok' : 'err');
+        refresh();
+      }
+      if (act === 'pull-db') {
+        const remote = await import('../lib/remote.js');
+        const info = await remote.remoteInfo();
+        if (!info?.ok) { toast('讀唔到後端：' + (info?.error || '未知錯誤'), 'err'); return; }
+        if (!info.found) { toast('後端仲未有資料庫（請先撳「立即儲存到後端」）', 'warn'); return; }
+        const c = info.counts || {};
+        const okGo = await confirmDlg({
+          title: '由後端還原資料', danger: true, okText: '用後端資料覆蓋本機',
+          message: `後端最後更新：<b>${esc(String(info.at || info.version || '').slice(0, 19).replace('T', ' '))}</b><br>
+            內容：團員 ${c.members ?? '?'} · 帳目 ${c.transactions ?? '?'} · 會議 ${c.meetings ?? '?'} · 通告 ${c.notices ?? '?'} · 物資 ${c.invItems ?? '?'}<br><br>
+            <b>呢部機而家嘅資料會被覆蓋。</b>如果本機有未儲存嘅改動，請先撳「立即儲存到後端」。`
+        });
+        if (!okGo) return;
+        const got = await remote.pullDb();
+        if (!got?.ok || !got.db) { toast('讀取失敗：' + (got?.error || '未知錯誤'), 'err'); return; }
+        const { adoptRemote } = await import('../lib/store.js');
+        try {
+          adoptRemote(got.db);
+          toast('已由後端還原資料', 'ok');
+          refresh();
+        } catch (e) { toast('還原失敗：' + e.message, 'err'); }
+      }
+      if (act === 'db-info') {
+        const remote = await import('../lib/remote.js');
+        const info = await remote.remoteInfo();
+        if (!info?.ok) { toast('讀唔到後端：' + (info?.error || '未知錯誤'), 'err'); return; }
+        const c = info.counts || {};
+        await modal({
+          title: '後端「資料庫」分頁',
+          body: info.found
+            ? `<div class="sm">
+                ${kv([
+                  ['最後更新', String(info.at || info.version || '').slice(0, 19).replace('T', ' ') || '（未知）'],
+                  ['資料大小', remote.fmtBytes(info.bytes || 0)],
+                  ['團員', `${c.members ?? 0} 人`],
+                  ['帳目', `${c.transactions ?? 0} 筆`],
+                  ['會議', `${c.meetings ?? 0} 場`],
+                  ['通告', `${c.notices ?? 0} 張`],
+                  ['物資', `${c.invItems ?? 0} 件`],
+                  ['帳戶', `${c.accounts ?? 0} 個`]
+                ])}
+              </div>`
+            : `<div class="note-box warn">${icon('alert', 15)}<div>後端仲未有資料庫 —— 撳「立即儲存到後端」就會建立。</div></div>`,
+          actions: [{ label: '知道喇', class: 'btn-primary', value: true }]
+        });
       }
       if (act === 'dl-gas') {
         const { gasTemplate } = await import('../lib/gastemplate.js');

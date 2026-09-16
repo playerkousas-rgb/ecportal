@@ -96,25 +96,29 @@ export function unitEntry(code) {
   return all[code] || all[String(code).replace(/^0+/, '')] || null;
 }
 
-/** 旅團嘅後端設定（Apps Script /exec）：旅團自己嘅 → Registry 共用 → null */
+/**
+ * 旅團嘅後端設定（Apps Script /exec）。
+ *
+ * 【嚴格隔離】每個旅團**只可以**用自己 entry 入面登記嘅後端。
+ * 以前呢度會 fallback 去 registry 頂層嘅共用 `backend`，
+ * 後果係：新開嘅旅團一登入就會讀／寫**第八十二旅嘅 Google Sheet**
+ * （即係見到人哋嘅團員、帳目，自己嘅資料又寫咗入人哋張表）。
+ * 所以任何情況都唔再借用共用後端 —— 冇自己嘅 /exec 就當未開戶（回 null）。
+ */
 export function backendOf(code) {
-  const reg = registry();
   const entry = unitEntry(code) || {};
-  /* 安全：唔喺 Registry 嘅旅團（連本地都唔係）＝未開戶，唔可以借用其他旅團嘅後端 */
+  /* 安全：唔喺 Registry 嘅旅團（連本地都唔係）＝未開戶 */
   if (!Object.keys(entry).length) return null;
   const val = entry.backend || {};
-  /* 伺服器 Registry（env）開嘅旅團：後端由 env（TROOP_<id>_*）話事，
-     唔可以借用 registry 頂層嘅共用後端（多數係示範／其他旅團嘅 Sheet） */
-  const shared = entry.fromApi ? {} : (reg.backend || {});
-  const gasUrl = val.gasUrl || shared.gasUrl || '';
-  if (!gasUrl) return null;
+  const gasUrl = val.gasUrl || '';
+  if (!gasUrl) return null;          // ← 冇自己嘅後端就係冇，唔會借用其他旅團嘅
   return {
-    name: val.name || shared.name || '總表（Apps Script）',
+    name: val.name || '總表（Apps Script）',
     gasUrl,
-    apiKey: val.apiKey !== undefined ? val.apiKey : (shared.apiKey || ''),
-    shared: !val.gasUrl,
+    apiKey: val.apiKey !== undefined ? val.apiKey : '',
+    shared: false,                   // 永遠唔會再共用
     noticeSubmitUrl: entry.notice?.submitUrl || val.noticeSubmitUrl || gasUrl,
-    updated: val.updated || shared.updated || ''
+    updated: val.updated || ''
   };
 }
 

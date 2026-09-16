@@ -75,10 +75,119 @@ async function boot() {
   }
   window.addEventListener('hashchange', render);
   window.addEventListener('v82:refresh', render);
+  window.addEventListener('v82:sync', paintSyncChip);
+
+  /* 資料真正嘅家係旅團自己嘅 Google Sheet：開機同後端對一對，
+     再開啟「改完自動存去後端」。失敗都唔會阻住開 app（照用本機資料）。 */
+  syncBoot();
 
   if (isMock() && !current()) loginAsMock('leader');
   if (!current()) renderLogin();
   else render();
+}
+
+/* ============================================================
+   後端儲存：開機對資料 ＋ 自動儲存
+   ------------------------------------------------------------
+   以前 app 嘅資料淨係喺瀏覽器，換機就冇晒。而家：
+     開機 → 問後端有冇資料（dbInfo）→ 比本機新就拉落嚟
+     之後 → 任何改動 debounce 幾秒自動寫返後端
+   ============================================================ */
+let remoteApi = null;
+export function remoteMod() { return remoteApi; }
+
+async function syncBoot() {
+  if (isMock()) return;
+  try {
+    remoteApi = await import('./lib/remote.js');
+  } catch (e) {
+    console.warn('[sync] 載入唔到 remote 模組', e);
+    return;
+  }
+  const store = await import('./lib/store.js');
+  store.setSaveHook(() => remoteApi.scheduleSave());
+
+  if (!remoteApi.remoteConfigured()) {
+    /* 未設定後端：照用本機，但要話畀團長知資料未有備份 */
+    paintSyncChip();
+    return;
+  }
+
+  try {
+    const info = await remoteApi.remoteInfo();
+    if (info?.ok && info.found) {
+      const localAt = store.localUpdatedAt();
+      const remoteAt = String(info.version || info.at || '');
+      const localHas = store.hasLocalContent();
+      /* 後端比本機新（或者本機根本係新裝置／空白）→ 拉後端落嚟 */
+      const remoteNewer = !localHas || (remoteAt && localAt && normAt(remoteAt) > normAt(localAt));
+      if (remoteNewer) {
+        const got = await remoteApi.pullDb();
+        if (got?.ok && got.found && got.db) {
+          try {
+            store.adoptRemote(got.db);
+            applyTheme(load()?.unit?.theme);
+            render();
+            toast('已由後端載入最新資料', 'ok');
+          } catch (e) { console.warn('[sync] 採用後端資料失敗', e); }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[sync] 開機對資料失敗（照用本機資料）', e);
+  }
+
+  /* 開機流程完成先至開始自動儲存（避免種子資料一載入就寫返上去） */
+  remoteApi.arm();
+  paintSyncChip();
+
+  /* 離開頁面前，仲有嘢未存就即刻試多次 */
+  window.addEventListener('beforeunload', (e) => {
+    if (remoteApi?.hasPending?.()) {
+      remoteApi.flush();
+      e.preventDefault();
+      e.returnValue = '仲有改動未儲存到後端，真係要離開？';
+      return e.returnValue;
+    }
+  });
+}
+
+/** 頂部「儲存狀態」提示 —— 一眼睇到資料有冇真係入咗後端 */
+function paintSyncChip() {
+  const el = document.getElementById('syncChip');
+  if (!el) return;
+  if (isMock()) { el.innerHTML = ''; return; }
+
+  if (!remoteApi || !remoteApi.remoteConfigured()) {
+    el.innerHTML = `<span class="badge b-warn" title="資料淨係存喺呢部機嘅瀏覽器，換機／清 cache 就會冇咗。去「帳號與系統 → 資料管理 → 總表同步」設定後端。">
+      ${icon('alert', 12)} 只存喺本機</span>`;
+    el.onclick = () => go('#/tables/sync');
+    el.style.cursor = 'pointer';
+    return;
+  }
+
+  const s = remoteApi.syncState();
+  const map = {
+    saving:  ['b-warn', 'cloud', '儲存緊…'],
+    saved:   ['b-ok', 'check', '已存到後端'],
+    pending: ['b-warn', 'clock', '未儲存'],
+    offline: ['b-warn', 'alert', '離線'],
+    loading: ['b-warn', 'cloud', '讀取緊…'],
+    error:   ['b-danger', 'alert', '儲存失敗'],
+    idle:    ['b-ok', 'cloud', '已連後端']
+  };
+  const [cls, ic, label] = map[s.state] || map.idle;
+  el.innerHTML = `<span class="badge ${cls}" title="${esc(s.msg || label)}">${icon(ic, 12)} ${esc(label)}</span>`;
+  el.onclick = () => go('#/tables/sync');
+  el.style.cursor = 'pointer';
+}
+
+/** 把 GAS 回嘅時間（可能係 ISO 或者 'YYYY-MM-DD HH:mm:ss'）正規化做可比較字串 */
+function normAt(v) {
+  const s = String(v || '').trim();
+  if (!s) return '';
+  const d = new Date(s.includes('T') ? s : s.replace(' ', 'T'));
+  return isNaN(d.getTime()) ? s : d.toISOString();
 }
 
 /* ============================================================
@@ -602,6 +711,7 @@ function render() {
           <div class="tb-sub truncate">${esc(u.name || '')} ${mock ? '· 示範模式' : ''}</div>
         </div>
         <div class="row gap-8">
+          <span id="syncChip" class="no-print"></span>
           ${notices().length ? `<span class="badge b-warn no-print"><span class="dot"></span>${notices().length} 項提示</span>` : ''}
           <button class="btn btn-ghost btn-sm hide-desktop" id="btnLogout2" title="登出">${icon('logout', 16)}</button>
         </div>
@@ -647,6 +757,7 @@ function render() {
 
   const root = app.querySelector('#view');
   try { view.mount(root, r); } catch (e) { console.error('mount error', e); }
+  paintSyncChip();
   window.scrollTo({ top: 0 });
 }
 

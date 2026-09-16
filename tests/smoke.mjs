@@ -1149,12 +1149,17 @@ section('防呆（暫存 → 確認 → 可還原）');
   await new Promise(r => setTimeout(r, 30));
   ok('取消之後用戶仍然存在', !!store.load().members.find(m => m.id === target.id));
 
-  // 總表同步唔會即時寫入（只排隊）
+  // 後端儲存：真實資料每次改動都會排隊寫入後端；示範資料永遠唔會送出
   const dbx = store.load();
   dbx.sync = { ...(dbx.sync || {}), auto: true, pending: 0 };
   store.commit();
-  ok('開咗「排隊」之後，改動只係累加待同步數（唔會自動送出）',
-    Number(store.load().sync.pending) >= 1, String(store.load().sync?.pending));
+  if (MODE === 'mock') {
+    ok('示範資料永遠唔會排隊送去後端（唔會污染真實 Sheet）',
+      Number(store.load().sync?.pending || 0) === 0, String(store.load().sync?.pending));
+  } else {
+    ok('改動會排隊等寫入後端（pending 累加，寫入成功先清零）',
+      Number(store.load().sync.pending) >= 1, String(store.load().sync?.pending));
+  }
   dbx.sync.auto = false; dbx.sync.pending = 0; store.commit();
 }
 

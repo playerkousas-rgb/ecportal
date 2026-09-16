@@ -359,20 +359,46 @@ export function load() {
 }
 export function tryLoad() { return state.db; }
 
-function persist() {
+/* 後端自動儲存 hook（由 remote.js 喺開機時掛上；避免 store ↔ remote 循環 import）。
+   冇掛住（例如測試、公開頁）就淨係寫本機，行為同以前一樣。 */
+let saveHook = null;
+export function setSaveHook(fn) { saveHook = typeof fn === 'function' ? fn : null; }
+
+function persist({ remote = true } = {}) {
   if (!state.db) return;
   state.db.meta = state.db.meta || {};
   state.db.meta.updatedAt = nowStamp();
   lsSet(dbKey(state.mode, state.unitCode), JSON.stringify(state.db));
-  /* 防呆：改動只會「排隊」等送去總表，永遠唔會即時自動送出。
-     要去「帳號與系統 → 資料管理 → 總表同步 → 立即同步」先真正寫入 Apps Script。 */
-  if (state.db.sync && state.db.sync.auto) {
+
+  /* 本機寫完 → 排隊寫入旅團自己嘅後端（Google Sheet）。
+     pending 係「仲未寫入後端嘅改動數」，寫入成功就會清零。
+     示範模式永遠唔會送出。 */
+  if (state.mode !== 'mock' && remote) {
+    state.db.sync = state.db.sync || {};
     state.db.sync.pending = Number(state.db.sync.pending || 0) + 1;
+    if (saveHook) {
+      try { saveHook(); } catch (e) { console.warn('[store] 後端自動儲存排隊失敗', e); }
+    }
   }
 }
 
+/** 只寫本機，唔會觸發後端儲存（由後端拉落嚟嘅資料用，免得again寫返上去） */
+function persistLocalOnly() { persist({ remote: false }); }
+
 export function commit() { persist(); return state.db; }
 export const save = commit;
+
+/**
+ * 淨係寫低「同步簿記」（pending／lastPushAt／log）——
+ * **唔會**動 meta.updatedAt、**唔會**加 pending、**唔會**再觸發後端儲存。
+ * 如果用普通 commit() 去記錄「已儲存」，就會即刻又標記成「有改動要儲存」，
+ * 變成無限迴圈（存完又存）。所以簿記一定要行呢條路。
+ */
+export function commitMeta() {
+  if (!state.db) return state.db;
+  lsSet(dbKey(state.mode, state.unitCode), JSON.stringify(state.db));
+  return state.db;
+}
 
 export function collection(name) {
   const db = load();
@@ -449,6 +475,51 @@ export function importAll(jsonText, { allowMockIntoReal = false } = {}) {
   return state.db;
 }
 
+/* ---------------- 後端資料（由旅團自己嘅 Google Sheet 讀返） ---------------- */
+
+/**
+ * 採用後端讀返嚟嘅資料庫（覆蓋本機）。
+ * 只寫本機，唔會即刻又送返上去後端（避免來回打交）。
+ * @param {object} remoteDb 後端「資料庫」分頁存住嘅完整 db
+ * @returns {object} 採用咗嘅 db
+ */
+export function adoptRemote(remoteDb) {
+  if (!remoteDb || typeof remoteDb !== 'object') throw new Error('後端資料格式唔啱');
+  if (isMock()) throw new Error('示範模式唔會採用後端資料');
+  if (remoteDb.schema && remoteDb.schema !== SCHEMA) {
+    throw new Error(`後端資料版本（schema ${remoteDb.schema}）同現時版本（${SCHEMA}）唔一致`);
+  }
+  /* 後端資料唔應該改變「我而家係邊個旅團」 */
+  const code = state.unitCode;
+  state.db = { ...remoteDb, unitCode: remoteDb.unitCode || code };
+  if (!Array.isArray(state.db.accounts) || !state.db.accounts.length) {
+    state.db.accounts = SEED_ACCOUNTS;
+  }
+  migrateIdentities(state.db);
+  migrateMemberKeys(state.db);
+  state.db.sync = { ...(state.db.sync || {}), pending: 0, lastPullAt: nowStamp() };
+  state.seedFailed = false;
+  state.seedSource = '（後端：旅團自己嘅 Google Sheet）';
+  state.db.meta = { ...(state.db.meta || {}), seedSource: state.seedSource };
+  persistLocalOnly();
+  return state.db;
+}
+
+/** 本機資料庫嘅「最後改動時間」（同後端比新舊用） */
+export function localUpdatedAt() { return state.db?.meta?.updatedAt || ''; }
+
+/** 本機有冇實質內容（用嚟判斷係咪全新裝置） */
+export function hasLocalContent() {
+  const db = state.db;
+  if (!db) return false;
+  return !!(
+    (db.members || []).length || (db.transactions || []).length ||
+    (db.meetings || []).length || (db.notices || []).length ||
+    (db.invItems || []).length || (db.fees || []).length ||
+    (db.constitution?.chapters || []).length
+  );
+}
+
 /** 由 data/ 檔案重新種入（清走本機改動） */
 export async function resetToSeed() {
   state.db = await buildSeed(state.mode, state.unitCode);
@@ -457,10 +528,20 @@ export async function resetToSeed() {
   return state.db;
 }
 
-/** 完全清空呢個旅團（真實資料） */
+/** 完全清空呢個旅團（真實資料）。
+    注意：**後端連線設定會保留** —— 清資料唔應該連埋「連去邊個 Sheet」都清走，
+    否則清完之後 app 就再冇後端，改動又變返淨係存喺瀏覽器。 */
 export function wipe() {
+  const keepSync = state.db?.sync ? { ...state.db.sync, pending: 0, log: [] } : null;
+  const keepBackend = state.db?.backend ? { ...state.db.backend } : null;
   state.db = blankDb(state.mode, state.unitCode, unitEntry(state.unitCode) || {});
-  if (state.mode === 'real') state.db.meta.seedFailed = false;
+  if (state.mode === 'real') {
+    state.db.meta.seedFailed = false;
+    if (keepSync) state.db.sync = keepSync;
+    if (keepBackend) state.db.backend = keepBackend;
+    /* 冇原本設定就用返 Registry 登記嘅後端 */
+    if (!state.db.sync?.url) seedBackend(state.db, state.mode, state.unitCode);
+  }
   persist();
   return state.db;
 }
