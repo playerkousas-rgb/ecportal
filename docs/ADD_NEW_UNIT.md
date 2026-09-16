@@ -1,8 +1,38 @@
 # 新增一個旅團（多旅團部署）
 
-執委管理系統用 **Git Registry** 方式管理多個旅團：
-`data/units.json` 係唯一註冊處，每個旅團一個資料夾 `data/units/<旅團編號>/`。
-唔需要開帳號、唔需要後端，加檔案 + 部署就完成。
+有兩種開法，揀一個：
+
+| 方法 | 要改嘅嘢 | 適合 |
+| --- | --- | --- |
+| **A. Git Registry（完整）** | `data/units.json` ＋ `data/units/<編號>/` 資料夾（可以連種子資料／團章／名冊） | 想預先載入資料、團章、名冊 |
+| **B. 純 Vercel 環境變數（最快，唔使改 Git）** | Vercel → Settings → Environment Variables 加 3–4 個變數 → Redeploy | 旅團自己已經有 Apps Script 後端，資料由空白開始用 |
+
+兩個方法並存：B 開嘅旅團，之後想補資料夾／團章，隨時可以搬去 A。
+
+---
+
+## 方法 B：Vercel 環境變數（唔改 Git）
+
+旅團畀你 `/exec` 網址同 API Key 之後，喺 Vercel 加：
+
+| 變數 | 值（例子） | 作用 |
+| --- | --- | --- |
+| `TROOP_0081_BACKEND` | `https://script.google.com/macros/s/AKfy…/exec` | 旅團後端（總表同步、申報、通告報名） |
+| `TROOP_0081_APIKEY` | 旅團嘅 API Key | 伺服器端代為寫入（唔會落前端） |
+| `TROOP_0081_NAME` | `第八十一旅深資童軍團` | 顯示名（唔填＝「第 0081 旅」） |
+| `TROOP_0081_PROGRESSBACKEND` | 同 `…_BACKEND`（或者另一支 Script） | 進度紀錄讀寫用 |
+| `TROOP_0081_PROGRESSAPIKEY` | 進度用 API Key | 前端唔使填任何嘢就直接讀到進度 |
+
+* 加完喺 Vercel 撳 **Redeploy**（環境變數要重新部署先生效）
+* 旅團即刻出現喺旅團清單；資料由**空白**開始（唔會讀 `data/units/0081/`，因為根本冇呢個資料夾）
+* 公告／通告：喺執委系統開通告 → 同步一次（資料會寫入旅團 Sheet 嘅 `通告全文` 分頁）
+  → 公開頁（`notice.html?u=0081&n=<通告編號>`）會直接由佢自己嘅後端讀，**唔使改 Git 都公開到、收得到報名**
+* 選填：`TROOP_0081_NOTICE`（通告報名送去邊）、`TROOP_0081_NAMEEN`、`TROOP_0081_SHORT`、`TROOP_0081_PROGRESSCATALOG`
+* 安全：公開清單（`/api/units`）**唔會**回傳 gasUrl／API Key；所有寫入都經伺服器端白名單驗證
+
+---
+
+## 方法 A：Git Registry（完整）
 
 ```
 data/
@@ -14,7 +44,7 @@ data/
 
 ---
 
-## 五步完成
+### 五步完成
 
 ### 1. 開一個資料夾
 
@@ -28,7 +58,7 @@ cp -r data/units/0082 data/units/0137
 
 | 檔案 | 要改嘅內容 |
 |---|---|
-| `unit.json` | `code`、`name`／`nameEn`、`short`、`region`、`sponsor`、`address`、`founded`、`theme`（主色）、`settings`（團費、津貼、期初結餘、AGM 日期）、`progress`（進度系統網址／Portal 參數）、`inventory`（物資分類） |
+| `unit.json` | `code`、`name`／`nameEn`、`short`、`region`、`sponsor`、`address`、`founded`、`theme`（主色）、`settings`（團費、津貼、期初結餘、AGM 日期）、`inventory`（物資分類） |
 | `constitution.json` | 你嘅團章（中英對照）。未寫好可以留 `chapters: []`，之後喺 app 內編輯並發布 |
 | `members.json` | 團員名冊，生日欄位格式：`"2006-06-10"`（有年份）或 `"03-26"`（只有月日） |
 | `inventory.json` | 物資。可以係空：`"items": []`、`"loans": []`、`"audits": []` |

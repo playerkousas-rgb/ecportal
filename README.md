@@ -254,6 +254,8 @@ data/
 
 新增旅團：喺 `data/units.json` 加一個 key，再 copy 一個資料夾改名即可。
 詳見 **[docs/ADD_NEW_UNIT.md](docs/ADD_NEW_UNIT.md)**。
+想最快開團（唔改 Git）：喺 Vercel 加 `TROOP_<編號>_BACKEND` / `_APIKEY` / `_NAME`
+（＋ `_PROGRESSBACKEND` / `_PROGRESSAPIKEY`）→ Redeploy 就得。
 
 網址參數：`?u=0082`（指定旅團）、`?mock=1`（示範模式）。
 

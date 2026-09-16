@@ -5,7 +5,7 @@
 //
 // 安全原則：
 //   1. 前端可提交 unitCode，由伺服器端 Registry 安全解析真實 GAS URL
-//   2. 只接受白名單 action (ping, status, sync, claim, loan, noticeSignup, submitRegistration)
+//   2. 只接受白名單 action (ping, status, sync, claim, loan, noticeSignup, notices, submitRegistration)
 //   3. 永不在 log 記錄密碼／apiKey／payload 機密
 //
 // 同時兼容前端直接打 GAS 或透過同源 proxy 轉發。
@@ -26,7 +26,10 @@ const SCOUT_ADMIN_API = process.env.SCOUT_ADMIN_API ||
   'https://script.google.com/macros/s/AKfycbxj5BDDGgjs559smkK4Z5aYImWYeXbN5af8U1ObON0z9WnsN6QJW4I1XWolhs5kQ_H-UQ/exec';
 
 const ALLOWED_ACTIONS = new Set([
-  'ping', 'status', 'test', 'sync', 'claim', 'loan', 'noticeSignup', 'submitRegistration'
+  'ping', 'status', 'test', 'sync', 'claim', 'loan', 'noticeSignup',
+  /* 公開通告：免登入讀旅團自己後端嘅「通告全文」（只回已發布） */
+  'notices',
+  'submitRegistration'
 ]);
 
 function sendJson(res, status, obj) {

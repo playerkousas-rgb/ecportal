@@ -26,7 +26,7 @@
  */
 
 /** 呢份 Script 會用到嘅分頁名稱（同步／查詢時用） */
-var SHEET_TABS = ['帳目', '物資', '團員', '收支申報', '通告', '報名', '物資借用', '會議', '設定', '同步紀錄',
+var SHEET_TABS = ['帳目', '物資', '團員', '收支申報', '通告', '通告全文', '報名', '物資借用', '會議', '設定', '同步紀錄',
   '進度追蹤', '其他獎章', '待批完成', '活動履歷', '待批履歷', '成員名單'];
 
 /** 每個旅團分開一個 Sheet（工作表）定用同一個 Sheet 加「旅團」欄？ */
@@ -78,6 +78,8 @@ function initializeSheets() {
     { name: '物資借用', headers: ['旅團', '時間', '申請人', '聯絡電話', '物資編號', '物資名稱', '數量', '借用日', '歸還日', '用途', '狀態', '紀錄編號'] },
     { name: '團員', headers: ['旅團', 'id', 'ymis', 'systemId', '姓名', '英文名', '身份', '生日', '職位', '狀態', '電話', '電郵', '加入日期', '備註', '同步時間'] },
     { name: '通告', headers: ['旅團', 'id', '標題(中)', '標題(英)', '類型', '狀態', '活動日期', '截止日期', '活動地點', '集合時間及地點', '解散時間及地點', '內容／程序', '服裝', '費用', '名額', '查詢', '發布日期', '同步時間'] },
+    /* 通告全文（JSON）：公開頁直接讀呢個分頁 —— 新通告唔使改 Git 都公開得到 */
+    { name: '通告全文', headers: ['旅團', 'id', '狀態', '標題', 'JSON', '更新時間'] },
     { name: '報名', headers: ['旅團', '通告編號', '通告標題', '報名時間', '姓名', '聯絡', '出席與否', '全部欄位(JSON)'] },
     { name: '會議', headers: ['旅團', 'id', '日期', '標題', '地點', '狀態', '備註', '同步時間'] },
     { name: '同步紀錄', headers: ['時間', '旅團', '旅團名稱', '統計內容'] },
@@ -174,6 +176,11 @@ function doPost(e) {
         message: lq.message || '', record_id: lq.record_id || '', error: lq.error || '' });
     }
 
+    /* 公開通告（免 API Key）：只回已發布嘅通告全文 */
+    if (body.action === 'notices') {
+      return json({ success: true, ok: true, unit: textOf(body.unit), notices: loadPublicNotices(textOf(body.unit)) });
+    }
+
     if (body.action === 'ping') return json({ ok: true, msg: 'pong', unit: body.unit, at: body.at });
     if (body.action === 'noticeSignup') {
       appendSignup(body);
@@ -213,6 +220,7 @@ function doGet(e) {
     action = String((e && e.parameter && e.parameter.action) || '');
     supplied = String((e.parameter && (e.parameter.apikey || e.parameter.apiKey)) || '');
   } catch (err0) { action = ''; }
+  if (action === 'notices') return json({ success: true, ok: true, unit: textOf((e.parameter && e.parameter.unit) || ''), notices: loadPublicNotices(textOf((e.parameter && e.parameter.unit) || '')) });
   if (action === 'load') {
     var expected = PropertiesService.getScriptProperties().getProperty('API_KEY');
     if (supplied && expected && supplied !== expected) return json({ success: false, ok: false, error: 'Invalid API Key' });
@@ -255,6 +263,9 @@ function syncAll(body) {
     ['title.zh', 'title.en', 'type', 'status', 'eventDate', 'deadline', 'venue', 'assembly', 'dismissal',
      'programme', 'dress', 'fee', 'quota', 'enquiry', 'publishAt']);
 
+  // 通告全文（公開頁讀呢個分頁；只公開 status=published）
+  counts['noticesFull'] = writeNoticesFull(ss, unit, tables.notices || []);
+
   // 報名：每一份報名一行（由通告內嘅 signups 攤開）
   counts['signups'] = writeSignups(ss, body, tables.notices || []);
 
@@ -296,6 +307,54 @@ function writeTab(ss, body, baseName, rows, schema, fallbackKeys) {
   if (data.length) sh.getRange(2, 1, data.length, header.length).setValues(data);
   sh.setFrozenRows(1);
   return rows.length;
+}
+
+/** 通告全文：一行一張通告（JSON 原樣存起，公開頁免登入讀） */
+function writeNoticesFull(ss, unit, notices) {
+  var sh = ss.getSheetByName('通告全文') || ss.insertSheet('通告全文');
+  sh.clear();
+  sh.getRange(1, 1, 1, 6).setValues([['旅團', 'id', '狀態', '標題', 'JSON', '更新時間']]).setFontWeight('bold');
+  var data = (notices || []).map(function (n) {
+    var slim = {
+      id: n.id, type: n.type, status: n.status,
+      title: n.title || {}, body: n.body || {},
+      eventDate: n.eventDate || '', deadline: n.deadline || '',
+      venue: n.venue || '', assembly: n.assembly || '', dismissal: n.dismissal || '',
+      programme: n.programme || '', dress: n.dress || '', fee: n.fee || '',
+      quota: Number(n.quota) || 0, enquiry: n.enquiry || '',
+      needSignup: n.needSignup !== false,
+      fields: n.fields || [], publishAt: n.publishAt || '',
+      signupCount: (n.signups && n.signups.length) || 0,
+      unit: unit, unitName: n.unitName || ''
+    };
+    return [unit, textOf(n.id), textOf(n.status), textOf(n.title && n.title.zh), JSON.stringify(slim), new Date()];
+  });
+  if (data.length) sh.getRange(2, 1, data.length, 6).setValues(data);
+  sh.setFrozenRows(1);
+  return data.length;
+}
+
+/**
+ * 讀公開通告（免登入）：只回 published
+ * 兩個前端共用一個後端 —— 公開頁唔使等改 Git，同步完就見到新通告
+ */
+function loadPublicNotices(unit) {
+  var out = [];
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('通告全文');
+  if (!sh) return out;
+  var rows = sh.getDataRange().getValues();
+  for (var i = 1; i < rows.length; i++) {
+    var u = textOf(rows[i][0]);
+    if (unit && u && u !== unit) continue;
+    if (textOf(rows[i][2]) !== 'published') continue;
+    var raw = rows[i][4];
+    if (!raw) continue;
+    try {
+      var obj = JSON.parse(String(raw));
+      if (obj && obj.id) out.push(obj);
+    } catch (e) { /* 壞行就略過 */ }
+  }
+  return out;
 }
 
 /** 通告報名（攤開） */

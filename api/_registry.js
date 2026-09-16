@@ -65,7 +65,7 @@ export function getRegistry() {
   const fileUnits = readFileUnits();
   const idsFromEnv = new Set();
   for (const k of Object.keys(process.env)) {
-    const m = k.match(/^TROOP_([0-9A-Za-z]+)_(BACKEND|GASURL|APIKEY|NOTICE|PORTALORIGIN)$/i);
+    const m = k.match(/^TROOP_([0-9A-Za-z]+)_(BACKEND|GASURL|APIKEY|NOTICE|NAME|NAMEEN|SHORT|PROGRESSBACKEND|PROGRESSAPIKEY|PORTALORIGIN)$/i);
     if (m) idsFromEnv.add(m[1]);
   }
 
@@ -86,14 +86,19 @@ export function getRegistry() {
     const noticeSubmitUrl =
       envVar(`TROOP_${id}_NOTICE`, `TROOP_${idUpper}_NOTICE`, `TROOP_${idNoZero}_NOTICE`) ||
       fileEntry.notice?.submitUrl || gasUrl;
-    const name = fileEntry.name || `第 ${id} 旅`;
+    const envName = envVar(`TROOP_${id}_NAME`, `TROOP_${idUpper}_NAME`, `TROOP_${idNoZero}_NAME`);
+    const name = fileEntry.name || envName || `第 ${id} 旅`;
     const code = fileEntry.code || id;
+    /* 伺服器端已經有進度後端＋Key ＝ 前端唔使填任何嘢（純 env 開團用） */
+    const progressBackend = envVar(`TROOP_${id}_PROGRESSBACKEND`, `TROOP_${idUpper}_PROGRESSBACKEND`, `TROOP_${idNoZero}_PROGRESSBACKEND`);
+    const progressKey = envVar(`TROOP_${id}_PROGRESSAPIKEY`, `TROOP_${idUpper}_PROGRESSAPIKEY`, `TROOP_${idNoZero}_PROGRESSAPIKEY`);
 
     out[id] = {
       code,
       name,
       nameEn: fileEntry.nameEn || fileEntry.en || '',
-      short: fileEntry.short || `${code}venture`,
+      short: fileEntry.short || envVar(`TROOP_${id}_SHORT`, `TROOP_${idUpper}_SHORT`, `TROOP_${idNoZero}_SHORT`) || `${code}venture`,
+      nameEn: fileEntry.nameEn || fileEntry.en || envVar(`TROOP_${id}_NAMEEN`, `TROOP_${idUpper}_NAMEEN`, `TROOP_${idNoZero}_NAMEEN`) || '',
       section: fileEntry.section || '深資童軍',
       region: fileEntry.region || '',
       sponsor: fileEntry.sponsor || '',
@@ -108,7 +113,10 @@ export function getRegistry() {
       notice: {
         submitUrl: noticeSubmitUrl
       },
-      backendTrusted: isTrustedExecUrl(gasUrl)
+      backendTrusted: isTrustedExecUrl(gasUrl),
+      /* 呢個旅團係唔係靠伺服器端 env 開（Git 未加 JSON） */
+      fromEnv: !fileUnits[id],
+      progressServerSide: !!(progressBackend && progressKey)
     };
   }
   return out;
@@ -173,7 +181,10 @@ export function listPublicUnits() {
       region: u.region,
       sponsor: u.sponsor,
       address: u.address,
-      theme: u.theme
+      theme: u.theme,
+      /* 前端用嚟交代狀態：伺服器端已經有進度後端＋Key（前端唔使填）／通告可以直接送到總表 */
+      progressServerSide: !!u.progressServerSide,
+      noticeReady: !!(u.notice?.submitUrl || u.backend?.gasUrl)
     };
   }
   return out;

@@ -180,7 +180,7 @@ function blankDb(mode, code, entry = {}) {
     methods: ['現金', '轉數快 FPS', '銀行轉賬', '自動扣賬', '支票', 'PayMe', '其他'],
     invItems: [], invLoans: [], invAudits: [], invNextCode: 'G-001',
     auditLog: [],
-    meta: { createdAt: nowStamp(), updatedAt: nowStamp(), seedSource: mode === 'mock' ? 'data/mock/' : (entry.local ? '（本地旅團：空白資料）' : (dataPathOf(code) || '')), real: mode === 'real' }
+    meta: { createdAt: nowStamp(), updatedAt: nowStamp(), seedSource: mode === 'mock' ? 'data/mock/' : (entry.local ? '（本地旅團：空白資料）' : (entry.fromApi ? '（伺服器 Registry：由空白資料庫開始）' : (dataPathOf(code) || ''))), real: mode === 'real' }
   };
 }
 
@@ -195,7 +195,11 @@ async function buildSeed(mode, code) {
     pick('finance.reference.json'), pick('notices.json'), pick('tables.json')
   ]);
   const got = [unit, cons, members, finance, inventory, meetings, finRef, notices, tables].filter(Boolean).length;
-  if (!got) { db.meta.seedFailed = true; return db; }
+  if (!got) {
+    /* 伺服器旅團（純環境變數開）本身冇靜態資料檔 —— 由空白資料庫開始，唔算失敗 */
+    if (entry.fromApi) { db.meta.seedSource = '（伺服器 Registry：由空白資料庫開始）'; return db; }
+    db.meta.seedFailed = true; return db;
+  }
 
   if (unit) {
     db.unit = { ...db.unit, ...unit };

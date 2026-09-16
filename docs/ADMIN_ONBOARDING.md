@@ -128,6 +128,24 @@ meetings.json       ← 會議（可選）
 
 ---
 
+## 2b. 最快開團法（唔改 Git）：Vercel 環境變數
+
+旅團畀你 `/exec` ＋ API Key 之後，**只喺 Vercel** 加：
+
+```
+TROOP_<編號>_BACKEND          = 旅團嘅 /exec 網址
+TROOP_<編號>_APIKEY           = 旅團嘅 API Key
+TROOP_<編號>_NAME             = 第八十一旅深資童軍團（唔填＝「第 0081 旅」）
+TROOP_<編號>_PROGRESSBACKEND  = 進度用 /exec（同一個都得）
+TROOP_<編號>_PROGRESSAPIKEY   = 進度用 API Key
+```
+
+然後 **Redeploy**（環境變數要重新部署先生效）。旅團即刻出現喺清單，資料由空白開始；
+通告喺執委系統開 + 同步一次，公開頁會由旅團自己後端讀，唔使改 Git。
+（想預載團章／名冊／舊帳 → 用方法 A 加 `data/units/<編號>/`，見 [`ADD_NEW_UNIT.md`](ADD_NEW_UNIT.md)。）
+
+---
+
 ## 3. 每次收到申請嘅 checklist
 
 ```

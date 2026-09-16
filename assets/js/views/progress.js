@@ -445,8 +445,10 @@ function settingsView() {
         <div class="card-head"><div class="card-title">連線狀態</div></div>
         <div style="padding:14px 16px">
           ${kv([
-            ['後端網址', c.backend ? `<span style="color:var(--ok)">${c.registered ? '用返旅團登記咗嘅後端' : '已填'}</span>` : '<span style="color:var(--warn)">未設定</span>'],
-            ['API Key', c.apiKey ? '<span style="color:var(--ok)">已填</span>' : '<span style="color:var(--warn)">未填</span>'],
+            ['後端網址', c.backend ? `<span style="color:var(--ok)">${c.registered ? '用返旅團登記咗嘅後端' : '已填'}</span>`
+              : c.serverSide ? '<span style="color:var(--ok)">伺服器端已設定</span>' : '<span style="color:var(--warn)">未設定</span>'],
+            ['API Key', c.apiKey ? '<span style="color:var(--ok)">已填</span>'
+              : c.serverSide ? '<span style="color:var(--ok)">伺服器端已設定</span>' : '<span style="color:var(--warn)">未填</span>'],
             ['考核項目', catalog ? `${Object.keys(catalog).length} 項` : '未讀取'],
             ['上次讀取', remote ? esc(remote.at) : '—'],
             ['讀到嘅成員', remote ? String((remote.data.members || []).length) : '—']
@@ -484,7 +486,7 @@ export function render(params) {
   ${pageHead({
     title: '進度紀錄',
     sub: configured
-      ? `${progressCfg().name} · 直接讀寫旅團自己嘅後端${remote ? ` · 上次讀取 ${remote.at}` : ''}`
+      ? `${progressCfg().name} · 直接讀寫旅團自己嘅後端${progressCfg().serverSide ? '（後端由伺服器端設定）' : ''}${remote ? ` · 上次讀取 ${remote.at}` : ''}`
       : '未接駁 —— 去「設定」填入旅團後端嘅 /exec 網址同 API Key',
     actions: `
       <button class="btn btn-sm" data-act="reload" ${configured ? '' : 'disabled'}>${icon('refresh', 15)} ${loading ? '讀取中…' : '重新讀取'}</button>
@@ -582,14 +584,26 @@ export function mount(root, params) {
     const kind = b.dataset.revKind;
     const id = b.dataset.revId;
     const decision = b.dataset.revDecision;
-    if (decision === 'rejected') {
-      const yes = await modal({
-        title: '拒絕呢個申報？', danger: true,
-        body: '<p class="sm">拒絕之後，申請狀態會改成「已拒絕」，團員可以重新申報。紀錄唔會被刪。</p>',
-        actions: [{ label: '取消', class: 'btn', value: false }, { label: '確認拒絕', class: 'btn-accent', value: true }]
-      });
-      if (!yes) return;
-    }
+    /* 防呆：批／拒都一定要撳「確定」先生效（唔會一撳就寫入後端） */
+    const row = kind === 'log'
+      ? (remote?.data?.logRequests || []).find(x => String(x.request_id) === String(id))
+      : (remote?.data?.pendingRequests || []).find(x => String(x.request_id) === String(id));
+    const who = row ? esc(row.name || row.ymis || '') : '';
+    const what = kind === 'log'
+      ? esc(row?.title || '') + (row?.date ? `（${esc(String(row.date).slice(0, 10))}）` : '')
+      : esc(row?.item_name || row?.item_id || '');
+    const when = reviewDate ? `確認日期：<b>${esc(reviewDate)}</b>` : '確認日期：<b>申報日期</b>';
+    const yes = await modal({
+      title: decision === 'approved' ? '確定批准？' : '確定拒絕？',
+      danger: decision !== 'approved',
+      body: `<p class="sm">${decision === 'approved'
+          ? '批准會即刻寫入後端，兩個前端都見到。'
+          : '拒絕只會改狀態，唔會刪紀錄，團員可以重新申報。'}</p>
+        <div class="note-box mt-8"><div class="sm"><b>${who}</b> · ${what}<br>${when}</div></div>`,
+      actions: [{ label: '取消', class: 'btn', value: false },
+        { label: decision === 'approved' ? '確定批准' : '確定拒絕', class: decision === 'approved' ? 'btn-primary' : 'btn-accent', value: true }]
+    });
+    if (!yes) return;
     reviewing = true; refresh();
     const reviewer = current()?.name || '執委管理系統';
     const r = kind === 'log'

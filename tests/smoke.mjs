@@ -1192,6 +1192,45 @@ section('通告欄位（活動詳情）');
   store.remove('notices', saved.id);
 }
 
+/* ---------- 純環境變數開新旅團（唔改 Git） ---------- */
+section('伺服器 Registry 旅團（Vercel 環境變數開）');
+{
+  const units = await import('../assets/js/lib/units.js');
+  const { progressCfg, progressConfigured } = await import('../assets/js/lib/progress.js');
+  const realFetch = globalThis.fetch;
+  const SERVER_UNITS = {
+    '0099': { code: '0099', name: '第九十九旅深資童軍團', short: '0099venture', progressServerSide: true, noticeReady: true }
+  };
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url);
+    if (/api\/units/.test(u)) {
+      return { ok: true, status: 200, text: async () => JSON.stringify({ units: SERVER_UNITS }),
+        json: async () => ({ units: SERVER_UNITS }) };
+    }
+    return realFetch(url, init);
+  };
+  try {
+    await units.loadRegistry(true);
+    ok('伺服器 Registry 嘅旅團會加入旅團清單（唔使改 data/units.json）',
+      !!units.unitEntry('0099') && units.unitEntry('0099').name === '第九十九旅深資童軍團',
+      JSON.stringify(units.unitList().map(u => u.code)));
+    ok('伺服器旅團標示 fromApi（資料由空白開始，唔會去讀 data/units/0099/）',
+      units.unitEntry('0099').fromApi === true && units.dataPathOf('0099') === null);
+
+    /* 進度：伺服器端已經有 PROGRESSBACKEND＋KEY → 前端唔使填任何嘢 */
+    const c = progressCfg('0099');
+    ok('伺服器旅團嘅進度自動用伺服器端設定（唔使填 /exec ＋ Key）',
+      c.serverSide === true && c.backend === '', JSON.stringify(c));
+    ok('未登記嘅旅團唔會借用其他旅團嘅後端（免送錯資料）', units.backendOf('0098') === null,
+      JSON.stringify(units.backendOf('0098')));
+    ok('本機旅團（0082）唔會誤當伺服器端設定', progressCfg('0082').serverSide === false,
+      JSON.stringify(progressCfg('0082')));
+  } finally {
+    globalThis.fetch = realFetch;
+    await units.loadRegistry(true);
+  }
+}
+
 /* ---------- 5. 旅團選擇閘 ---------- */
 section('旅團選擇閘（先揀旅團再登入）');
 {
@@ -1241,7 +1280,10 @@ section('進度紀錄（一個後端 · 兩個前端）');
   const lp = await import('../assets/js/lib/progress.js');
   const cfg = lp.progressCfg();
   ok('進度係讀寫旅團自己嘅後端（預設用返 Registry 登記咗嘅 /exec）',
-    !!cfg.backend && /\/exec$/.test(cfg.backend), JSON.stringify({ backend: cfg.backend, registered: cfg.registered }));
+    MODE === 'mock'
+      ? cfg.backend === ''                     /* 示範模式唔可以指向真實旅團嘅後端 */
+      : (!!cfg.backend && /\/exec$/.test(cfg.backend)),
+    JSON.stringify({ backend: cfg.backend, registered: cfg.registered }));
   ok('預設用內建考核項目定義（唔使連任何其他系統）',
     lp.DEFAULT_CATALOG_URL === 'data/progress/items.json');
   ok('不再有 portal / 外連設定（巳移除）',
@@ -1276,6 +1318,11 @@ section('進度紀錄（一個後端 · 兩個前端）');
   ok('Code.gs 支援 ?action=load（讀進度）', /action === 'load'/.test(code) && /function loadProgressData/.test(code));
   ok('Code.gs 支援 save / saveOtherBadge 寫入（要 API Key）', /'save' \|\| body\.action === 'saveOtherBadge'/.test(code) && /saveProgress/.test(code));
   ok('Code.gs 寫入前一定核對 API Key', /未授權：API Key 唔正確/.test(code));
+  ok('Code.gs 有「通告全文」分頁（公開頁免登入讀新通告，唔使改 Git）',
+    SHEET_TABS.includes('通告全文') && /function writeNoticesFull/.test(code) && /function loadPublicNotices/.test(code));
+  ok('公開通告只回 published（草稿唔會外洩）',
+    /textOf\(rows\[i\]\[2\]\) !== 'published'/.test(code));
+  ok('Code.gs 支援 action=notices（公開讀通告）', /body\.action === 'notices'/.test(code));
   ok('Code.gs 有審批中心（reviewRequest / reviewLogRequest，要 API Key）',
     /body\.action === 'reviewRequest' \|\| body\.action === 'reviewLogRequest'/.test(code)
     && /function reviewProgressRequest/.test(code) && /function reviewLogRequest/.test(code));
@@ -1904,6 +1951,15 @@ section('進度紀錄（讀 ＋ 勾 ＋ 寫，同一個後端）');
 
     const apprBtn = doc.getElementById('view').querySelector('[data-rev-kind="req"][data-rev-decision="approved"]');
     apprBtn.click();
+    await new Promise(r => setTimeout(r, 200));
+    const dlg = () => doc.querySelector('.modal, [role="dialog"]');
+    ok('批准之前一定要撳「確定」（防呆：唔會一撳就寫入）',
+      !calls.some(c => c.body?.action === 'reviewRequest')
+      && [...doc.querySelectorAll('.modal button, [role="dialog"] button')].some(b => /確定批准/.test(b.textContent || '')));
+    ok('確認框列出團員同項目（畀你核對）',
+      /李小明/.test(dlg()?.textContent || '') && /服務一次/.test(dlg()?.textContent || ''));
+    [...doc.querySelectorAll('.modal button, [role="dialog"] button')]
+      .find(b => /確定批准/.test(b.textContent || ''))?.click();
     await new Promise(r => setTimeout(r, 300));
     const revCall = calls.filter(c => c.body?.action === 'reviewRequest').pop();
     ok('批准會 POST /api/progress action=reviewRequest（帶 request_id／decision）',
@@ -1916,7 +1972,7 @@ section('進度紀錄（讀 ＋ 勾 ＋ 寫，同一個後端）');
     rejBtn.click();
     await new Promise(r => setTimeout(r, 200));
     const confirmBtn = [...doc.querySelectorAll('.modal button, [role="dialog"] button')]
-      .find(b => /確認拒絕/.test(b.textContent || ''));
+      .find(b => /確定拒絕/.test(b.textContent || ''));
     ok('拒絕之前要確認（防手誤）', !!confirmBtn);
     confirmBtn?.click();
     await new Promise(r => setTimeout(r, 300));

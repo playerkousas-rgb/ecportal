@@ -1,6 +1,8 @@
 /* ============================================================
    units.js — 旅團 Registry（多旅團）
    正式旅團：data/units.json + data/units/<編號>/*.json（Git Registry 管理）
+   伺服器旅團：由 Vercel 環境變數 TROOP_<編號>_* 定義（/api/units 回傳；
+               唔使改 Git 都開得新旅團，資料由空白開始）
    本地旅團：只存喺呢部機嘅 localStorage（測試用，標示「本地」）
    ============================================================ */
 
@@ -47,13 +49,31 @@ export async function loadRegistry(force = false) {
     const r = await fetch(REG_URL + '?_=' + Date.now(), { cache: 'no-store' });
     if (r.ok) fromFile = await r.json();
   } catch (e) { /* 可能係 file:// 或者未部署 */ }
+
+  /* 伺服器 Registry：Vercel 環境變數定義嘅旅團（冇 /api 就自動略過） */
+  const fromApi = await fetchServerUnits();
+
   if (fromFile && fromFile.units) {
-    cache = fromFile;
-    try { localStorage.setItem(REG_CACHE, JSON.stringify(fromFile)); } catch { /* ignore */ }
+    const merged = { ...fromFile, units: { ...fromFile.units } };
+    Object.entries(fromApi).forEach(([code, u]) => {
+      merged.units[code] = { ...(merged.units[code] || {}), ...u, fromApi: true };
+    });
+    cache = merged;
+    try { localStorage.setItem(REG_CACHE, JSON.stringify(merged)); } catch { /* ignore */ }
   } else {
     registry(); // 用快取或內建
   }
   return cache;
+}
+
+/** 由 /api/units 攞伺服器端（環境變數）定義嘅旅團；靜態部署／未設定就回傳空物件 */
+async function fetchServerUnits() {
+  try {
+    const r = await fetch('api/units?_=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) return {};
+    const j = await r.json();
+    return (j && j.units && typeof j.units === 'object') ? j.units : {};
+  } catch (e) { return {}; }
 }
 
 export function localUnits() { return readLocal(); }
@@ -80,8 +100,12 @@ export function unitEntry(code) {
 export function backendOf(code) {
   const reg = registry();
   const entry = unitEntry(code) || {};
+  /* 安全：唔喺 Registry 嘅旅團（連本地都唔係）＝未開戶，唔可以借用其他旅團嘅後端 */
+  if (!Object.keys(entry).length) return null;
   const val = entry.backend || {};
-  const shared = reg.backend || {};
+  /* 伺服器 Registry（env）開嘅旅團：後端由 env（TROOP_<id>_*）話事，
+     唔可以借用 registry 頂層嘅共用後端（多數係示範／其他旅團嘅 Sheet） */
+  const shared = entry.fromApi ? {} : (reg.backend || {});
   const gasUrl = val.gasUrl || shared.gasUrl || '';
   if (!gasUrl) return null;
   return {
@@ -104,6 +128,7 @@ export function dataPathOf(code) {
   const u = unitEntry(code);
   if (u?.dataPath) return u.dataPath;
   if (u?.local) return null;                    // 本地旅團冇資料檔案
+  if (u?.fromApi) return null;                  // 伺服器旅團：由空白資料庫開始（資料喺自己後端）
   return `data/units/${code}/`;
 }
 

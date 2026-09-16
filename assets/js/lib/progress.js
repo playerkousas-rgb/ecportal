@@ -16,18 +16,21 @@
 
 import { load, commit } from './store.js';
 import { profile } from './model.js';
-import { backendOf } from './units.js';
+import { backendOf, unitEntry } from './units.js';
 
 /** 預設考核項目定義（app 內建，離線可用） */
 export const DEFAULT_CATALOG_URL = 'data/progress/items.json';
 
 /* ---------- 設定（跟旅團儲存；會跟 JSON 備份一齊走） ---------- */
-export function progressCfg() {
+export function progressCfg(unitOverride = '') {
   const p = profile();
   const b = p.progress?.backend || {};
-  const unit = b.unit || load().unitCode || '';
+  const unit = b.unit || unitOverride || load().unitCode || '';
   const be = backendOf(unit) || {};
+  /* 伺服器端 Registry（環境變數）已經有進度後端＋Key：前端唔使填，直接經 /api/progress 讀寫 */
+  const serverSide = !!(unitEntry(unit)?.progressServerSide) && !b.backend && !b.apiKey;
   return {
+    serverSide,
     /* 後端：旅團自己填嘅 → 冇填就用返 Registry 登記咗嘅旅團後端（兩者其實係同一個後端） */
     backend: b.backend || be.gasUrl || '',
     apiKey: b.apiKey || (b.backend ? '' : (be.apiKey || '')),
@@ -52,7 +55,7 @@ export function setProgressCfg(patch = {}) {
 
 export function progressConfigured() {
   const c = progressCfg();
-  return !!(c.backend && c.apiKey);
+  return !!((c.backend && c.apiKey) || c.serverSide);
 }
 
 /** 後端係唔係已經登記好（未填都可以用，話畀用戶知係「自動用返旅團後端」） */

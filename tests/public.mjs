@@ -179,6 +179,63 @@ function bootNotice(search) {
   ok('送出後有成功訊息', txt().includes('已收到'));
 }
 
+// ②b 伺服器（env）旅團：冇靜態通告檔 → 由旅團後端讀通告；報名經同源 api/proxy 送出
+{
+  const realFetch = globalThis.fetch;
+  const proxyCalls = [];
+  const ENV_NOTICE = {
+    id: 'nt-envunit', type: 'event', status: 'published', needSignup: true,
+    title: { zh: 'env 旅團通告' }, eventDate: '2026-10-03', venue: '北潭涌度假營',
+    assembly: '1300 筲箕灣中心', dress: '戶外制服', fee: '$280',
+    fields: [{ key: 'name', label: '姓名', type: 'text', required: true }],
+    body: { zh: '由旅團後端讀出嚟嘅通告全文。' }
+  };
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url);
+    if (/api\/proxy/.test(u)) {
+      const body = init.body ? JSON.parse(init.body) : {};
+      proxyCalls.push({ url: u, body });
+      if (body.action === 'notices') {
+        return { ok: true, status: 200, text: async () => JSON.stringify({ success: true, notices: [ENV_NOTICE] }),
+          json: async () => ({ success: true, notices: [ENV_NOTICE] }) };
+      }
+      return { ok: true, status: 200, text: async () => JSON.stringify({ success: true, msg: '已記錄報名' }),
+        json: async () => ({ success: true, msg: '已記錄報名' }) };
+    }
+    if (/api\/units/.test(u)) {
+      return { ok: true, status: 200, text: async () => JSON.stringify({ units: { '0081': { code: '0081', name: '第八十一旅深資童軍團', fromApi: true } } }),
+        json: async () => ({ units: { '0081': { code: '0081', name: '第八十一旅深資童軍團', fromApi: true } } }) };
+    }
+    return realFetch(url, init);
+  };
+  const w = bootNotice('?u=0081&n=nt-envunit');
+  await import('../assets/js/public-notice.js?case=' + ++noticeCase);
+  await wait(450);
+  const d = w.document;
+  const txt = () => d.getElementById('app')?.textContent || '';
+  const form = d.getElementById('signup-form');
+  ok('env 旅團（冇靜態通告檔）由自己後端讀到通告', txt().includes('env 旅團通告'), txt().slice(0, 100));
+  ok('後端讀返嘅欄位照樣顯示（集合／服裝／費用）',
+    txt().includes('1300 筲箕灣中心') && txt().includes('戶外制服') && txt().includes('$280'));
+  ok('有 POST api/proxy action=notices（帶 unit）',
+    proxyCalls.some(c => c.body?.action === 'notices' && c.body?.unit === '0081'));
+  if (form) {
+    ok('報名提示「直接記錄到旅團嘅總表」', txt().includes('直接記錄到旅團嘅總表'));
+    d.querySelector('[data-fk="name"]').value = '測試團員';
+    form.dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true }));
+    await wait(400);
+    ok('唔會借用其他旅團嘅後端（env 團冇登記就唔會送去 0082）',
+      !proxyCalls.some(c => /script\.google\.com/.test(String(c.url || ''))));
+    ok('送出會 POST api/proxy action=noticeSignup（伺服器端解析後端＋Key）',
+      proxyCalls.some(c => c.body?.action === 'noticeSignup' && c.body?.unit === '0081'),
+      JSON.stringify(proxyCalls.map(c => c.body?.action)));
+    ok('送出後有成功訊息', txt().includes('已收到'));
+  } else {
+    ok('env 旅團通告照樣有報名表', false, txt().slice(0, 120));
+  }
+  globalThis.fetch = realFetch;
+}
+
 // ③ 搵唔到通告／連結失效
 {
   const w = bootNotice('?u=0082&n=no-such-notice');
