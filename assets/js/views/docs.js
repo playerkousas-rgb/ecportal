@@ -6,6 +6,7 @@ import { profile } from '../lib/model.js';
 import { accounts, currentRole, displayName, ROLES } from '../lib/auth.js';
 import { load, currentUnit, isMock } from '../lib/store.js';
 import { backendOf } from '../lib/units.js';
+import { envUnitTemplate, envUnitSteps } from '../lib/onboard.js';
 import { esc, icon, copyText, toast } from '../lib/util.js';
 import { go } from '../lib/router.js';
 import { pageHead, tabs, noteBox, kv } from './ui.js';
@@ -27,6 +28,7 @@ const NAV = [
   ['progress', '進度紀錄（同一個後端）'],
   ['mock', '示範資料（MOCK）'],
   ['multiunit', '多旅團部署'],
+  ['newunit', '開新旅團（唔使改 Git）'],
   ['tablesync', '插入自己嘅 Sheet 與總表同步'],
   ['backup', '輸出與備份']
 ];
@@ -71,6 +73,7 @@ function body() {
     case 'progress': return progressDoc();
     case 'mock': return mockDoc();
     case 'multiunit': return multiUnitDoc();
+    case 'newunit': return newUnitDoc();
     case 'backup': return backupDoc();
     default: return startDoc();
   }
@@ -537,6 +540,83 @@ function multiUnitDoc() {
   ${P('每個旅團有自己嘅帳戶清單（領袖 / 執委）。超管帳戶係全平台共用嘅隱藏帳戶。')}`;
 }
 
+/* ============================================================
+   開新旅團（方法 B：Vercel 環境變數）—— 唔使改 Git
+   ------------------------------------------------------------
+   呢章係「驚唔記得點做」用嘅：步驟、可以複製嘅變數範本、
+   檢查清單全部喺度。同樣內容亦可以喺「帳號與系統 → 旅團設定」撳入嚟。
+   ============================================================ */
+function newUnitDoc() {
+  return `
+  ${H('開新旅團：方法 B（唔使改 Git，最快）')}
+  ${P('情境：<b>旅團畀你一個 Apps Script <code>/exec</code> 網址 ＋ API Key</b>，你想佢即刻可以登入用。')}
+  ${noteBox('兩個方法並存，唔使二選一：<br>'
+    + '<b>方法 B（呢一章）</b>＝喺 Vercel 加環境變數，唔使改 Git；旅團由空白資料開始，'
+    + '團章／名冊／舊帳之後慢慢入（或者隨時搬去方法 A）。<br>'
+    + '<b>方法 A</b>＝喺 <code>data/units.json</code> ＋ <code>data/units/&lt;編號&gt;/</code> 加檔案（可以預載資料）。', 'brand')}
+
+  ${H('第 1 步：產生環境變數（喺下面填一填、撳複製）')}
+  <div class="card"><div style="padding:16px 18px">
+    <div class="grid g-2" style="gap:12px">
+      <div class="field"><label class="label">旅團編號</label>
+        <input class="input" id="nu-code" placeholder="例：0081" value="0081"></div>
+      <div class="field"><label class="label">旅團名稱</label>
+        <input class="input" id="nu-name" placeholder="例：第八十一旅深資童軍團"></div>
+      <div class="field" style="grid-column:1/-1"><label class="label">/exec 網址（旅團畀你嗰個）</label>
+        <input class="input" id="nu-exec" placeholder="https://script.google.com/macros/s/AKfy…/exec"></div>
+      <div class="field" style="grid-column:1/-1"><label class="label">API Key</label>
+        <input class="input" id="nu-key" placeholder="執行 showApiKey() 複製嘅字串"></div>
+    </div>
+    <div class="row gap-8 wrap mt-12">
+      <button class="btn btn-primary" data-act="gen-env">${icon('refresh', 15)} 產生</button>
+      <button class="btn" data-act="copy-env">${icon('copy', 15)} 複製環境變數</button>
+      <button class="btn" data-act="copy-steps">${icon('copy', 15)} 複製逐步指示</button>
+    </div>
+    <pre class="code mt-12" id="nu-out">${esc(envUnitTemplate('0081'))}</pre>
+    <div class="hint">複製之後：Vercel → 專案 → <b>Settings → Environment Variables</b> 逐個貼上（可以一次貼多行，
+      佢會自動拆）。</div>
+  </div></div>
+
+  ${H('第 2 步：Redeploy')}
+  <div class="steps">
+    ${envUnitSteps('0081').map(x => `<div class="step"><div>${esc(x)}</div></div>`).join('')}
+  </div>
+  ${noteBox('環境變數<b>要 Redeploy 先生效</b>（唔係即刻）。部署完旅團清單就會見到新編號，'
+    + '佢嘅資料由<b>空白</b>開始（唔會讀 <code>data/units/&lt;編號&gt;/</code>，因為冇呢個資料夾）。', 'warn')}
+
+  ${H('第 3 步：旅團登入之後')}
+  <ul style="padding-left:18px;line-height:1.95" class="sm">
+    <li><b>通告</b>：開通告 → 喺「總表同步」撳一次同步 → 公開頁（<code>notice.html?u=&lt;編號&gt;&amp;n=&lt;通告編號&gt;</code>）
+      會直接由佢自己嘅後端讀 → 可以 WhatsApp 分享 ＋ QR 收報名（唔使改 Git 都公開到）</li>
+    <li><b>進度</b>：如果已經設咗 <code>TROOP_&lt;編號&gt;_PROGRESSBACKEND</code> ＋ <code>_PROGRESSAPIKEY</code>，
+      前端「進度」頁會顯示「<b>伺服器端已設定</b>」，唔使填任何嘢就讀到成員、勾得進度、批得申報</li>
+    <li><b>團章</b>：去「團章」寫好 → 發布 → 公開頁 <code>constitution.html?u=&lt;編號&gt;</code></li>
+    <li><b>名冊</b>：去「用戶」加執委／領袖帳戶同團員（之後同步一次就會寫入佢自己嘅 Sheet）</li>
+  </ul>
+
+  ${H('方法 A：Git Registry（想預載資料先用）')}
+  <div class="steps">
+    <div class="step"><div>喺 <code>data/units.json</code> 嘅 <code>units</code> 加一個編號：
+      <code>"0100": { "code": "0100", "name": "…", "dataPath": "data/units/0100/", "backend": { "gasUrl": "…/exec", "apiKey": "…" } }</code></div></div>
+    <div class="step"><div>建立 <code>data/units/0100/</code>，複製 0082 嘅檔案再改（<code>unit.json</code>／
+      <code>constitution.json</code>／<code>members.json</code>／<code>finance.json</code>／<code>inventory.json</code>…）</div></div>
+    <div class="step"><div>Commit & push → 部署 → 旅團清單見到新編號</div></div>
+  </div>
+  ${P('<span class="xs faint">詳細欄位：repo 入面 <code>docs/ADD_NEW_UNIT.md</code>；'
+    + '每次收到申請嘅 checklist：<code>docs/ADMIN_ONBOARDING.md</code>。</span>')}
+
+  ${H('檢查清單（照住剔）')}
+  <ul style="padding-left:18px;line-height:1.95" class="sm">
+    <li>□ 收到旅團嘅 <code>/exec</code> 網址 ＋ API Key</li>
+    <li>□ Vercel 加咗 5 個 <code>TROOP_&lt;編號&gt;_*</code> 變數</li>
+    <li>□ Redeploy 完成，旅團清單見到新編號</li>
+    <li>□ 旅團更新咗 Code.gs ＋ 執行 <code>initializeSheets</code></li>
+    <li>□ 實測：登入 → 開一張測試通告 → 用 QR／連結報名 → Sheet「報名」分頁見到紀錄</li>
+    <li>□ 實測：進度頁見到成員（或者顯示「伺服器端已設定」）</li>
+    <li>□ 通知旅團：以後自己入「進度 → 設定」可以覆蓋 <code>/exec</code> ＋ Key</li>
+  </ul>`;
+}
+
 function backupDoc() {
   return `
   ${H('可以輸出咩')}
@@ -568,6 +648,32 @@ export function mount(root) {
     refresh();
   }));
   root.querySelectorAll('[data-act="print"]').forEach(b => b.addEventListener('click', () => window.print()));
+  /* 開新旅團：產生／複製環境變數 */
+  const nu = {
+    code: () => root.querySelector('#nu-code')?.value.trim() || '0081',
+    name: () => root.querySelector('#nu-name')?.value.trim() || '',
+    exec: () => root.querySelector('#nu-exec')?.value.trim() || '',
+    key: () => root.querySelector('#nu-key')?.value.trim() || ''
+  };
+  const out = () => root.querySelector('#nu-out');
+  const paintNu = () => {
+    const el = out();
+    if (el) el.textContent = envUnitTemplate(nu.code(), nu.name(), nu.exec(), nu.key());
+  };
+  ['#nu-code', '#nu-name', '#nu-exec', '#nu-key'].forEach(sel => {
+    const el = root.querySelector(sel);
+    if (el) el.addEventListener('input', paintNu);
+  });
+  root.querySelector('[data-act="gen-env"]')?.addEventListener('click', () => { paintNu(); toast('已更新範本', 'ok'); });
+  root.querySelector('[data-act="copy-env"]')?.addEventListener('click', async () => {
+    paintNu();
+    const ok = await copyText(envUnitTemplate(nu.code(), nu.name(), nu.exec(), nu.key()));
+    toast(ok ? '已複製環境變數 —— 貼落 Vercel → Settings → Environment Variables' : '複製失敗，請手動選取', ok ? 'ok' : 'err');
+  });
+  root.querySelector('[data-act="copy-steps"]')?.addEventListener('click', async () => {
+    const ok = await copyText(envUnitSteps(nu.code()).map((x, i) => `${i + 1}. ${x}`).join('\n'));
+    toast(ok ? '已複製逐步指示' : '複製失敗，請手動選取', ok ? 'ok' : 'err');
+  });
   root.querySelectorAll('[data-go]').forEach(el => el.addEventListener('click', () => go(el.dataset.go)));
 }
 

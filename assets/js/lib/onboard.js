@@ -110,6 +110,38 @@ export async function submitApplication(input = {}, timeoutMs = 20000) {
 }
 
 /** 管理員收到申請之後要做嘅嘢（用嚟顯示／複製） */
+/**
+ * 開新旅團（方法 B：Vercel 環境變數）—— 產生可以直接複製嘅設定
+ * @param {string} code 旅團編號（例如 0081）
+ * @param {string} name 旅團名稱（可選）
+ * @param {string} execUrl 旅團嘅 Apps Script /exec 網址（可選）
+ * @param {string} apiKey 旅團嘅 API Key（可選）
+ */
+export function envUnitTemplate(code = '<編號>', name = '', execUrl = '', apiKey = '') {
+  const c = String(code || '<編號>').trim() || '<編號>';
+  const url = String(execUrl || '').trim() || 'https://script.google.com/macros/s/AKfy…/exec';
+  const key = String(apiKey || '').trim() || '<佢畀你嘅 API Key>';
+  const nm = String(name || '').trim() || `第 ${c} 旅深資童軍團`;
+  return [
+    `TROOP_${c}_BACKEND         = ${url}`,
+    `TROOP_${c}_APIKEY          = ${key}`,
+    `TROOP_${c}_NAME            = ${nm}`,
+    `TROOP_${c}_PROGRESSBACKEND = ${url}`,
+    `TROOP_${c}_PROGRESSAPIKEY  = ${key}`
+  ].join('\n');
+}
+
+/** 貼落 Vercel 嘅逐步指示（同一個來源：教學頁同「帳號與系統」都用呢個） */
+export function envUnitSteps(code = '<編號>') {
+  return [
+    `Vercel → 你嘅專案 → Settings → Environment Variables`,
+    `逐個新增上面 5 個變數（Production / Preview / Development 都勾）`,
+    `儲存後撳 Deployments → 最新嗰個 → … → Redeploy（環境變數要重新部署先生效）`,
+    `部署完打開系統 → 旅團清單應該出現 ${code}`,
+    `通知旅團更新 Apps Script 嘅 Code.gs（「資料管理 → 總表同步」下載）＋ 執行一次 initializeSheets`
+  ];
+}
+
 export function adminChecklist(troopId = '<編號>') {
   return [
     `執委管理系統 → data/units.json：喺 units 加 "${troopId}" entry（code / name / dataPath / backend.gasUrl / backend.apiKey）`,

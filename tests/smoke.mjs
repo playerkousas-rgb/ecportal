@@ -1231,6 +1231,64 @@ section('伺服器 Registry 旅團（Vercel 環境變數開）');
   }
 }
 
+/* ---------- 開新旅團教學（App 內睇得到） ---------- */
+section('開新旅團教學（教學頁 ＋ 帳號與系統）');
+{
+  const ob = await import('../assets/js/lib/onboard.js');
+  const t = ob.envUnitTemplate('0081', '第八十一旅深資童軍團', 'https://script.google.com/macros/s/AKfycbTESTTESTTESTTESTTESTTESTTESTTEST/exec', 'k81');
+  ok('環境變數範本產生器（5 個變數齊）',
+    ['TROOP_0081_BACKEND', 'TROOP_0081_APIKEY', 'TROOP_0081_NAME', 'TROOP_0081_PROGRESSBACKEND', 'TROOP_0081_PROGRESSAPIKEY']
+      .every(k => t.includes(k)), t.split('\n')[0]);
+  ok('範本會帶入 /exec 網址同 Key', t.includes('AKfycbTEST') && t.includes('= k81'));
+  ok('逐步指示提到 Redeploy 同 initializeSheets',
+    ob.envUnitSteps('0081').join(' ').includes('Redeploy') && ob.envUnitSteps('0081').join(' ').includes('initializeSheets'));
+
+  /* 教學頁：新章節存在、可以複製 */
+  window.location.hash = '#/docs/newunit';
+  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+  await new Promise(r => setTimeout(r, 80));
+  const dv = doc.getElementById('view');
+  ok('教學有「開新旅團（唔使改 Git）」章節', /開新旅團/.test(dv.textContent) && /唔使改 Git/.test(dv.textContent));
+  ok('教學頁有環境變數範本（可以喺 app 內即刻複製）',
+    !!dv.querySelector('#nu-out') && /TROOP_0081_BACKEND/.test(dv.querySelector('#nu-out')?.textContent || ''));
+  ok('教學頁有「複製環境變數」／「複製逐步指示」掣',
+    !!dv.querySelector('[data-act="copy-env"]') && !!dv.querySelector('[data-act="copy-steps"]'));
+  const codeIn = dv.querySelector('#nu-code');
+  codeIn.value = '0085';
+  codeIn.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await new Promise(r => setTimeout(r, 60));
+  ok('改編號會即時重新產生範本',
+    /TROOP_0085_/.test(dv.querySelector('#nu-out')?.textContent || ''), dv.querySelector('#nu-out')?.textContent?.split('\n')[0]);
+  ok('教學章節有檢查清單（Redeploy／initializeSheets／實測）',
+    /檢查清單/.test(dv.textContent) && /Redeploy/.test(dv.textContent) && /initializeSheets/.test(dv.textContent));
+
+  /* 帳號與系統 → 旅團設定：入口 */
+  window.location.hash = '#/admin/unit';
+  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+  await new Promise(r => setTimeout(r, 80));
+  const av = doc.getElementById('view');
+  ok('「帳號與系統 → 旅團設定」有開新旅團入口（去教學）',
+    !!av.querySelector('[data-go="#/docs/newunit"]'));
+  const envBtn = av.querySelector('[data-act="env-template"]');
+  ok('「旅團設定」有「即刻產生環境變數」掣', !!envBtn);
+  envBtn?.click();
+  await new Promise(r => setTimeout(r, 150));
+  const dlg = doc.querySelector('.modal, [role="dialog"]');
+  ok('產生環境變數對話框有 5 個變數預覽同複製掣',
+    !!dlg && /TROOP_0081_BACKEND/.test(dlg.textContent || '')
+    && [...dlg.querySelectorAll('button')].some(b => /複製環境變數/.test(b.textContent || '')));
+  [...doc.querySelectorAll('.modal button, [role="dialog"] button')].find(b => /關閉/.test(b.textContent || ''))?.click();
+  await new Promise(r => setTimeout(r, 80));
+
+  /* 旅團閘（未登入）都有指路 */
+  const mainSrc = fs.readFileSync(path.join(ROOT, 'assets/js/main.js'), 'utf8');
+  ok('旅團閘有提示管理員去邊度睇開團教學', /開新旅團（唔使改 Git）/.test(mainSrc));
+
+  window.location.hash = '#/dashboard';
+  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+  await new Promise(r => setTimeout(r, 60));
+}
+
 /* ---------- 5. 旅團選擇閘 ---------- */
 section('旅團選擇閘（先揀旅團再登入）');
 {

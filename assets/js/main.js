@@ -145,6 +145,10 @@ function renderUnitGate() {
             <button class="btn btn-sm" data-act="dl-gs">${icon('download', 15)} 下載 Code.gs</button>
             <button class="btn btn-sm" data-act="guide">${icon('note', 15)} 部署指南</button>
             <button class="btn btn-sm btn-primary" data-act="apply">${icon('plus', 15)} 新旅團申請接入</button>
+            <div class="xs faint" style="flex-basis:100%;margin-top:6px">
+              管理員收到 <code>/exec</code> 之後：登入 → 「教學 → 開新旅團（唔使改 Git）」有逐步教學同可複製嘅環境變數範本，
+              或者「帳號與系統 → 旅團設定」撳「即刻產生環境變數」。
+            </div>
           </div>
         </div>
       </div>
