@@ -84,7 +84,9 @@ ok('申請表有齊欄位（編號／名稱／後端網址／API Key／聯絡人
   ['ap-id','ap-name','ap-url','ap-key','ap-contact','ap-note'].filter(id => !doc.getElementById(id)).join(','));
 ok('申請表教埋點起後端（Code.gs → initializeSheets → 部署）',
   /Code\.gs/.test(apBody) && /initializeSheets/.test(apBody) && /網頁應用程式/.test(apBody));
-ok('申請表自動帶主系統網址（管理員要用做 portalOrigin）', /portalOrigin/.test(apBody));
+ok('申請表自動帶主系統網址（方便管理員核對）', /主系統網址/.test(apBody));
+ok('申請表講清楚進度系統由旅團自己填 Script ＋ API Key（唔使外連）',
+  /進度 → 設定/.test(apBody) && /API Key/.test(apBody) && /唔使外連/.test(apBody));
 /* 驗證：填錯嘢要擋得住 */
 {
   const ob = await import('../assets/js/lib/onboard.js');

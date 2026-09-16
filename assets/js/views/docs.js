@@ -26,7 +26,7 @@ const NAV = [
   ['progress', '進度系統接駁'],
   ['mock', '示範資料（MOCK）'],
   ['multiunit', '多旅團部署'],
-  ['tablesync', '表格設計與總表同步'],
+  ['tablesync', '插入自己嘅 Sheet 與總表同步'],
   ['backup', '輸出與備份']
 ];
 
@@ -282,14 +282,14 @@ function mobileDoc() {
     <div class="step"><div>成員照住做：揀欄目（例：活動／交通／膳食／團費收入）、影低單據、打金額同理姓名</div></div>
     <div class="step"><div>送出之後：如果旅團設定咗 Apps Script，紀錄<b>直接寫入總 Sheet</b>；未設定就存喺成員自己部手機，佢可以按「複製內容」傳畀司庫</div></div>
   </div>
-  ${noteBox('想完全自動：喺「財務 → 收支申報 → 畀成員自己填」貼上 Apps Script <code>/exec</code> 網址（同「表格與同步 → 總表同步」可以共用同一個），成員一送出就入總表嘅「待批申報」分頁，仲可以順手存埋相片去 Google Drive。', 'brand')}
+  ${noteBox('想完全自動：喺「財務 → 收支申報 → 畀成員自己填」貼上 Apps Script <code>/exec</code> 網址（同「帳號與系統 → 資料管理 → 總表同步」可以共用同一個），成員一送出就入總表嘅「待批申報」分頁，仲可以順手存埋相片去 Google Drive。', 'brand')}
 
   ${H('執委／領袖喺 APP 內填')}
   <div class="steps">
     <div class="step"><div><b>儀表板 → 「影相記一筆」</b>：最快，開門就係申報表</div></div>
     <div class="step"><div>或者 <b>財務 → 收支申報 → 我要申報</b>：一樣有相機、日期、分類</div></div>
     <div class="step"><div>批核：喺「收支申報」按「<b>批准並入帳</b>」→ 自動寫入帳目（金額、分類、日期、相片一齊跟）</div></div>
-    <div class="step"><div>相片太佔位？去「表格與同步 → 儲存與備份」按「清理已入帳嘅相片（保留記錄）」</div></div>
+    <div class="step"><div>相片太佔位？去「帳號與系統 → 資料管理 → 儲存用量」按「清理已入帳嘅相片（保留記錄）」</div></div>
   </div>
 
   ${H('通告：每次開一張，分享出去畀人睇＋報名')}
@@ -306,17 +306,17 @@ function mobileDoc() {
   ${H('常見問題')}
   ${P('<b>冇網絡？</b>APP 同公開頁都係靜態檔案，載入之後照用得；送出嘅紀錄會先存喺裝置，之後再傳畀司庫。')}
   ${P('<b>驚亂？</b>申報只係「待批核」，要司庫或領袖按批准才會入帳；錯嘅可以拒絕或者刪除。')}
-  ${P('<b>想改欄目？</b>通告嘅報名欄目係逐張通告自己設定；財務／物資嘅欄目就去「表格與同步」。')}`;
+  ${P('<b>想改欄目？</b>通告嘅報名欄目係逐張通告自己設定；財務／物資／用戶／會議嘅欄目，去返<b>嗰個分頁</b>按右上角「<b>欄位</b>」掣（唔再需要一個獨立「表格」分頁）。')}`;
 }
 
 function tablesDoc() {
   return `
   ${H('一句話：成個系統就係一張大表，欄位自己話事')}
-  ${P('「<b>表格與同步</b>」頁面將所有資料表攤出嚟：帳目、物資、團員、收支申報、通告、會議。每張表都可以改名、加欄、改類型 —— 好似內建一個 Google Sheet。')}
+  ${P('想改欄位就去<b>嗰個分頁</b>按「<b>欄位</b>」掣（財務／用戶／物資／通告／會議 都有）：可以改名、加欄、改類型、隱藏、排次序 —— 好似內建一個 Google Sheet。進階嘅「插入自己嘅 Sheet」同「總表同步」喺「<b>帳號與系統 → 資料管理</b>」。')}
 
   ${H('① 改欄位（改名／加減）')}
   <div class="steps">
-    <div class="step"><div>表格與同步 → 揀表（例：帳目）→ 見到一行行欄位</div></div>
+    <div class="step"><div>去嗰個分頁（例：財務 → 帳目）→ 按右上「欄位」→ 見到一行行欄位</div></div>
     <div class="step"><div><b>改名</b>：直接把「經手人」改成「負責人」，全 APP 顯示即時跟住（資料唔會亂）</div></div>
     <div class="step"><div><b>加欄位</b>：按「加欄位」→ 填名稱、揀類型（文字／數字／日期／下拉／相片…）；下拉可以填選項（用「、」分隔）</div></div>
     <div class="step"><div><b>必填／顯示</b>：可以剔「必填」，或者收起一啲唔用嘅欄（例如「單據號碼」）</div></div>
@@ -328,7 +328,7 @@ function tablesDoc() {
   ${P('如果旅團本身已經有一張帳目表或者物資表，唔需要重新入過：')}
   <div class="steps">
     <div class="step"><div>Google Sheet → 共用 → 改為「<b>知道連結嘅任何人均可檢視</b>」（只讀）</div></div>
-    <div class="step"><div>表格與同步 → <b>插入自己嘅 Sheet</b> → 貼上連結（記得帶 <code>gid=</code>，即係你停留嘅分頁）</div></div>
+    <div class="step"><div>帳號與系統 → 資料管理 → <b>插入自己嘅 Sheet</b> → 貼上連結（記得帶 <code>gid=</code>，即係你停留嘅分頁）</div></div>
     <div class="step"><div>按「讀取欄位」→ 系統自動幫你對應（日期→日期、金額→金額、付款人→經手人…）</div></div>
     <div class="step"><div>對應唔啱就逐個下拉改；可以剔「匯入前清空該表」避免重複</div></div>
     <div class="step"><div>按「匯入」→ 有預覽筆數；之後可以「儲存做同步來源」，隨時再按「同步」拉最新版本</div></div>
@@ -397,44 +397,38 @@ function birthdayDoc() {
 function progressDoc() {
   const p = profile();
   const u = p.progress || {};
+  const b = u.backend || {};
+  const masked = b.apiKey ? '已設定（' + '•'.repeat(8) + '）' : '（未設定）';
+  const shownBackend = b.backend ? String(b.backend).replace(/\/macros\/s\/[^/]+/, '/macros/s/…') : '（未設定）';
   return `
-  ${H('三種接駁方式，點揀？')}
-  <table class="table table-compact">
-    <thead><tr><th>模式</th><th>做法</th><th>好處／限制</th></tr></thead>
-    <tbody>
-      <tr><td><b>Portal 信任模式（推薦）</b></td>
-        <td>連結帶 <code>u=旅團編號&amp;role=exec_committee&amp;ymis=自動&amp;from=portal</code>，對面系統直接當你係執委</td>
-        <td>唔使開新帳號、URL 冇密碼、<b>旅團零設定</b>（身份自動產生 <code>PORTAL-旅團-角色</code>）。
-          前提：對面系統支援 <code>from=portal</code>，而且你嘅旅團已登記喺對方 Registry</td></tr>
-      <tr><td>專用帳戶模式</td>
-        <td>喺對面系統開一個「執委」帳戶，喺本系統填帳號密碼，開連結時自動帶埋</td>
-        <td>唔使改對面系統，可以隨時停用該帳戶；但密碼會出現在網址，建議只喺自己電腦用</td></tr>
-      <tr><td>只開連結</td>
-        <td>本系統只係入口，你自己喺對面登入</td>
-        <td>最保守</td></tr>
-    </tbody>
-  </table>
-  ${noteBox(`<b>建議：</b>既然對面系統可以設定「經呢個系統入 = 執委帳戶」，就用 Portal 模式 —— 唔使喺 URL 帶密碼，出事只要喺本系統停止帶身份即可。`, 'brand')}
-  ${noteBox('<b>網址要填對面系統嘅「前端」</b>（例 <code>https://vsbadge.vercel.app/</code>），'
-    + '<b>唔好填 Google Apps Script 嘅 <code>/exec</code></b> —— 嗰條係 API 端點，'
-    + '開出嚟只會見到 <code>{"success":false,"error":"Unknown action"}</code> 而唔係系統介面。', 'warn')}
-  ${H('點設定')}
+  ${H('做法：直接接駁（唔使外連）')}
+  ${P('本系統直接同<b>旅團自己嘅 VSBADGE 後端</b>（Google Apps Script 網頁應用程式）通話 —— 喺呢邊<b>讀進度</b>、'
+    + '<b>直接勾進度</b>，唔使彈去對面系統。每次都由本系統嘅伺服器（<code>/api/progress</code>）代為轉發，'
+    + '所以 API Key 唔會出現在網址、亦唔會交畀第三方。')}
+  ${noteBox('每個旅團有自己嘅 Script 同 API Key（同 VSBADGE 用同一個後端）。旅團喺「進度 → 設定」自己填入，唔使等平台管理員改設定。', 'brand')}
+
+  ${H('三個步驟')}
   <div class="steps">
-    <div class="step"><div>「進度 → 設定」填對面系統<b>前端</b>網址</div></div>
-    <div class="step"><div>揀連接模式，揀角色（<code>exec_committee</code> / <code>branch_leader</code> / <code>group_leader</code> / <code>admin</code> / <code>super_admin</code> —— 呢啲先有勾選同審批權）同旅團編號</div></div>
-    <div class="step"><div><b>Portal 身份（ymis）可以留空</b> —— 會自動產生 <code>PORTAL-&lt;旅團&gt;-&lt;角色&gt;</code>，唔使先去進度系統開帳戶</div></div>
-    <div class="step"><div>儲存 → 按「以執委身份開啟」即跳過去（免登入），或者勾「內嵌預覽」喺呢邊直接睇</div></div>
-    <div class="step"><div>需要派畀團員就用「QR Code」</div></div>
+    <div class="step"><div>去 VSBADGE（或佢嘅 Google Sheet 選單）撳「<b>顯示 API Key</b>」複製 API Key</div></div>
+    <div class="step"><div>複製 VSBADGE 嘅 Apps Script <b>網頁應用程式 <code>/exec</code> 網址</b>（部署：執行身分「我」、存取權「任何人」）</div></div>
+    <div class="step"><div>「進度 → 設定」貼上兩樣 → 撳「測試連線」→ 見到團員同進度就成功</div></div>
   </div>
+  ${noteBox('<b>API Key 就等於執委身份</b> —— 有 Key 就可以讀同勾進度。Key 只會儲存在本旅團嘅資料，唔會寫入網址或分享出去；唔想畀人用就喺 VSBADGE 換 Key。', 'warn')}
+  ${noteBox('本機開發用 <code>npm run dev</code>（內建 API）。部署喺 Vercel 就自動有。純靜態伺服器（例如 <code>python -m http.server</code>）冇 API，進度接駁會停用。', 'info')}
+
   ${H('兩邊點對上同一個人')}
   ${P('進度追蹤係<b>獨立系統</b>，兩邊靠身份欄對人。對方規矩：<b>團員／執委用 YMIS（10 位數字）、領袖用 Email</b>。'
-    + '喺「用戶」度逐個補，用戶頁會顯示覆蓋率同「未對上で」名單；未補嘅只可以用姓名配對（會撞名、會漏）。')}
+    + '喺「用戶」度逐個補，用戶頁會顯示覆蓋率同「未對上」名單；未補嘅只可以用姓名配對（會撞名、會漏）。')}
+
+  ${H('仍然想開網頁睇？')}
+  ${P('原本嘅「執委入口連結」仍然保留，喺「進度 → 設定」最底 —— 需要去 VSBADGE 用佢自己嘅介面（例如審批）時可以用。')}
+
   ${H('目前設定')}
   <pre><code>${esc(JSON.stringify({
-    url: u.url || '（未設定）',
-    mode: u.mode || 'portal',
-    role: u.portal?.role || 'exec_committee',
-    unit: u.portal?.unitParam || currentUnit()
+    backend: shownBackend,
+    apiKey: masked,
+    front: b.front || u.url || '（未設定）',
+    unit: b.unit || currentUnit()
   }, null, 2))}</code></pre>`;
 }
 
@@ -483,13 +477,14 @@ function multiUnitDoc() {
   ${H('新旅團點接入（推薦：用申請表）')}
   ${P('<b>每個旅團用自己嘅 Google Sheet 做後端</b>，唔係共用一張總表。流程：')}
   <div class="steps">
-    <div class="step"><div><b>起後端</b> —— 「表格與同步 → 總表同步」下載 <code>Code.gs</code> → 建一張新 Google Sheet → 擴充功能 → Apps Script → 貼上</div></div>
+    <div class="step"><div><b>起後端</b> —— 「帳號與系統 → 資料管理 → 總表同步」下載 <code>Code.gs</code> → 建一張新 Google Sheet → 擴充功能 → Apps Script → 貼上</div></div>
     <div class="step"><div>執行 <code>initializeSheets</code>（會建好全部分頁），複製 <b>API Key</b></div></div>
     <div class="step"><div>部署做<b>網頁應用程式</b>（執行身分：我；存取權：任何人），複製 <code>/exec</code> 網址</div></div>
     <div class="step"><div>打開呢個系統 → 旅團選擇畫面 → 撳「<b>新旅團申請接入</b>」→ 填編號／名稱／<code>/exec</code> 網址／API Key → 送出</div></div>
-    <div class="step"><div>平台管理員收到申請 → 加進兩邊嘅 Registry（82venture ＋ 進度追蹤系統）→ 完成開戶同連通</div></div>
+    <div class="step"><div>平台管理員收到申請 → 加進本系統嘅 Registry（<code>data/units.json</code> ＋ <code>data/units/旅團編號/</code>）→ 完成開戶</div></div>
+    <div class="step"><div>旅團登入 → 「進度 → 設定」填自己嘅 VSBADGE /exec 網址同 API Key → 測試連線（由旅團自己搞，唔使管理員代設）</div></div>
   </div>
-  ${noteBox('申請會連<b>主系統網址</b>一齊送出 —— 管理員要用佢做進度系統嘅 <code>portalOrigin</code>（核准邊個網站可以帶身份入去）。', 'info')}
+  ${noteBox('申請會連<b>主系統網址</b>一齊送出，方便管理員核對。進度系統<b>唔再需要</b> <code>portalOrigin</code>：新旅團登入之後，喺「進度 → 設定」自行填入 VSBADGE 嘅 Script 網址同 API Key 就得。', 'info')}
 
   ${H('管理員手工加（進階）')}
   <div class="steps">

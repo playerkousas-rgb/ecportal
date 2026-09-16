@@ -6,7 +6,8 @@ import { collection, find, add, update, remove, commit, load, newSystemId } from
 import {
   members, member, memberName, attendanceStats, fees, memberStatus, memberBirthdayText,
   birthdayList, birthdaysThisMonth, birthdaysWithin, birthdaySummary, money, settings, profile,
-  IDENTITIES, identityLabel, identityOf, guessIdentity, keyCoverage, memberKey, expectedKeyKind
+  IDENTITIES, identityLabel, identityOf, guessIdentity, keyCoverage, memberKey, expectedKeyKind,
+  feeExempt, feeExemptList
 } from '../lib/model.js';
 import {
   bindDraftAutosave, readDraft, applyDraft, clearDraft, draftBanner, confirmDanger, undoable
@@ -61,6 +62,7 @@ function listView() {
       ${can('member.export') ? `<button class="btn btn-sm" data-act="exp-csv">${icon('download', 15)} CSV</button>
       <button class="btn btn-sm" data-act="exp-word">${icon('download', 15)} Word</button>
       <button class="btn btn-sm" data-act="exp-bday">${icon('sparkle', 15)} 生日表</button>` : ''}
+      <button class="btn btn-sm" data-fields="members" title="改名／加欄位（例：小隊、收據編號）">${icon('table', 15)} 欄位</button>
       ${can('member.create') ? `<button class="btn btn-sm btn-primary" data-act="new">${icon('plus', 15)} 新增用戶</button>` : ''}`
   })}
 
@@ -145,9 +147,11 @@ function listView() {
             ${progressBar(s.rate)}
             <div class="xs faint mt-4">${s.present}/${s.total} 次</div>
           </td>
-          <td class="center">${mf.length ? (unpaid.length
-            ? `<span class="badge b-danger">欠 ${unpaid.length} 筆</span>`
-            : `<span class="badge b-ok"><span class="dot"></span>已清</span>`) : '<span class="faint xs">—</span>'}</td>
+          <td class="center">${feeExempt(m)
+            ? '<span class="badge b-grey" title="領袖／已設定免收團費">免收團費</span>'
+            : (mf.length ? (unpaid.length
+              ? `<span class="badge b-danger">欠 ${unpaid.length} 筆</span>`
+              : `<span class="badge b-ok"><span class="dot"></span>已清</span>`) : '<span class="faint xs">—</span>')}</td>
           <td><span class="badge ${S[m.status]?.c || 'b-grey'}"><span class="dot"></span>${S[m.status]?.l || m.status}</span></td>
           <td class="right">${can('member.edit')
             ? `<button class="btn btn-xs" data-edit="${m.id}">${icon('edit', 13)} 編輯</button>`
@@ -275,6 +279,9 @@ function detail(id) {
             ['入團日期', esc(m.join || '—')],
             ['標籤', (m.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join(' ') || '—'],
             ['狀態', `<span class="badge ${memberStatus()[m.status]?.c || 'b-grey'}">${memberStatus()[m.status]?.l || m.status}</span>`],
+            ['團費', feeExempt(m)
+              ? `<span class="badge b-grey">免收團費</span> <span class="xs faint">${identityOf(m) === 'leader' ? '（領袖唔收團費）' : '（已設定免收）'}</span>`
+              : '<span class="sm">需繳交</span>'],
             ['備註', esc(m.note || '—')]
           ])}
         </div>
@@ -383,6 +390,13 @@ function editor(id) {
           </select></div>
         <div class="field"><label class="label">標籤（用逗號分隔）</label>
           <input class="input" id="f-tags" data-draft="tags" value="${esc((m?.tags || []).join(', '))}" placeholder="執委會, 小隊"></div>
+        <div class="field" style="grid-column:1/-1">
+          <label class="check"><input type="checkbox" id="f-feeexempt" ${m?.feeExempt ? 'checked' : ''}> 免收團費</label>
+          <div class="hint">
+            <b>領袖一律免收團費</b>（身份 = 領袖嘅話，呢個剔唔剔都唔會出現在團費收款表）。
+            呢個剔係畀其他情況用，例如榮譽會員、指導員、休假成員。
+            如果某位領袖要交團費，喺 <code>data/units/&lt;旅團&gt;/members.json</code> 該成員加 <code>"feeExempt": false</code>。
+          </div></div>
       </div>
       <div class="field mt-16"><label class="label">備註</label>
         <textarea class="textarea" id="f-note" data-draft="note">${esc(m?.note || '')}</textarea></div>
@@ -558,6 +572,9 @@ export function mount(root, params = {}) {
         join: v('#f-join'), status: root.querySelector('#f-status').value,
         tags: v('#f-tags').split(',').map(x => x.trim()).filter(Boolean), note: v('#f-note')
       };
+      /* 免收團費：有剔 = true；冇剔 = 移除欄位（回到「領袖自動免收 / 其他人要交」嘅預設） */
+      if (root.querySelector('#f-feeexempt')?.checked) patch.feeExempt = true;
+      else delete patch.feeExempt;
       /* 同名防呆：唔好一時手誤開多一個同一個人 */
       const dup = members().find(m => m.id !== id && String(m.name).trim() === name);
       if (dup && !(await confirmDlg({

@@ -1,7 +1,8 @@
 # 管理員手冊：每個旅團申請接入時要 SET 乜
 
-最後核實：2026-09-15。欄位名全部由 code 核對過（`assets/js/lib/units.js`、`assets/js/lib/store.js`、
-vsbadge `api/_registry.js`）。
+最後核實：**2026-09-16**（進度系統改咗「直接接駁」——旅團自己填 VSBADGE `/exec` ＋ API Key，
+管理員唔再需要設 `portalOrigin`）。欄位名全部由 code 核對過（`assets/js/lib/units.js`、
+`assets/js/lib/store.js`、`api/_registry.js`、`api/progress.js`）。
 
 ---
 
@@ -9,7 +10,7 @@ vsbadge `api/_registry.js`）。
 
 旅團喺旅團選擇畫面撳「**新旅團申請接入**」之前，要先起好自己嘅後端：
 
-1. 「表格與同步 → 總表同步」下載 `Code.gs`
+1. 「帳號與系統 → 資料管理 → 總表同步」下載 `Code.gs`（或者喺首頁旅團選擇畫面直接「下載 Code.gs」）
 2. 建新 Google Sheet → 擴充功能 → Apps Script → 貼上 `Code.gs`
 3. 執行 `initializeSheets`，複製 **API Key**
 4. 部署做**網頁應用程式**（執行身分：我；存取權：任何人），複製 **`/exec` 網址**
@@ -23,7 +24,7 @@ vsbadge `api/_registry.js`）。
   "scriptUrl": "https://script.google.com/macros/s/AKfyc…/exec",   // ← 佢嘅後端
   "apiKey":    "…",
   "appType":   "82venture",          // vsbadge 嗰邊送嘅係 "vsbadge"
-  "mainSystemUrl": "https://…",      // ← 你要攞呢個做 portalOrigin
+  "mainSystemUrl": "https://…",      // ← 畀你核對／記錄，唔再係 portalOrigin（見下）
   "contact":   "…",
   "note":      "…",
   "at":        "2026-09-15T…"
@@ -36,7 +37,7 @@ vsbadge `api/_registry.js`）。
 
 ---
 
-## 1. 82venture 呢邊要 SET 嘅嘢
+## 1. 執委管理系統呢邊要 SET 嘅嘢
 
 ### 1a. `data/units.json` → `units.<旅團編號>`
 
@@ -89,24 +90,29 @@ inventory.json      ← 物資 / 借用
 meetings.json       ← 會議（可選）
 ```
 
-### 1c. `unit.json` 入面嘅進度系統設定
+### 1c. `unit.json` 入面嘅進度系統設定（2026-09-16 起：直接接駁）
 
 **注意：`progress` 係由 `unit.json` 讀（`db.profile`），唔係 `units.json`。**
 `units.json` 嗰份只係做記錄／種子。
 
+新做法**唔使管理員代設**：旅團登入之後去「進度 → 設定」填自己嘅 VSBADGE `/exec` 網址同 API Key，
+儲存喺 `profile.progress.backend`（會跟 JSON 備份走，唔會出現在網址）。
+
 ```jsonc
 "progress": {
   "name": "深資童軍進度及行政平台 (VSBADGE)",
-  "url": "https://vsbadge.vercel.app/",   // ← 對方**前端**，唔係 GAS /exec
-  "mode": "portal",
-  "portal": {
-    "unitParam": "0100",                  // ← 同對方 registry 嘅旅團編號一樣
-    "role": "exec_committee",             // exec_committee / branch_leader / group_leader / admin / super_admin
-    "ymis": "",                           // ← 留空＝自動產生 PORTAL-0100-EXCO（零設定）
-    "extraParams": "embed=1"
+  "url": "https://vsbadge.vercel.app/",   // ← 對方**前端**（只係做舊入口連結／揀考核項目定義）
+  "backend": {
+    "backend": "https://script.google.com/macros/s/…/exec",  // 旅團自己嘅 VSBADGE 後端
+    "apiKey": "…",                                            // API Key＝執委身份
+    "front": "https://vsbadge.vercel.app/",
+    "unit": "0100"
   }
 }
 ```
+
+> 唔想旅團自己填？管理員可以用 Vercel env（伺服器端，優先於前端）：
+> `TROOP_<id>_PROGRESSBACKEND` / `TROOP_<id>_PROGRESSAPIKEY` / `TROOP_<id>_PROGRESSFRONT`。
 
 ---
 
@@ -118,12 +124,13 @@ meetings.json       ← 會議（可選）
 "0100": {
   "name": "第 100 旅",
   "en": "100th Group",
-  "backend": "https://script.google.com/macros/s/AKfyc…/exec",   // ← 同 82venture 嗰條一樣
-  "apikey": "…",
-  "portalOrigin": "https://…",        // ← 申請入面嘅 mainSystemUrl（**要新增**，見 PROGRESS_PORTAL_HANDOFF.md）
-  "portalRoles": ["exec_committee", "branch_leader", "group_leader"]   // ← 要新增
+  "backend": "https://script.google.com/macros/s/AKfyc…/exec"   // ← 旅團自己嘅 VSBADGE 後端
 }
 ```
+
+> `portalOrigin` / `portalRoles` **唔再需要**（2026-09-16 起改用直接接駁＋API Key）。
+> 舊嘅 portal 入口仍然行得通：想用嘅話先照
+> [`PROGRESS_PORTAL_HANDOFF.md`](PROGRESS_PORTAL_HANDOFF.md) 設定，否則直接開連結會出 `referer_mismatch`。
 
 ### 2b. 或者用環境變數（優先於檔案）
 
@@ -144,24 +151,25 @@ TROOP_100_APIKEY
 | `VSBADGE_PROXY_TIMEOUT_MS` | proxy 上游逾時 | `45000` |
 | `VSBADGE_PROXY_TEST` | 設 `1` 先允許 `localhost` mock GAS（只限本機測試） | 未設 |
 
-> `portalOrigin` / `portalRoles` 而家**對方仲未支援**，要照
-> [`PROGRESS_PORTAL_HANDOFF.md`](PROGRESS_PORTAL_HANDOFF.md) 改 `api/_registry.js` + 新增 `api/portal.js`。
-> 未改之前，portal 免登入係**冇驗證**嘅（任何人砌 URL 就入到）。
+> VSBADGE v3.1 已經支援 `portalOrigin` / `portalRoles` 驗證（`api/portal.js`），
+> 但我哋**主要做法**已經改為直接接駁（API Key），所以呢啲欄位只係舊入口先要。
+> 詳情同實測記錄見 [`PROGRESS_PORTAL_HANDOFF.md`](PROGRESS_PORTAL_HANDOFF.md)。
 
 ---
 
 ## 3. 每次收到申請嘅 checklist
 
 ```
-□ 82venture  data/units.json      加 units.<id>（code / name / dataPath / backend.gasUrl / backend.apiKey / notice.submitUrl / theme）
-□ 82venture  data/units/<id>/     建資料夾（unit.json / members.json / constitution.json / finance.json / inventory.json）
-□ 82venture  unit.json            填 progress.url（對方前端）+ portal.unitParam；portal.ymis 留空
-□ VSBADGE    data/troops.json     加 <id>（name / backend / apikey / portalOrigin / portalRoles）
+□ 執委管理系統  data/units.json      加 units.<id>（code / name / dataPath / backend.gasUrl / backend.apiKey / notice.submitUrl / theme）
+□ 執委管理系統  data/units/<id>/     建資料夾（unit.json / members.json / constitution.json / finance.json / inventory.json）
+□ 執委管理系統  unit.json            填 progress.url（對方前端，揀考核項目定義用）
+□ VSBADGE    data/troops.json     加 <id>（name / backend / apikey）
               或者 env            TROOP_<id>_BACKEND / TROOP_<id>_APIKEY
+□ （可選）進度用 env 代替旅團自填：TROOP_<id>_PROGRESSBACKEND / TROOP_<id>_PROGRESSAPIKEY / TROOP_<id>_PROGRESSFRONT
 □ 兩邊都 deploy 一次
-□ 實測：開 https://vsbadge.vercel.app/?u=<id>&role=exec_committee&ymis=PORTAL-<id>-EXCO&from=portal&embed=1
-        → 應該免登入直接入到，有「全團總覽／審批中心／用戶管理」
-□ 實測：82venture 揀該旅團 → 登入 → 「表格與同步 → 總表同步」→ 應該寫入佢自己嘅 Sheet
+□ 通知旅團：登入 → 「進度 → 設定」填自己嘅 VSBADGE /exec + API Key → 撳「測試連線」
+        → 見到團員同進度就成功（之後可以直接勾進度）
+□ 實測：執委管理系統揀該旅團 → 登入 → 「帳號與系統 → 資料管理 → 總表同步」→ 應該寫入佢自己嘅 Sheet
 ```
 
 呢個 checklist 喺 app 入面都會自動列出（送出申請之後嘅確認對話框，

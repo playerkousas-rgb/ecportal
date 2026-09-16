@@ -65,10 +65,10 @@ function showApiKey() {
   var ui = null;
   try { ui = SpreadsheetApp.getUi(); } catch (e) { /* headless */ }
   if (ui) {
-    ui.alert('82venture API Key', '你嘅旅團 API Key 為：\\n\\n' + apiKey + '\\n\\n請複製並交由 Git/Vercel 管理員作登記。', ui.ButtonSet.OK);
+    ui.alert('執委管理系統 API Key', '你嘅旅團 API Key 為：\\n\\n' + apiKey + '\\n\\n請複製並交由 Git/Vercel 管理員作登記。', ui.ButtonSet.OK);
   }
   Logger.log('==============================');
-  Logger.log('82venture API Key: ' + apiKey);
+  Logger.log('執委管理系統 API Key: ' + apiKey);
   Logger.log('==============================');
   return apiKey;
 }
@@ -178,7 +178,7 @@ function doGet(e) {
     spreadsheet: (function () { try { return SpreadsheetApp.getActiveSpreadsheet().getName(); } catch (err) { return '(未綁定試算表)'; } })(),
     tabs: SHEET_TABS,
     api: ['ping', 'status', 'sync', 'claim', 'noticeSignup', 'loan'],
-    usage: 'APP 內「表格與同步 → 總表同步」填呢個 /exec 網址即可'
+    usage: 'APP 內「帳號與系統 → 資料管理 → 總表同步」填呢個 /exec 網址即可'
   });
 }
 

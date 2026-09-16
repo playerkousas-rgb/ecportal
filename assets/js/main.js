@@ -28,6 +28,7 @@ import * as accountsView from './views/accounts.js';
 import * as docs from './views/docs.js';
 import * as noticesView from './views/notices.js';
 import * as tables from './views/tables.js';
+import { openFieldDesigner } from './views/tables.js';
 import * as linksView from './views/links.js';
 
 const VIEWS = {
@@ -45,7 +46,6 @@ const NAV = [
   { id: 'notices', label: '通告', icon: 'megaphone', badge: () => (load()?.notices || []).filter(n => n.status === 'published').length },
   { id: 'links', label: '成員連結', icon: 'share' },
   { id: 'constitution', label: '團章', icon: 'book' },
-  { id: 'tables', label: '表格', icon: 'table' },
   { id: 'docs', label: '教學', icon: 'note' },
   { id: 'admin', label: '帳號與系統', icon: 'shield' }
 ];
@@ -108,7 +108,7 @@ function renderUnitGate() {
       <div class="gate-brand">
         <div class="logo">82</div>
         <div>
-          <div class="gate-title">82venture · 執委管理系統</div>
+          <div class="gate-title">執委管理系統</div>
           <div class="gate-sub">第一步：揀你嘅旅團（或者用示範資料試玩）</div>
         </div>
       </div>
@@ -176,7 +176,7 @@ function renderUnitGate() {
    ============================================================ */
 async function openDeployGuideModal() {
   await modal({
-    title: '🗺️ 82venture 多旅團後端部署指南',
+    title: '🗺️ 執委管理系統 · 多旅團後端部署指南',
     wide: true,
     body: `
       <div class="note-box info mb-12">
@@ -280,9 +280,9 @@ async function openApplication() {
           <input class="input" id="ap-note" placeholder="例：想同時接入進度追蹤系統"></div>
         <div class="field" style="grid-column:1/-1"><label class="label">主系統網址（自動帶）</label>
           <input class="input" value="${esc(mainUrl)}" readonly style="font-family:var(--mono);font-size:12px;background:var(--bg-2)">
-          <div class="hint">呢個係<b>你而家睇緊嘅呢個網站</b>嘅網址。管理員要用佢做進度系統嘅 <code>portalOrigin</code>（核准邊個網站可以帶身份入去）。</div></div>
+          <div class="hint">呢個係<b>你而家睇緊嘅呢個網站</b>嘅網址，方便管理員核對同登記。</div></div>
       </div>
-      <div class="hint mt-8">送出後管理員會把你嘅後端網址加進兩邊嘅 Registry（82venture ＋ 進度追蹤系統），完成開戶同連通。</div>`,
+      <div class="hint mt-8">送出後管理員會把你嘅後端網址加進 Registry，完成開戶。之後你自己喺「<b>進度 → 設定</b>」填入旅團嘅 VSBADGE <code>/exec</code> 網址同 API Key，就可以喺呢度直接讀寫進度（唔使外連）。</div>`,
     actions: [
       { label: '取消', class: 'btn', value: null },
       { label: '送出申請', class: 'btn-primary', onClick: el => ({
@@ -364,10 +364,10 @@ function renderLogin() {
   <div class="login-wrap">
     <aside class="login-hero">
       <div class="brandmark">
-        <div class="logo">${esc((u.short || '82').slice(0, 3))}</div>
+        <div class="logo">${esc(String(u.code || code || '82').replace(/^0+/, '') || '82')}</div>
         <div>
-          <div style="font-weight:800;font-size:16px;letter-spacing:-.01em">${esc(u.short || '82venture')}</div>
-          <div class="xs" style="color:#F0D3D9">深資童軍 · 自務自治</div>
+          <div style="font-weight:800;font-size:16px;letter-spacing:-.01em">執委管理系統</div>
+          <div class="xs" style="color:#F0D3D9">${esc(u.name || '深資童軍團')} · 自務自治</div>
         </div>
       </div>
       <div>
@@ -381,7 +381,7 @@ function renderLogin() {
             .map(([t, i]) => `<div class="hero-item"><span class="tick">${icon(i, 11)}</span><span>${t}</span></div>`).join('')}
         </div>
       </div>
-      <div class="xs" style="color:#D3A9B2">© ${new Date().getFullYear()} ${esc(u.short || '82venture')} · 內部使用</div>
+      <div class="xs" style="color:#D3A9B2">© ${new Date().getFullYear()} ${esc(u.name || '執委管理系統')} · 內部使用</div>
     </aside>
 
     <main class="login-panel">
@@ -515,10 +515,10 @@ function render() {
   <div class="shell">
     <nav class="sidebar">
       <div class="sb-brand">
-        <div class="logo">${esc((u.short || '82').slice(0, 3))}</div>
+        <div class="logo">${esc(String(u.code || currentUnit() || '82').replace(/^0+/, '') || '82')}</div>
         <div>
-          <div class="t truncate">${esc(u.short || '82venture')}</div>
-          <div class="s truncate">${esc(u.name || '')}</div>
+          <div class="t truncate">${esc(u.name || '深資童軍團')}</div>
+          <div class="s truncate">執委管理系統</div>
         </div>
       </div>
 
@@ -587,6 +587,13 @@ function render() {
     })) { logout(); document.body.classList.add('login-body'); renderLogin(); }
   }));
   app.querySelector('#unitSwitch')?.addEventListener('click', unitPicker);
+
+  /* 任何分頁嘅「欄位」掣（data-fields="transactions" / members / invItems / notices / meetings…）
+     都會打開同一個欄位設計器 —— 唔再需要一個獨立「表格」分頁 */
+  app.querySelectorAll('[data-fields]').forEach(b => b.addEventListener('click', e => {
+    e.preventDefault();
+    openFieldDesigner(b.dataset.fields, { onSaved: () => window.dispatchEvent(new CustomEvent('v82:refresh')) });
+  }));
 
   const root = app.querySelector('#view');
   try { view.mount(root, r); } catch (e) { console.error('mount error', e); }

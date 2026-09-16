@@ -130,6 +130,33 @@ export function getTrustedUnit(id) {
   };
 }
 
+// ============================================================
+// 進度系統（VSBADGE）後端 —— 伺服器端設定（可選）
+// ------------------------------------------------------------
+// 旅團可以喺介面自己填（存喺佢自己嘅資料／瀏覽器），亦可以改用 Vercel env：
+//   TROOP_<編號>_PROGRESSBACKEND = https://script.google.com/macros/s/…/exec
+//   TROOP_<編號>_PROGRESSAPIKEY  = …（喺 VSBADGE 個 Apps Script 執行 showApiKey()）
+//   TROOP_<編號>_PROGRESSFRONT   = https://vsbadge.vercel.app/
+// 有設就會優先採用（API Key 就唔會出現在瀏覽器）。
+// ============================================================
+export function getProgressRegistryEntry(id) {
+  const out = { backend: '', apiKey: '', front: '' };
+  if (typeof id !== 'string' || !/^[0-9A-Za-z_-]{1,32}$/.test(id)) return out;
+  const idUpper = id.toUpperCase();
+  const idNoZero = id.replace(/^0+/, '') || id;
+  const pick = (key) => envVar(
+    `TROOP_${id}_${key}`, `TROOP_${idUpper}_${key}`, `TROOP_${idNoZero}_${key}`
+  );
+  const backend = pick('PROGRESSBACKEND').trim();
+  out.backend = isTrustedExecUrl(backend) ? backend : '';
+  out.apiKey = pick('PROGRESSAPIKEY').trim();
+  out.front = normalizeOrigin(pick('PROGRESSFRONT'));
+  // 前端網址（origin）唔夠；items.json 要成條路徑，所以另外支援完整 URL
+  const frontFull = pick('PROGRESSFRONTURL').trim();
+  if (frontFull && /^https:\/\//i.test(frontFull)) out.front = frontFull.replace(/\/+$/, '');
+  return out;
+}
+
 // 前端旅團選擇器專用：只暴露公開資訊，任何情況都不回傳 gasUrl / apiKey
 export function listPublicUnits() {
   const reg = getRegistry();

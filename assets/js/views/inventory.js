@@ -48,6 +48,8 @@ function mainView(params) {
     actions: `
       ${can('inv.borrow') ? `<button class="btn btn-sm btn-primary" data-act="new-loan">${icon('plus', 15)} 申請借用</button>` : ''}
       ${can('inv.manage') ? `<button class="btn btn-sm" data-act="new-item">${icon('plus', 15)} 新增物資</button>` : ''}
+      <button class="btn btn-sm" data-fields="invItems">${icon('table', 15)} 欄位（物資）</button>
+      <button class="btn btn-sm" data-fields="invLoans">${icon('table', 15)} 欄位（借用）</button>
       <button class="btn btn-sm" data-go="#/links">${icon('share', 15)} 畀成員自己借（QR）</button>
       <button class="btn btn-sm" data-act="export-word">${icon('download', 15)} 輸出 Word</button>`
   })}

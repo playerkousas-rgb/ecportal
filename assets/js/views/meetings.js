@@ -48,6 +48,7 @@ export function render(params) {
         <button role="tab" aria-selected="${viewMode === 'list'}" data-mode="list">清單</button>
         <button role="tab" aria-selected="${viewMode === 'board'}" data-mode="board">看板</button>
       </div>
+      <button class="btn" data-fields="meetings">${icon('table', 15)} 欄位</button>
       ${can('meeting.create') ? `<button class="btn btn-primary" data-act="new">${icon('plus', 16)} 新增會議</button>` : ''}
     </div>
   </div>

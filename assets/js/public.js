@@ -110,7 +110,7 @@ function rendered() {
       <div class="xs faint">${esc(c.footer?.zh || '')}</div>
       <div class="xs faint">${esc(c.footer?.en || '')}</div>
     </div>
-    <div class="xs faint mt-8">版本 v${esc(c.version || '')} · 更新 ${esc(c.updated || '')} · 由 82venture 執委管理系統發布</div>`;
+    <div class="xs faint mt-8">版本 v${esc(c.version || '')} · 更新 ${esc(c.updated || '')} · 由執委管理系統發布</div>`;
 }
 
 function render() {

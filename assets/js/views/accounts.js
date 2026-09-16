@@ -266,6 +266,22 @@ function dataView() {
       </div>
 
       <div class="card">
+        <div class="card-head"><div><div class="card-title">表格與同步（進階）</div>
+          <div class="card-sub">欄位已經搬去各自嘅分頁；呢度淨係放「插入自己嘅 Sheet」同「總表同步」</div></div></div>
+        <div style="padding:16px 18px">
+          <div class="col gap-8">
+            <button class="btn btn-block" data-go="#/tables/source">${icon('link', 16)} 插入旅團自己嘅 Google Sheet（匯入舊資料）</button>
+            <button class="btn btn-block" data-go="#/tables/sync">${icon('cloud', 16)} 總表同步（Apps Script / Code.gs）</button>
+            <button class="btn btn-block" data-go="#/tables/data">${icon('table', 16)} 儲存用量與逐表匯出</button>
+          </div>
+          <div class="hint mt-12">
+            想改某個表嘅欄位？去返嗰個分頁按「<b>欄位</b>」掣就得：
+            財務（帳目）、用戶、物資、通告、會議 每一頁都有。
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
         <div class="card-head"><div><div class="card-title">重設</div></div></div>
         <div style="padding:16px 18px">
           <div class="row gap-8 wrap">
@@ -450,7 +466,7 @@ export function mount(root) {
 
     /* --- 資料 --- */
     if (act === 'export-json') {
-      dlFile(`82venture_${currentUnit()}_${isMock() ? 'MOCK_' : ''}備份_${stamp()}.json`, exportAll(), 'application/json');
+      dlFile(`ecportal_${currentUnit()}_${isMock() ? 'MOCK_' : ''}備份_${stamp()}.json`, exportAll(), 'application/json');
       toast('已匯出備份', 'ok'); audit('匯出備份'); return;
     }
     if (act === 'import-json') {
@@ -530,7 +546,7 @@ export function mount(root) {
       return;
     }
     if (act === 'export-mock') {
-      dlFile(`82venture_MOCK_示範資料_${stamp()}.json`, exportAll({ includeMock: true }), 'application/json');
+      dlFile(`ecportal_MOCK_示範資料_${stamp()}.json`, exportAll({ includeMock: true }), 'application/json');
       toast('已匯出示範資料', 'ok'); return;
     }
   }));

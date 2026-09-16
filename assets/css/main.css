@@ -687,3 +687,7 @@ pre.code { background:#2A1015; color:#F6E7EA; padding:14px 16px; border-radius:1
 .link-card .ic { flex:none; width:36px; height:36px; border-radius:10px; display:grid; place-items:center;
   background:var(--brand-50); color:var(--brand-700); }
 .link-card .u { font-family:var(--mono); font-size:11.5px; color:var(--ink-3); word-break:break-all; }
+
+/* ---------- 財務報告：上年度結餘 vs 本年度收支（分開列示） ---------- */
+.table tbody tr.row-sep td{ background:#FBF6F7; border-top:1.5px solid var(--line-2); }
+.doc table tbody tr.row-sep td{ background:#FBF6F7; font-weight:700; }

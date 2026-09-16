@@ -12,7 +12,8 @@ import {
   summarize, openingBalance, currentBalance, balanceBreakdown, currency, agmIsDefault, setAgmDate, lastSaturdayOfAugust,
   openingOf, openingBalances, legacyOpening, currentFY, currentFYRange, prevFYKey, yearRange, refYearKey, carriedForward,
   feePeriodOf, feePeriods, feeOf, feeGrid, feeStats, matchMemberByName,
-  standardFee, overseasFee, defaultFeeDue
+  standardFee, overseasFee, defaultFeeDue,
+  inRange, fyMonths, fyMonthStats, monthText, categoryBreakdown, feeExempt, feeExemptList, identityOf
 } from '../lib/model.js';
 import { todayISO, nowStamp } from '../lib/dates.js';
 import { esc, icon, fmtDate, modal, confirmDlg, toast, uid, nf, copyText, avatar, download, qrSvg } from '../lib/util.js';
@@ -25,6 +26,9 @@ import { bindDraftAutosave, readDraft, applyDraft, saveDraft, clearDraft, draftB
 
 let tab = 'ledger';
 let fMonth = '';
+let ledgerMode = 'overview';   // 帳目（本年度）：'overview' 總覽 ／ 'month' 按月
+let histYear = '';             // 過往紀錄：年度
+let histMonth = '';            // 過往紀錄：'' = 全年，其他 = 'YYYY-MM'
 let fType = 'all';
 let fCat = 'all';
 let fKw = '';
@@ -39,13 +43,14 @@ export function render(params) {
   const id = params.id;
   if (id === 'new') return txPage(null);
   if (id === 'edit') return txPage(params.action);
-  if (['reports', 'fees', 'claims', 'budgets', 'import', 'settings'].includes(id)) tab = id;
+  if (['reports', 'fees', 'claims', 'budgets', 'import', 'settings', 'history'].includes(id)) tab = id;
   else if (id !== 'new' && id !== 'edit') tab = params?.query?.tab || 'ledger';
   if (params.query?.period) feePeriod = params.query.period;
 
+  const fy = currentFY();
   const header = pageHead({
     title: '財務',
-    sub: `${profile().name || ''} · 現在結餘 ${money(currentBalance())}（期初 ${money(openingBalance().amount)} ＋ 收入 ${money(sumBy(tx(), 'income'))} − 支出 ${money(sumBy(tx(), 'expense'))}）`,
+    sub: `${profile().name || ''} · ${fy} 年度 · 現在結餘 ${money(currentBalance())}（期初 ${money(openingBalance().amount)} ＋ 收入 ${money(sumBy(tx(), 'income'))} − 支出 ${money(sumBy(tx(), 'expense'))}）`,
     actions: `
       ${can('finance.create') ? `<button class="btn btn-sm btn-primary" data-act="add">${icon('plus', 15)} 新增收支</button>` : ''}
       <button class="btn btn-sm" data-go="#/finance/reports">${icon('chart', 15)} 年結報告</button>
@@ -54,7 +59,8 @@ export function render(params) {
 
   return `${header}
   ${tabs([
-    ['ledger', '帳目', tx().length],
+    ['ledger', `帳目（${fy}）`, txInYear(fy).length],
+    ['history', '過往紀錄'],
     ['reports', '財政年度報告'],
     ['fees', '團費', fees().filter(f => !f.paid).length],
     ['claims', '收支申報', pendingClaims().length],
@@ -68,38 +74,47 @@ export function render(params) {
     : tab === 'budgets' ? budgetsView()
     : tab === 'import' ? importView()
     : tab === 'settings' ? settingsView()
+    : tab === 'history' ? historyView()
     : ledgerView()}`;
 }
 
 /* ============================================================
-   1. 帳目
+   1. 帳目（**本年度**紀錄；可以睇總覽，亦可以按月睇）
+   ------------------------------------------------------------
+   2026-09-16 團長要求：
+     · 呢一頁只睇「本年度」帳目，唔會同上年度混在一起
+     · 可以睇總覽（12 個月一覽），亦可以只睇某一個月
+     · **冇紀錄嘅月份都要揀得到**（月份清單由年度砌出，唔係由帳目反推）
    ============================================================ */
-function ledgerView() {
-  let list = tx().slice().sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(b.id).localeCompare(String(a.id)));
-  const cats = categories('income').concat(categories('expense'));
-  if (fMonth) list = list.filter(t => String(t.date).slice(0, 7) === fMonth);
-  if (fType !== 'all') list = list.filter(t => t.type === fType);
-  if (fCat !== 'all') list = list.filter(t => t.category === fCat);
+/** 本年度帳目 */
+function txInYear(yearKey = currentFY()) {
+  const r = yearRange(yearKey);
+  return tx().filter(t => inRange(t.date, r.start, r.end));
+}
+
+function applyFilters(list) {
+  let out = list.slice();
+  if (fType !== 'all') out = out.filter(t => t.type === fType);
+  if (fCat !== 'all') out = out.filter(t => t.category === fCat);
   if (fKw) {
     const k = fKw.toLowerCase();
-    list = list.filter(t => (t.item + ' ' + (t.category || '') + ' ' + (t.byName || '') + ' ' + (t.ref || '') + ' ' + (t.note || '')).toLowerCase().includes(k));
+    out = out.filter(t => (t.item + ' ' + (t.category || '') + ' ' + (t.byName || '') + ' ' + (t.ref || '') + ' ' + (t.note || '')).toLowerCase().includes(k));
   }
-  const inc = sumBy(list, 'income'), exp = sumBy(list, 'expense');
+  return out.sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(b.id).localeCompare(String(a.id)));
+}
 
+function filterBar({ withMonth = false, monthValue = '', monthOptions = [], monthAttr = 'data-month', withMode = false } = {}) {
+  const cats = categories('income').concat(categories('expense'));
   return `
-  <div class="grid g-4 mb-16">
-    ${stat('收入', money(inc), `${list.filter(t => t.type === 'income').length} 筆`, 'ok')}
-    ${stat('支出', money(exp), `${list.filter(t => t.type === 'expense').length} 筆`, 'danger')}
-    ${stat('淨額', money(inc - exp), '所選範圍', inc - exp >= 0 ? 'ok' : 'danger')}
-    ${stat('現在結餘', money(currentBalance()), `期初 ${money(openingBalance().amount)} ＋ 淨額 ${money(balance())} · 全部 ${tx().length} 筆`, currentBalance() < 0 ? 'danger' : '')}
-  </div>
-
   <div class="row-between wrap gap-12 mb-16 no-print">
     <div class="toolbar">
-      <select class="select" id="fMonth" style="width:auto">
-        <option value="">全部月份</option>
-        ${allMonths().map(m => `<option value="${m}" ${fMonth === m ? 'selected' : ''}>${m.replace('-', ' 年 ')} 月</option>`).join('')}
-      </select>
+      ${withMode ? `<div class="seg" style="margin:0">
+        <button data-ledger-mode="overview" aria-selected="${ledgerMode === 'overview'}">總覽</button>
+        <button data-ledger-mode="month" aria-selected="${ledgerMode === 'month'}">按月</button>
+      </div>` : ''}
+      ${withMonth ? `<select class="select" id="${monthAttr === 'data-hist-month' ? 'histMonth' : 'fMonth'}" style="width:auto">
+        ${monthOptions.map(([v, label]) => `<option value="${v}" ${monthValue === v ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+      </select>` : ''}
       <select class="select" id="fType" style="width:auto">
         <option value="all">全部類型</option>
         <option value="income" ${fType === 'income' ? 'selected' : ''}>收入</option>
@@ -113,35 +128,200 @@ function ledgerView() {
         <input class="input" id="fKw" placeholder="搜尋項目／經手人／單據" value="${esc(fKw)}"></div>
     </div>
     <div class="row gap-8 wrap">
+      <button class="btn btn-sm" data-fields="transactions" title="改名／加欄位（例：收據編號）">${icon('table', 15)} 欄位</button>
+      <button class="btn btn-sm" data-act="exp-csv">${icon('download', 15)} CSV</button>
+      <button class="btn btn-sm" data-act="exp-word">${icon('download', 15)} Word</button>
+      <button class="btn btn-sm" data-act="exp-pdf">${icon('print', 15)} PDF</button>
+    </div>
+  </div>`;
+}
+
+function ledgerTable(list) {
+  const inc = sumBy(list, 'income'), exp = sumBy(list, 'expense');
+  if (!list.length) return empty('wallet', '呢個範圍未有帳目', '可以按「新增收支」記一筆，或者去「匯入舊帳」');
+  return `<div class="scroll-x"><table class="table">
+    <thead><tr><th style="width:96px">日期</th><th>項目</th><th>分類</th><th>方式 / 經手</th>
+      <th class="right">收入</th><th class="right">支出</th><th></th></tr></thead>
+    <tbody>${list.map(t => `<tr data-open="${t.id}" style="cursor:pointer">
+      <td class="mono sm">${esc(String(t.date).slice(5))}</td>
+      <td><div class="semibold">${esc(t.item)}</div>
+        ${t.note || t.ref ? `<div class="xs faint">${esc(t.ref || '')}${t.ref && t.note ? ' · ' : ''}${esc(t.note || '')}</div>` : ''}</td>
+      <td><span class="tag">${esc(t.category || '其他')}</span></td>
+      <td class="sm">${esc(t.method || '')}${t.byName || t.by ? `<div class="xs faint">${esc(t.byName || memberName(t.by))}</div>` : ''}
+        ${t.receipt ? '<div class="xs" style="color:var(--ok)">✓ 有單據</div>' : '<div class="xs faint">未收單據</div>'}</td>
+      <td class="money income">${t.type === 'income' ? money(t.amount) : ''}</td>
+      <td class="money expense">${t.type === 'expense' ? money(t.amount) : ''}</td>
+      <td class="right"><div class="row-actions">
+        ${can('finance.edit', t) ? `<button class="btn btn-xs btn-ghost" data-edit="${t.id}">${icon('edit', 13)}</button>` : ''}
+        ${can('finance.delete') ? `<button class="btn btn-xs btn-ghost" data-del="${t.id}">${icon('trash', 13)}</button>` : ''}
+      </div></td></tr>`).join('')}</tbody>
+    <tfoot><tr><td colspan="4" class="right">合計</td><td class="money income">${money(inc)}</td>
+      <td class="money expense">${money(exp)}</td><td></td></tr>
+      <tr><td colspan="4" class="right">淨額</td><td colspan="2" class="money" style="color:${inc - exp >= 0 ? 'var(--ok)' : 'var(--danger)'}">${money(inc - exp)}</td><td></td></tr></tfoot>
+  </table></div>`;
+}
+
+/** 12 個月一覽（包括冇紀錄嘅月份，每行都可以撳入去睇） */
+function monthOverview(yearKey, { attr = 'data-fy-month' } = {}) {
+  const rows = fyMonthStats(yearKey);
+  const total = rows.reduce((a, r) => ({ income: a.income + r.income, expense: a.expense + r.expense, count: a.count + r.count }), { income: 0, expense: 0, count: 0 });
+  return `<div class="scroll-x"><table class="table table-compact">
+    <thead><tr><th>月份</th><th class="right">筆數</th><th class="right">收入</th><th class="right">支出</th><th class="right">淨額</th><th></th></tr></thead>
+    <tbody>${rows.map(r => `<tr>
+      <td class="sm ${r.count ? 'semibold' : 'faint'}">${esc(r.label)}</td>
+      <td class="right sm ${r.count ? '' : 'faint'}">${r.count || '—'}</td>
+      <td class="money income">${r.income ? money(r.income) : ''}</td>
+      <td class="money expense">${r.expense ? money(r.expense) : ''}</td>
+      <td class="money" style="color:${r.net > 0 ? 'var(--ok)' : r.net < 0 ? 'var(--danger)' : 'inherit'}">${r.count ? money(r.net) : ''}</td>
+      <td class="right"><button class="btn btn-xs ${r.count ? '' : 'btn-ghost'}" ${attr}="${r.month}">${r.count ? '查看' : '冇紀錄'}</button></td>
+    </tr>`).join('')}</tbody>
+    <tfoot><tr><td>全年合計</td><td class="right">${total.count} 筆</td>
+      <td class="money income">${money(total.income)}</td><td class="money expense">${money(total.expense)}</td>
+      <td class="money">${money(total.income - total.expense)}</td><td></td></tr></tfoot>
+  </table></div>`;
+}
+
+function categoryPanel(list) {
+  const inc = sumBy(list, 'income'), exp = sumBy(list, 'expense');
+  const incCats = categoryBreakdown(list, 'income');
+  const expCats = categoryBreakdown(list, 'expense');
+  return `<div class="grid g-2 mt-16" style="gap:14px">
+    <div>
+      <div class="sm semibold mb-8">收入分類</div>
+      ${incCats.length ? incCats.map(([c, v]) => catRow(c, v, inc, 'ok')).join('') : '<div class="faint sm">冇收入</div>'}
+    </div>
+    <div>
+      <div class="sm semibold mb-8">支出分類</div>
+      ${expCats.length ? expCats.map(([c, v]) => catRow(c, v, exp, 'danger')).join('') : '<div class="faint sm">冇支出</div>'}
+    </div>
+  </div>`;
+}
+
+function ledgerView() {
+  const fy = currentFY();
+  const range = yearRange(fy);
+  const yearTx = txInYear(fy);
+  const opening = openingOf(fy, range);
+  const months = fyMonths(fy);
+  const monthKeys = new Set(yearTx.map(t => String(t.date).slice(0, 7)));
+  if (ledgerMode === 'month' && (!fMonth || !months.includes(fMonth))) {
+    fMonth = months.filter(m => monthKeys.has(m)).pop() || months[0];
+  }
+  const list = ledgerMode === 'month' ? applyFilters(yearTx.filter(t => String(t.date).slice(0, 7) === fMonth)) : applyFilters(yearTx);
+  const inc = sumBy(list, 'income'), exp = sumBy(list, 'expense');
+  const yInc = sumBy(yearTx, 'income'), yExp = sumBy(yearTx, 'expense');
+
+  return `
+  <div class="grid g-4 mb-16">
+    ${stat(`${ledgerMode === 'month' ? monthText(fMonth) : fy + ' 年度'}收入`, money(inc), `${list.filter(t => t.type === 'income').length} 筆`, 'ok')}
+    ${stat('支出', money(exp), `${list.filter(t => t.type === 'expense').length} 筆`, 'danger')}
+    ${stat('淨額', money(inc - exp), '所選範圍', inc - exp >= 0 ? 'ok' : 'danger')}
+    ${stat('期末結餘', money(opening.amount + yInc - yExp), `期初 ${money(opening.amount)} ＋ 本年度淨額 ${money(yInc - yExp)} · 全年 ${yearTx.length} 筆`, opening.amount + yInc - yExp < 0 ? 'danger' : '')}
+  </div>
+
+  <div class="note-box mb-16">${icon('wallet', 15)}<div>
+    <b>呢一頁只係 ${esc(fy)} 年度（${esc(range.start)} 至 ${esc(range.end)}）嘅紀錄</b>，上年度數唔會混入嚟。
+    期初結餘 ${money(opening.amount)} 係<b>上年度結轉</b>，屬於「已有嘅錢」，<b>唔計入收入</b> ——
+    收入只計呢一年真正收到嘅錢，所以睇年結報告唔會覺得「收入好多但錢唔見咗」。<br>
+    <span class="xs">想睇以前年度：去「<b>過往紀錄</b>」揀年度再揀月份。</span>
+  </div></div>
+
+  ${filterBar({
+    withMode: true,
+    withMonth: ledgerMode === 'month',
+    monthValue: fMonth,
+    monthOptions: [['', '（揀月份）']].concat(months.map(m => [m, `${monthText(m)}${monthKeys.has(m) ? `（${yearTx.filter(t => String(t.date).slice(0, 7) === m).length} 筆）` : '（冇紀錄）'} `]))
+  })}
+
+  ${ledgerMode === 'month' ? `
+    <div class="card mb-16">
+      <div class="card-head"><div><div class="card-title">${esc(monthText(fMonth))} 帳目</div>
+        <div class="card-sub">${list.length} 筆 · 收入 ${money(inc)} · 支出 ${money(exp)} · 淨額 ${money(inc - exp)}</div></div>
+        <button class="btn btn-sm" data-ledger-mode="overview">${icon('chevronL', 15)} 返總覽</button></div>
+      ${ledgerTable(list)}
+    </div>
+    ${categoryPanel(list)}`
+  : `
+    <div class="card mb-16">
+      <div class="card-head"><div><div class="card-title">${esc(fy)} 年度 · 逐月總覽</div>
+        <div class="card-sub">12 個月（包括冇紀錄嘅月份）都可以撳入去睇</div></div>
+        <div class="row gap-8"><span class="badge b-grey">全年 ${yearTx.length} 筆</span></div></div>
+      ${monthOverview(fy)}
+    </div>
+    ${categoryPanel(yearTx)}
+    <div class="card mt-16">
+      <div class="card-head"><div><div class="card-title">${esc(fy)} 年度全部帳目${fType !== 'all' || fCat !== 'all' || fKw ? '（已篩選）' : ''}</div>
+        <div class="card-sub">${list.length} 筆</div></div></div>
+      ${ledgerTable(list)}
+    </div>`}`;
+}
+
+/* ============================================================
+   1b. 過往紀錄（先揀年度 → 再揀月份）
+   ============================================================ */
+function historyView() {
+  const years = listYears(tx(), settings()).scout;
+  const keys = years.map(y => y.key);
+  if (!histYear || !keys.includes(histYear)) {
+    // 預設：上一個年度；如果冇就用最舊嘅一個
+    histYear = keys[1] || keys[0];
+  }
+  const range = yearRange(histYear);
+  const months = fyMonths(histYear);
+  const yearTx = tx().filter(t => inRange(t.date, range.start, range.end));
+  const monthKeys = new Set(yearTx.map(t => String(t.date).slice(0, 7)));
+  const inMonth = histMonth ? yearTx.filter(t => String(t.date).slice(0, 7) === histMonth) : yearTx;
+  const list = applyFilters(inMonth);
+  const inc = sumBy(list, 'income'), exp = sumBy(list, 'expense');
+  const yInc = sumBy(yearTx, 'income'), yExp = sumBy(yearTx, 'expense');
+  const opening = openingOf(histYear, range);
+
+  return `
+  <div class="note-box mb-16">${icon('clock', 15)}<div>
+    <b>過往紀錄</b>：先揀<b>年度</b>，再揀<b>月份</b>（月份可以係冇紀錄嘅，照樣揀得到）。
+    呢度係<b>唯讀</b>嘅歷史查閱；要改資料可以撳入去任何一筆帳目。
+  </div></div>
+
+  <div class="row-between wrap gap-12 mb-16 no-print">
+    <div class="toolbar">
+      <select class="select" id="histYear" style="width:auto">
+        ${years.map(y => `<option value="${esc(y.key)}" ${histYear === y.key ? 'selected' : ''}>${esc(y.key)}（${esc(y.start)} 至 ${esc(y.end)}）</option>`).join('')}
+      </select>
+      <select class="select" id="histMonth" style="width:auto">
+        <option value="">全年度（12 個月）</option>
+        ${months.map(m => `<option value="${m}" ${histMonth === m ? 'selected' : ''}>${esc(monthText(m))}${monthKeys.has(m) ? `（${yearTx.filter(t => String(t.date).slice(0, 7) === m).length} 筆）` : '（冇紀錄）'}</option>`).join('')}
+      </select>
+      <button class="btn btn-sm" data-hist-jump="cur">${icon('refresh', 15)} 返本年度</button>
+    </div>
+    <div class="row gap-8 wrap">
       <button class="btn btn-sm" data-act="exp-csv">${icon('download', 15)} CSV</button>
       <button class="btn btn-sm" data-act="exp-word">${icon('download', 15)} Word</button>
       <button class="btn btn-sm" data-act="exp-pdf">${icon('print', 15)} PDF</button>
     </div>
   </div>
 
+  <div class="grid g-4 mb-16">
+    ${stat('期初結餘', money(opening.amount), '上年度結轉（唔計入收入）')}
+    ${stat('收入', money(yInc), `${yearTx.filter(t => t.type === 'income').length} 筆 · 全年`, 'ok')}
+    ${stat('支出', money(yExp), `${yearTx.filter(t => t.type === 'expense').length} 筆 · 全年`, 'danger')}
+    ${stat('期末結餘', money(opening.amount + yInc - yExp), `${histYear} 年度`, opening.amount + yInc - yExp < 0 ? 'danger' : '')}
+  </div>
+
+  ${filterBar({ withMonth: false })}
+
+  <div class="card mb-16">
+    <div class="card-head"><div><div class="card-title">${esc(histYear)} 年度 · 逐月一覽</div>
+      <div class="card-sub">全年 ${yearTx.length} 筆</div></div></div>
+    ${monthOverview(histYear, { attr: 'data-hist-month' })}
+  </div>
+
   <div class="card">
-    ${list.length ? `<div class="scroll-x"><table class="table">
-      <thead><tr><th style="width:96px">日期</th><th>項目</th><th>分類</th><th>方式 / 經手</th>
-        <th class="right">收入</th><th class="right">支出</th><th></th></tr></thead>
-      <tbody>${list.map(t => `<tr data-open="${t.id}" style="cursor:pointer">
-        <td class="mono sm">${esc(String(t.date).slice(5))}</td>
-        <td><div class="semibold">${esc(t.item)}</div>
-          ${t.note || t.ref ? `<div class="xs faint">${esc(t.ref || '')}${t.ref && t.note ? ' · ' : ''}${esc(t.note || '')}</div>` : ''}</td>
-        <td><span class="tag">${esc(t.category || '其他')}</span></td>
-        <td class="sm">${esc(t.method || '')}${t.byName || t.by ? `<div class="xs faint">${esc(t.byName || memberName(t.by))}</div>` : ''}
-          ${t.receipt ? '<div class="xs" style="color:var(--ok)">✓ 有單據</div>' : '<div class="xs faint">未收單據</div>'}</td>
-        <td class="money income">${t.type === 'income' ? money(t.amount) : ''}</td>
-        <td class="money expense">${t.type === 'expense' ? money(t.amount) : ''}</td>
-        <td class="right"><div class="row-actions">
-          ${can('finance.edit', t) ? `<button class="btn btn-xs btn-ghost" data-edit="${t.id}">${icon('edit', 13)}</button>` : ''}
-          ${can('finance.delete') ? `<button class="btn btn-xs btn-ghost" data-del="${t.id}">${icon('trash', 13)}</button>` : ''}
-        </div></td></tr>`).join('')}</tbody>
-      <tfoot><tr><td colspan="4" class="right">合計</td><td class="money income">${money(inc)}</td>
-        <td class="money expense">${money(exp)}</td><td></td></tr>
-        <tr><td colspan="4" class="right">淨額</td><td colspan="2" class="money" style="color:${inc - exp >= 0 ? 'var(--ok)' : 'var(--danger)'}">${money(inc - exp)}</td><td></td></tr></tfoot>
-    </table></div>` : empty('wallet', '未有帳目紀錄', '按「新增收支」開始記帳，或者去「匯入舊帳」')}
+    <div class="card-head"><div><div class="card-title">${histMonth ? esc(monthText(histMonth)) : `${esc(histYear)} 年度全部`} 帳目</div>
+      <div class="card-sub">${list.length} 筆 · 收入 ${money(inc)} · 支出 ${money(exp)} · 淨額 ${money(inc - exp)}</div></div></div>
+    ${ledgerTable(list)}
   </div>`;
 }
+
 
 /* ---------- 新增 / 編輯收支 ---------- */
 function txPage(id) {
@@ -240,15 +420,17 @@ function reportsView() {
           <div class="scroll-x"><table class="table table-compact">
             <thead><tr><th>項目</th><th class="right">旅年度</th><th class="right">童軍年度</th></tr></thead>
             <tbody>
-              <tr><td class="sm">期初結餘</td><td class="money">${money(uOpen)}</td><td class="money">${money(sOpen)}</td></tr>
-              <tr><td class="sm">收入</td><td class="money income">${money(uSum.income)}</td><td class="money income">${money(sSum.income)}</td></tr>
-              <tr><td class="sm">支出</td><td class="money expense">${money(uSum.expense)}</td><td class="money expense">${money(sSum.expense)}</td></tr>
-              <tr><td class="sm semibold">淨額</td><td class="money">${money(uSum.net)}</td><td class="money">${money(sSum.net)}</td></tr>
-              <tr><td class="sm semibold">期末結餘</td><td class="money">${money(uOpen + uSum.net)}</td><td class="money">${money(sOpen + sSum.net)}</td></tr>
+              <tr class="row-sep"><td class="sm"><b>上年度結餘</b>（期初）<div class="xs faint">唔計入收入</div></td>
+                <td class="money">${money(uOpen)}</td><td class="money">${money(sOpen)}</td></tr>
+              <tr><td class="sm">本年度收入</td><td class="money income">${money(uSum.income)}</td><td class="money income">${money(sSum.income)}</td></tr>
+              <tr><td class="sm">本年度支出</td><td class="money expense">${money(uSum.expense)}</td><td class="money expense">${money(sSum.expense)}</td></tr>
+              <tr><td class="sm semibold">本年度淨額</td><td class="money">${money(uSum.net)}</td><td class="money">${money(sSum.net)}</td></tr>
+              <tr class="row-sep"><td class="sm semibold">期末結餘</td><td class="money">${money(uOpen + uSum.net)}</td><td class="money">${money(sOpen + sSum.net)}</td></tr>
               <tr><td class="sm">帳目筆數</td><td class="money">${uSum.count}</td><td class="money">${sSum.count}</td></tr>
             </tbody>
           </table></div>
-          <div class="xs faint mt-8">＊兩段期間可能重疊（AGM 之後到 3 月 31 日），所以同一筆帳目可以同時出現在兩份報告。</div>
+          <div class="xs faint mt-8">＊上年度結餘同收入<b>分開列</b>（上年度嘅錢已經係「袋住嘅錢」，唔係本年度收入）。<br>
+            ＊兩段期間可能重疊（AGM 之後到 3 月 31 日），所以同一筆帳目可以同時出現在兩份報告。</div>
         </div>
       </div>
 
@@ -292,11 +474,27 @@ function reportBlock({ kind, range, sum, open, picker, pick, attr }) {
       </select>
     </div>
     <div style="padding:16px 18px">
-      <div class="grid g-4" style="gap:10px">
-        <div><div class="xs faint">期初結餘</div><div class="semibold mono">${money(open)}</div></div>
-        <div><div class="xs faint">收入</div><div class="semibold mono" style="color:var(--ok)">${money(sum.income)}</div></div>
-        <div><div class="xs faint">支出</div><div class="semibold mono" style="color:var(--danger)">${money(sum.expense)}</div></div>
-        <div><div class="xs faint">期末結餘</div><div class="semibold mono" style="color:var(--brand-700)">${money(close)}</div></div>
+      <div class="scroll-x"><table class="table table-compact">
+        <tbody>
+          <tr class="row-sep"><td class="sm"><b>上年度結餘（期初）</b></td>
+            <td class="money" style="width:150px"><b>${money(open)}</b></td>
+            <td class="xs faint" style="width:190px">上年度結轉過嚟嘅錢 —— <b>唔計入收入</b></td></tr>
+          <tr><td class="sm" style="padding-left:22px">本年度收入</td>
+            <td class="money income">${money(sum.income)}</td>
+            <td class="xs faint">${sum.rows.filter(t => t.type === 'income').length} 筆</td></tr>
+          <tr><td class="sm" style="padding-left:22px">本年度支出</td>
+            <td class="money expense">${money(sum.expense)}</td>
+            <td class="xs faint">${sum.rows.filter(t => t.type === 'expense').length} 筆</td></tr>
+          <tr><td class="sm"><b>本年度淨額</b>（收入 − 支出）</td>
+            <td class="money" style="color:${sum.net >= 0 ? 'var(--ok)' : 'var(--danger)'}"><b>${money(sum.net)}</b></td>
+            <td class="xs faint">未計上年度結餘</td></tr>
+          <tr class="row-sep"><td class="sm"><b>期末結餘</b></td>
+            <td class="money" style="color:var(--brand-700)"><b>${money(close)}</b></td>
+            <td class="xs faint">＝ 期初 ${money(open)} ＋ 淨額 ${money(sum.net)}</td></tr>
+        </tbody>
+      </table></div>
+      <div class="xs faint mt-8">
+        ＊上年度結餘同收入<b>分開列</b>，唔會混在一起：收入只計呢段期間真正收到嘅錢。
       </div>
 
       <div class="grid g-2 mt-16" style="gap:14px">
@@ -338,6 +536,7 @@ function feesView() {
   const st = feeStats(period);
   const rows = st.rows;
   const periods = feePeriods();
+  const exempt = feeExemptList();     // 免收團費（領袖等）
 
   return `
   <div class="grid g-4 mb-16">
@@ -367,7 +566,8 @@ function feesView() {
     團費<b>每年每人 ${money(standardFee())}</b>${overseasFee() !== standardFee() ? `（海外／優惠 ${money(overseasFee())}）` : ''}
     —— <b>銀碼唔係寫死</b>，可以喺「團費金額設定」改，亦可以逐個團員改（新入團按月、海外團員 1/4 等）。
     喺下面按「未收」→ 改「已收」就會自動喺帳目加一筆收入（同一日、分類「團費」），
-    唔使再入兩次；按錯可以「取消收款」，相關帳目會一齊撤銷。</div></div>
+    唔使再入兩次；按錯可以「取消收款」，相關帳目會一齊撤銷。
+    ${exempt.length ? `<div class="xs mt-4" style="color:var(--ok)">✓ <b>領袖免收團費</b>：${esc(exempt.map(m => m.name).join('、'))} —— 已經自動排除喺收費表之外，唔會再有逾期提示。</div>` : ''}</div></div>
 
   <div class="card">
     <div class="card-head"><div>
@@ -1075,12 +1275,19 @@ function reportHtml(title, range, sum, open, { withRows = true } = {}) {
   return `
   <h2>${esc(title)}</h2>
   <p class="en-block">${esc(range.title)} · ${esc(range.sub)}</p>
-  <div class="kpi">
-    <div><div class="k">期初結餘</div><div class="v">${currency()}${nf(open, 2)}</div></div>
-    <div><div class="k">收入</div><div class="v">${currency()}${nf(sum.income, 2)}</div></div>
-    <div><div class="k">支出</div><div class="v">${currency()}${nf(sum.expense, 2)}</div></div>
-    <div><div class="k">期末結餘</div><div class="v">${currency()}${nf(close, 2)}</div></div>
-  </div>
+  <table>
+    <thead><tr><th style="width:44%">項目</th><th class="num">金額</th><th>備註</th></tr></thead>
+    <tbody>
+      <tr><td><b>上年度結餘（期初）</b></td><td class="num">${currency()}${nf(open, 2)}</td>
+        <td>上年度結轉，<b>不計入本年度收入</b></td></tr>
+      <tr><td>本年度收入</td><td class="num">${currency()}${nf(sum.income, 2)}</td><td>本期間真正收到嘅錢</td></tr>
+      <tr><td>本年度支出</td><td class="num">${currency()}${nf(sum.expense, 2)}</td><td></td></tr>
+      <tr><td><b>本年度淨額</b>（收入 − 支出）</td><td class="num">${currency()}${nf(sum.net, 2)}</td><td>未計上年度結餘</td></tr>
+      <tr><td><b>期末結餘</b></td><td class="num">${currency()}${nf(close, 2)}</td>
+        <td>期初 ${currency()}${nf(open, 2)} ＋ 淨額 ${currency()}${nf(sum.net, 2)}</td></tr>
+    </tbody>
+  </table>
+  <p class="note">＊上年度結餘與本年度收入分開列示，避免「收入」數字被上年度結餘放大。</p>
   <table>
     <thead><tr><th>分類</th><th class="num">收入</th><th class="num">支出</th></tr></thead>
     <tbody>
@@ -1111,7 +1318,7 @@ function currentRanges() {
 
 function reportMeta() {
   const p = profile();
-  return `${p.name || ''} · 列印日期 ${todayISO()} · 由 82venture 執委管理系統輸出`;
+  return `${p.name || ''} · 列印日期 ${todayISO()} · 由執委管理系統輸出`;
 }
 
 function exportReportWord(both = true, which = 'unit') {
@@ -1139,14 +1346,41 @@ function exportReportPdf(both = true, which = 'unit') {
   printDoc({ title: '財務報告', org: profile().name, bodyHtml: body });
 }
 
-function exportLedgerCsv() {
-  const rows = tx().slice().sort((a, b) => String(a.date).localeCompare(String(b.date))).map(t => [
+/** 而家睇緊嘅範圍（帳目 / 過往紀錄 兩個分頁都用同一個匯出） */
+function currentSelection() {
+  if (tab === 'history') {
+    const range = yearRange(histYear);
+    const yearTx = tx().filter(t => inRange(t.date, range.start, range.end));
+    const list = histMonth ? yearTx.filter(t => String(t.date).slice(0, 7) === histMonth) : yearTx;
+    return {
+      list: applyFilters(list),
+      label: histMonth ? `${histYear} ${monthText(histMonth)}` : `${histYear} 年度`,
+      year: histYear, month: histMonth || '', opening: openingOf(histYear, range).amount
+    };
+  }
+  if (tab === 'ledger') {
+    const fy = currentFY();
+    const range = yearRange(fy);
+    const yearTx = txInYear(fy);
+    const month = ledgerMode === 'month' ? fMonth : '';
+    const list = month ? yearTx.filter(t => String(t.date).slice(0, 7) === month) : yearTx;
+    return {
+      list: applyFilters(list),
+      label: month ? `${fy} ${monthText(month)}` : `${fy} 年度`,
+      year: fy, month, opening: openingOf(fy, range).amount
+    };
+  }
+  return { list: applyFilters(tx()), label: '全部帳目', year: '', month: '', opening: null };
+}
+
+function exportLedgerCsv(sel = currentSelection()) {
+  const rows = sel.list.slice().sort((a, b) => String(a.date).localeCompare(String(b.date))).map(t => [
     t.date, t.type === 'income' ? '收入' : '支出', t.item, t.amount, t.category || '', t.method || '',
     t.byName || (t.by ? memberName(t.by) : ''), t.ref || '', t.receipt ? '有' : '', t.note || '',
     unitFYOf(t.date, settings().agmDates).key
   ]);
   toCSV({
-    filename: `帳目_${stamp()}.csv`,
+    filename: `帳目_${sel.label.replace(/\s/g, '')}_${stamp()}.csv`,
     headers: ['日期', '類型', '項目', '金額', '分類', '方式', '經手人', '單據號', '單據', '備註', '旅年度'],
     rows
   });
@@ -1163,6 +1397,32 @@ export function mount(root, params) {
   }));
   root.querySelectorAll('[data-cf]').forEach(b => b.addEventListener('click', () => { claimFilter = b.dataset.cf; refresh(); }));
   root.querySelectorAll('[data-act="entry-share"]').forEach(b => b.addEventListener('click', () => entryShareDialog()));
+
+  /* 帳目（本年度）：總覽 / 按月 */
+  root.querySelectorAll('[data-ledger-mode]').forEach(b => b.addEventListener('click', () => {
+    ledgerMode = b.dataset.ledgerMode;
+    if (ledgerMode === 'month' && !fMonth) {
+      const months = fyMonths(currentFY());
+      const has = txInYear(currentFY()).map(t => String(t.date).slice(0, 7));
+      fMonth = months.filter(m => has.includes(m)).pop() || months[0];
+    }
+    go('#/finance/ledger');
+    refresh();
+  }));
+  /* 12 個月一覽：撳任何一個月（包括冇紀錄）都可以入去 */
+  root.querySelectorAll('[data-fy-month]').forEach(b => b.addEventListener('click', () => {
+    fMonth = b.dataset.fyMonth; ledgerMode = 'month'; refresh();
+  }));
+
+  /* 過往紀錄：年度 → 月份 */
+  const histYearSel = root.querySelector('#histYear');
+  if (histYearSel) histYearSel.addEventListener('change', () => { histYear = histYearSel.value; histMonth = ''; refresh(); });
+  const histMonthSel = root.querySelector('#histMonth');
+  if (histMonthSel) histMonthSel.addEventListener('change', () => { histMonth = histMonthSel.value; refresh(); });
+  root.querySelectorAll('[data-hist-month]').forEach(b => b.addEventListener('click', () => { histMonth = b.dataset.histMonth; refresh(); }));
+  root.querySelector('[data-hist-jump]')?.addEventListener('click', () => {
+    ledgerMode = 'overview'; histMonth = ''; tab = 'ledger'; go('#/finance/ledger'); refresh();
+  });
 
   /* 年度設定頁：輸入先暫存喺瀏覽器，撳「儲存」先寫入（防呆） */
   if (tab === 'settings') {
@@ -1223,7 +1483,7 @@ export function mount(root, params) {
     cat: root.querySelector('#fCat'), kw: root.querySelector('#fKw'),
     period: root.querySelector('#feePeriod')
   };
-  if (sel.month) sel.month.addEventListener('change', () => { fMonth = sel.month.value; refresh(); });
+  if (sel.month) sel.month.addEventListener('change', () => { fMonth = sel.month.value; ledgerMode = 'month'; refresh(); });
   if (sel.type) sel.type.addEventListener('change', () => { fType = sel.type.value; refresh(); });
   if (sel.cat) sel.cat.addEventListener('change', () => { fCat = sel.cat.value; refresh(); });
   if (sel.kw) sel.kw.addEventListener('input', () => { fKw = sel.kw.value; clearTimeout(sel.kw._t); sel.kw._t = setTimeout(refresh, 220); });
@@ -1311,10 +1571,10 @@ export function mount(root, params) {
     const act = b.dataset.act;
 
     if (act === 'add') return go('#/finance/new');
-    if (act === 'exp-csv') { exportLedgerCsv(); toast('已匯出 CSV', 'ok'); }
-    if (act === 'exp-all-csv') { exportLedgerCsv(); toast('已匯出全部帳目 CSV', 'ok'); }
-    if (act === 'exp-word') { exportRangeWord(); toast('已輸出 Word', 'ok'); }
-    if (act === 'exp-pdf') { exportRangePdf(); }
+    if (act === 'exp-csv') { const s = currentSelection(); exportLedgerCsv(s); toast(`已匯出 CSV（${s.label}）`, 'ok'); }
+    if (act === 'exp-all-csv') { exportLedgerCsv({ list: applyFilters(tx()), label: '全部帳目', year: '', month: '', opening: null }); toast('已匯出全部帳目 CSV', 'ok'); }
+    if (act === 'exp-word') { const s = currentSelection(); exportRangeWord(s); toast(`已輸出 Word（${s.label}）`, 'ok'); }
+    if (act === 'exp-pdf') { exportRangePdf(currentSelection()); }
     if (act === 'exp-report-word') { exportReportWord(true); toast('已輸出雙年度報告（Word）', 'ok'); }
     if (act === 'exp-report-pdf') { exportReportPdf(true); }
     if (act === 'exp-report-unit') { exportReportWord(false, 'unit'); toast('已輸出旅年度報告', 'ok'); }
@@ -1642,7 +1902,9 @@ async function genFees() {
   const period = feePeriod || feePeriodOf(todayISO());
   const std = standardFee();
   const ovs = overseasFee();
-  const list = members().filter(m => m.status !== 'alumni').sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh-Hant'));
+  /* 領袖（＋任何剔咗「免收團費」嘅人）唔會出現在團費名單 */
+  const exempt = feeExemptList();
+  const list = members().filter(m => m.status !== 'alumni' && !feeExempt(m)).sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh-Hant'));
   const r = await modal({
     title: '開新年度團費', sub: '每人金額可以逐個改（新入團按月、海外團員 1/4 …）', wide: true,
     body: `
@@ -2051,42 +2313,48 @@ function feeReceipt(id) {
   });
 }
 
-function exportRangeWord() {
-  // 匯出所選月份／篩選範圍嘅帳目
-  let list = tx().slice();
-  if (fMonth) list = list.filter(t => String(t.date).slice(0, 7) === fMonth);
-  if (fType !== 'all') list = list.filter(t => t.type === fType);
-  if (fCat !== 'all') list = list.filter(t => t.category === fCat);
-  list.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+/** 帳目紀錄文件（Word／PDF 共用）—— 期初結餘同收入分開列 */
+function ledgerDocBody(sel, { withMethod = true } = {}) {
+  const list = sel.list.slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
   const inc = sumBy(list, 'income'), exp = sumBy(list, 'expense');
+  const head = `<div class="doc-head"><div class="doc-org">${esc(profile().name || '')}</div>
+    <div class="doc-title">帳目紀錄</div>
+    <div class="doc-sub">${esc(sel.label)} · 列印日期 ${esc(todayISO())}</div></div>`;
+  const acc = `<table>
+      <tbody>
+        ${sel.opening === null || sel.opening === undefined ? '' :
+          `<tr class="row-sep"><td><b>上年度結餘（期初，唔計入收入）</b></td><td class="num">${nf(sel.opening, 2)}</td></tr>`}
+        <tr><td>收入合計</td><td class="num">${nf(inc, 2)}</td></tr>
+        <tr><td>支出合計</td><td class="num">${nf(exp, 2)}</td></tr>
+        <tr><td><b>淨額</b>（收入 − 支出）</td><td class="num">${nf(inc - exp, 2)}</td></tr>
+        ${sel.opening === null || sel.opening === undefined ? '' :
+          `<tr class="row-sep"><td><b>期末結餘</b></td><td class="num">${nf(Number(sel.opening) + inc - exp, 2)}</td></tr>`}
+      </tbody></table>`;
+  const rows = list.map(t => `<tr><td>${esc(t.date)}</td><td>${esc(t.item)}</td><td>${esc(t.category || '')}</td>
+      ${withMethod ? `<td>${esc(t.method || '')}</td><td>${esc(t.byName || (t.by ? memberName(t.by) : ''))}</td>` : ''}
+      <td class="num">${t.type === 'income' ? nf(t.amount, 2) : ''}</td>
+      <td class="num">${t.type === 'expense' ? nf(t.amount, 2) : ''}</td></tr>`).join('');
+  return {
+    head, acc, inc, exp, count: list.length,
+    body: `${head}${acc}<table>
+      <thead><tr><th>日期</th><th>項目</th><th>分類</th>${withMethod ? '<th>方式</th><th>經手人</th>' : ''}<th class="num">收入</th><th class="num">支出</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="${withMethod ? 7 : 5}">（此期間冇帳目）</td></tr>`}</tbody>
+      <tfoot><tr><td colspan="${withMethod ? 5 : 3}">合計</td><td class="num">${nf(inc, 2)}</td><td class="num">${nf(exp, 2)}</td></tr></tfoot></table>`
+  };
+}
+
+function exportRangeWord(sel = currentSelection()) {
+  const d = ledgerDocBody(sel);
   toWord({
-    filename: `帳目_${fMonth || '全部'}_${stamp()}.doc`, title: '帳目紀錄', org: profile().name,
-    bodyHtml: `<div class="doc-head"><div class="doc-title">帳目紀錄</div>
-      <div class="doc-sub">${esc(profile().name || '')} · ${fMonth ? fMonth + ' · ' : '全部 · '}${todayISO()}</div></div>
-      <table><thead><tr><th>日期</th><th>項目</th><th>分類</th><th>方式</th><th>經手人</th><th class="num">收入</th><th class="num">支出</th></tr></thead>
-      <tbody>${list.map(t => `<tr><td>${esc(t.date)}</td><td>${esc(t.item)}</td><td>${esc(t.category || '')}</td>
-        <td>${esc(t.method || '')}</td><td>${esc(t.byName || (t.by ? memberName(t.by) : ''))}</td>
-        <td class="num">${t.type === 'income' ? nf(t.amount, 2) : ''}</td>
-        <td class="num">${t.type === 'expense' ? nf(t.amount, 2) : ''}</td></tr>`).join('')}</tbody>
-      <tfoot><tr><td colspan="5">合計</td><td class="num">${nf(inc, 2)}</td><td class="num">${nf(exp, 2)}</td></tr></tfoot></table>`
+    filename: `帳目_${sel.label.replace(/\s/g, '')}_${stamp()}.doc`, title: '帳目紀錄', org: profile().name,
+    bodyHtml: d.body
   });
 }
-function exportRangePdf() {
-  let list = tx().slice();
-  if (fMonth) list = list.filter(t => String(t.date).slice(0, 7) === fMonth);
-  if (fCat !== 'all') list = list.filter(t => t.category === fCat);
-  list.sort((a, b) => String(a.date).localeCompare(String(b.date)));
-  const inc = sumBy(list, 'income'), exp = sumBy(list, 'expense');
+function exportRangePdf(sel = currentSelection()) {
+  const d = ledgerDocBody(sel, { withMethod: false });
   printDoc({
     title: '帳目紀錄', org: profile().name,
-    bodyHtml: `<div class="doc-head"><div class="doc-title">帳目紀錄</div>
-      <div class="doc-sub">${esc(profile().name || '')} · ${todayISO()}</div></div>
-      <table><thead><tr><th>日期</th><th>項目</th><th>分類</th><th class="num">收入</th><th class="num">支出</th></tr></thead>
-      <tbody>${list.map(t => `<tr><td>${esc(t.date)}</td><td>${esc(t.item)}</td><td>${esc(t.category || '')}</td>
-        <td class="num">${t.type === 'income' ? nf(t.amount, 2) : ''}</td>
-        <td class="num">${t.type === 'expense' ? nf(t.amount, 2) : ''}</td></tr>`).join('')}</tbody>
-      <tfoot><tr><td colspan="3">合計</td><td class="num">${nf(inc, 2)}</td><td class="num">${nf(exp, 2)}</td></tr></tfoot></table>
-      <div class="foot"><span>司庫簽署：____________</span><span>${todayISO()}</span></div>`
+    bodyHtml: d.body + `<div class="foot"><span>司庫簽署：____________</span><span>${todayISO()}</span></div>`
   });
 }
 

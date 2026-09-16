@@ -93,6 +93,7 @@ export function render(params) {
     sub: `${all.length} 張 · 已發布 ${open.length} 張 · 收到報名 ${totalSignups} 份`,
     actions: `
       <button class="btn btn-sm" data-act="preview-public">${icon('eye', 15)} 公開頁預覽</button>
+      <button class="btn btn-sm" data-fields="notices">${icon('table', 15)} 欄位</button>
       ${can('notice.create') ? `<button class="btn btn-sm btn-primary" data-act="new">${icon('plus', 15)} 開新通告</button>` : ''}`
   })}
   ${tabs([['list', '通告列表', all.length], ['signups', '報名紀錄', totalSignups], ['settings', '分享設定']], tab)}
@@ -397,14 +398,38 @@ function signupsView() {
   const rows = [];
   notices().forEach(n => signupsOf(n).forEach(r => rows.push({ n, r })));
   rows.sort((a, b) => String(b.r.at || '').localeCompare(String(a.r.at || '')));
+  /* 逐張通告嘅統計（執委一眼睇齊：報名／出席／唔出席／未回覆）*/
+  const perNotice = notices()
+    .filter(n => n.needSignup || signupsOf(n).length)
+    .map(n => ({ n, count: signupsOf(n).length, A: attendanceSummary(n) }))
+    .sort((a, b) => String(b.n.createdAt || b.n.publishAt || '').localeCompare(String(a.n.createdAt || a.n.publishAt || '')));
   return `
   <div class="row-between wrap gap-12 mb-16">
     <div class="toolbar">
       <button class="btn btn-sm" data-act="export-all-signups">${icon('download', 15)} 全部報名 CSV</button>
       <button class="btn btn-sm" data-act="export-all-word">${icon('download', 15)} 全部報名 Word</button>
     </div>
-    <div class="sm muted">共 ${rows.length} 份</div>
+    <div class="sm muted">共 ${rows.length} 份 · ${perNotice.length} 張通告收報名</div>
   </div>
+
+  ${perNotice.length ? `<div class="card mb-16">
+    <div class="card-head"><div><div class="card-title">逐張通告統計</div>
+      <div class="card-sub">報名人數、出席／唔出席、仲有幾多人未回覆（唔使實體通告都數得清）</div></div></div>
+    <div class="scroll-x"><table class="table table-compact">
+      <thead><tr><th>通告</th><th>狀態</th><th class="right">報名</th><th class="right">出席</th><th class="right">唔出席</th><th class="right">未回覆</th><th>截止</th><th></th></tr></thead>
+      <tbody>${perNotice.map(({ n, count, A }) => `<tr>
+        <td class="sm"><div class="semibold">${esc(n.title?.zh || '（無標題）')}</div>
+          <div class="xs faint">${esc(typeLabel(n.type))}${n.eventDate ? ` · ${esc(n.eventDate)}` : ''}</div></td>
+        <td>${published(n) ? '<span class="badge b-ok"><span class="dot"></span>已發布</span>' : '<span class="badge b-warn"><span class="dot"></span>草稿</span>'}</td>
+        <td class="right mono">${count}${n.quota ? `<span class="faint"> / ${n.quota}</span>` : ''}</td>
+        <td class="right mono" style="color:var(--ok)">${A.yes}</td>
+        <td class="right mono" style="color:var(--danger)">${A.no}</td>
+        <td class="right mono">${A.none}</td>
+        <td class="mono sm">${esc(n.deadline || '—')}</td>
+        <td class="right"><button class="btn btn-xs" data-open="${n.id}">明細</button></td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+  </div>` : ''}
   <div class="card">
     ${rows.length ? `<div class="scroll-x"><table class="table">
       <thead><tr><th>時間</th><th>通告</th><th>姓名</th><th>聯絡</th><th>其他</th><th></th></tr></thead>
@@ -450,7 +475,7 @@ function settingsView() {
           <input class="input" id="n-submit" value="${esc(s.submitUrl || '')}" placeholder="https://script.google.com/macros/s/…/exec">
           <div class="hint">設定咗：公開頁嘅報名會直接 POST 去你嘅總表（Google Sheet）。
             未設定：報名會存喺填表人自己嗰部裝置，領袖可以喺該裝置輸出 CSV。
-            Apps Script 範本可以喺「表格與同步」頁下載。</div></div>
+            Apps Script 範本可以喺「帳號與系統 → 資料管理」下載。</div></div>
         ${can('notice.edit') ? `<button class="btn btn-primary mt-12" data-act="save-settings">${icon('save', 15)} 儲存</button>` : ''}
       </div>
     </div>

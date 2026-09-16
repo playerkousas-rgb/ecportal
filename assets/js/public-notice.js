@@ -101,7 +101,7 @@ function render() {
 
     ${n.needSignup ? signupCard(n, { closed, full, inner }) : ''}
 
-    <div class="center xs faint mt-16 no-print">本頁免登入公開閱讀 · 由 82venture 執委管理系統發出</div>
+    <div class="center xs faint mt-16 no-print">本頁免登入公開閱讀 · 由執委管理系統發出</div>
   </div>`;
 
   // 相片檢視

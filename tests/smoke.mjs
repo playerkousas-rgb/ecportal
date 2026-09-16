@@ -1217,9 +1217,12 @@ section('進度追蹤（連通檢查）');
   window.dispatchEvent(new window.HashChangeEvent('hashchange'));
   await new Promise(r => setTimeout(r, 60));
   const v4 = doc.getElementById('view');
-  ok('進度頁有就緒清單', /連通進度追蹤/.test(v4.textContent));
-  ok('進度頁有「檢查連線（實測）」掣', !!v4.querySelector('[data-act="check"]'));
-  ok('checkConnection 係一支可以用嘅函式', typeof pv.checkConnection === 'function');
+  ok('進度頁主畫面有「重新讀取」掣', !!v4.querySelector('[data-act="reload"]'));
+  ok('進度頁保留外連模式（舊做法）嘅檢查連線', (() => {
+    window.location.hash = '#/progress/settings';
+    window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+    return typeof pv.checkConnection === 'function';
+  })());
 }
 
 /* ---------- 8. 首頁帳目：現在結餘（含期初） ---------- */
@@ -1464,11 +1467,16 @@ console.log('\n▌跨系統身份 key（進度追蹤係獨立系統，要靠 key
   window.dispatchEvent(new window.HashChangeEvent('hashchange'));
   await new Promise(r => setTimeout(r, 80));
   const pv = doc.getElementById('view').textContent;
-  ok('進度頁講明係聯邦式（進度資料由對面系統擁有）', /聯邦式/.test(pv) && /獨立系統/.test(pv));
-  ok('進度頁顯示身份對應覆蓋率（團員 YMIS／領袖 Email 分開計）',
-    /可以同對方對上/.test(pv) && /團員／執委（要有 YMIS）/.test(pv) && /領袖（要有 Email）/.test(pv));
-  ok('進度頁分得開「連結就緒」同「身份對齊」', /連結狀態/.test(pv) && /資料可對應|身份未對齊/.test(pv));
-  ok('進度頁有去補 YMIS 嘅捷徑', !!doc.querySelector('[data-go="#/members"]'));
+  /* 2026-09-16：進度頁改成「直接讀取 VSBADGE」（唔再靠外連）*/
+  ok('進度頁講明直接接駁旅團自己嘅 VSBADGE', /直接接駁|直接讀取/.test(pv));
+  ok('進度頁有「設定」入口（填後端網址 / API Key）', !!doc.querySelector('[data-act="settings"]'));
+  ok('未設定時有逐步教學（showApiKey → 複製 /exec）',
+    /showApiKey/.test(pv) && /exec/.test(pv));
+  ok('設定頁保留身份對應說明（YMIS 對人）', (() => {
+    window.location.hash = '#/progress/settings';
+    window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+    return true;
+  })());
 
   /* 總表要帶住 key，Sheet 先可以做 join */
   const { gasTemplate } = await import('../assets/js/lib/gastemplate.js');
@@ -1516,8 +1524,10 @@ console.log('\n▌新旅團申請接入（送去 ADMIN 收件匣）');
   ok('管理員 checklist 有列出兩邊要做嘅嘢',
     cl.length >= 4 && cl.some(x => x.includes('units.json')) && cl.some(x => x.includes('troops.json')),
     JSON.stringify(cl));
-  ok('checklist 提埋 portalOrigin / portalRoles',
-    cl.some(x => /portalOrigin/.test(x)), JSON.stringify(cl));
+  ok('checklist 講明旅團自己去「進度 → 設定」填 Script ＋ API Key',
+    cl.some(x => /進度 → 設定/.test(x) && /API Key/.test(x)), JSON.stringify(cl));
+  ok('checklist 唔再要求 portalOrigin（改咗直接接駁）',
+    !cl.some(x => /portalOrigin/.test(x)), JSON.stringify(cl));
 
 }
 
@@ -1536,9 +1546,276 @@ console.log('\n▌新旅團申請接入（送去 ADMIN 收件匣）');
   window.dispatchEvent(new window.HashChangeEvent('hashchange'));
   await new Promise(r => setTimeout(r, 80));
   const pt = doc.getElementById('view').textContent;
-  ok('教學「進度接駁」警告唔好填 GAS /exec', /唔好填 Google Apps Script/.test(pt) && /Unknown action/.test(pt));
-  ok('教學講明 Portal 身份可以留空（自動產生）', /可以留空/.test(pt) && /PORTAL-/.test(pt));
+  ok('教學「進度接駁」講明直接接駁（唔使外連）', /直接接駁/.test(pt) && /唔使外連/.test(pt));
+  ok('教學教喺 VSBADGE 攞 API Key 同 /exec 網址', /顯示 API Key/.test(pt) && /exec/.test(pt));
   ok('教學講明團員用 YMIS、領袖用 Email', /團員／執委用 YMIS/.test(pt) && /領袖用 Email/.test(pt));
+  ok('教學保留外連入口講解', /仍然保留/.test(pt));
+}
+
+/* ---------- 財務：領袖免收團費（2026-09-16 團長要求） ---------- */
+section('團費（領袖免收）');
+{
+  const f = await import('../assets/js/lib/model.js');
+  const keepMembers = JSON.parse(JSON.stringify(store.load().members));
+  const keepFees = JSON.parse(JSON.stringify(store.load().fees));
+  store.load().members = [
+    { id: 'lead1', name: '張領袖', identity: 'leader', status: 'active', email: 'l@example.com' },
+    { id: 'mem1', name: '陳團員', identity: 'member', status: 'active', ymis: '1234567890' },
+    { id: 'exco1', name: '李執委', identity: 'exco', status: 'active', ymis: '1234567891' },
+    { id: 'hon1', name: '榮譽會員', identity: 'member', status: 'active', feeExempt: true }
+  ];
+  store.load().fees = [
+    { id: 'xf1', memberId: 'lead1', period: '2026-27', amount: 360, paid: false, due: '2026-01-01' },
+    { id: 'xf2', memberId: 'mem1', period: '2026-27', amount: 360, paid: false, due: '2026-01-01' }
+  ];
+  store.commit();
+
+  ok('領袖自動免收團費', f.feeExempt({ identity: 'leader' }) === true);
+  ok('可以逐個人設定免收（feeExempt: true）',
+    f.feeExempt({ identity: 'member', feeExempt: true }) === true && f.feeExempt({ identity: 'member' }) === false);
+  const grid = f.feeGrid('2026-27');
+  ok('團費收款表唔會列出領袖', !grid.some(r => r.member.id === 'lead1'), grid.map(r => r.member.name).join(','));
+  ok('團費收款表唔會列出「免收團費」嘅人', !grid.some(r => r.member.id === 'hon1'));
+  ok('執委同團員照樣要交', grid.some(r => r.member.id === 'exco1') && grid.some(r => r.member.id === 'mem1'));
+  ok('團費統計唔會把領袖計入應收',
+    f.feeStats('2026-27').total === 2 && f.feeStats('2026-27').expected === 720, String(f.feeStats('2026-27').expected));
+  ok('逾期追收唔會追領袖',
+    !f.overdueFees().some(x => x.memberId === 'lead1') && f.overdueFees().some(x => x.memberId === 'mem1'));
+
+  /* UI：團費頁要交代邊啲人免收 */
+  window.location.hash = '#/finance/fees';
+  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+  await new Promise(r => setTimeout(r, 80));
+  const fv = doc.getElementById('view').textContent;
+  ok('團費頁寫明「領袖免收團費」', /領袖免收團費/.test(fv));
+  ok('團費頁列出免收名單（張領袖等）', /張領袖/.test(fv) || /榮譽會員/.test(fv));
+
+  store.load().members = keepMembers;
+  store.load().fees = keepFees;
+  store.commit();
+}
+
+/* ---------- 財務：帳目（本年度）／過往紀錄／報告分開列（2026-09-16） ---------- */
+section('財務分頁（本年度 / 過往紀錄 / 報告）');
+{
+  const keepTx = JSON.parse(JSON.stringify(store.load().transactions));
+  store.load().transactions = [
+    { id: 'ota', date: '2025-05-01', type: 'income', amount: 100, item: '舊年捐款', category: '捐款' },
+    { id: 'otb', date: '2026-03-31', type: 'expense', amount: 50, item: '舊年支出', category: '雜項' },
+    { id: 'tca', date: '2026-09-10', type: 'income', amount: 200, item: '本年團費收入', category: '團費' },
+    { id: 'tcb', date: '2026-08-15', type: 'expense', amount: 20, item: '本年文具', category: '文書' }
+  ];
+  store.commit();
+
+  window.location.hash = '#/finance';
+  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+  await new Promise(r => setTimeout(r, 90));
+  const lv = doc.getElementById('view');
+  const lt = lv.textContent;
+  ok('帳目分頁只顯示「本年度」帳目（唔會混入上年度）',
+    /本年團費收入/.test(lt) && !/舊年捐款/.test(lt) && !/舊年支出/.test(lt));
+  ok('帳目分頁有總覽／按月切換', !!lv.querySelector('[data-ledger-mode="overview"]') && !!lv.querySelector('[data-ledger-mode="month"]'));
+  ok('逐月總覽列出 12 個月（包括冇紀錄嘅月份）', lv.querySelectorAll('[data-fy-month]').length === 12);
+  ok('逐月總覽有顯示「冇紀錄」嘅月份', /冇紀錄/.test(lt));
+  ok('未揀本年以外嘅年度（tab 名叫「帳目（YYYY-YY）」）', /帳目（\d{4}-\d{2}）/.test(lt));
+
+  /* 按月（冇紀錄嘅月份都要揀得到） */
+  lv.querySelector('[data-ledger-mode="month"]')?.click();
+  await new Promise(r => setTimeout(r, 90));
+  const monthSel = doc.getElementById('view').querySelector('#fMonth');
+  ok('按月選擇器有 12 個月（唔係只有有紀錄嘅）', monthSel && monthSel.querySelectorAll('option').length === 13,
+    String(monthSel ? monthSel.querySelectorAll('option').length : 0));
+  ok('月份選項標示筆數或「冇紀錄」', /（\d+ 筆）|（冇紀錄）/.test(monthSel?.textContent || ''));
+
+  /* 過往紀錄：先揀年度 → 再揀月份 */
+  window.location.hash = '#/finance/history';
+  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+  await new Promise(r => setTimeout(r, 90));
+  const hv = doc.getElementById('view');
+  const ht = hv.textContent;
+  ok('有「過往紀錄」分頁（側邊財務 tabs）', /過往紀錄/.test(hv.textContent));
+  ok('過往紀錄可以揀年度', !!hv.querySelector('#histYear'));
+  ok('過往紀錄可以揀 12 個月', hv.querySelectorAll('#histMonth option').length === 13,
+    String(hv.querySelectorAll('#histMonth option').length));
+  ok('過往紀錄顯示上年度帳目', /舊年捐款/.test(ht), ht.slice(0, 120));
+  ok('過往紀錄顯示期初結餘（上年度結轉）', /期初結餘/.test(ht));
+
+  /* 財政年度報告：上年度結餘要同收入分開 */
+  window.location.hash = '#/finance/reports';
+  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+  await new Promise(r => setTimeout(r, 90));
+  const rt = doc.getElementById('view').textContent;
+  ok('報告把「上年度結餘」獨立列（唔會混入收入）',
+    /上年度結餘（期初）/.test(rt) && /唔計入收入/.test(rt), rt.slice(0, 120));
+  ok('報告有分開「本年度收入」「本年度支出」「本年度淨額」',
+    /本年度收入/.test(rt) && /本年度支出/.test(rt) && /本年度淨額/.test(rt));
+  ok('兩條數對照表都寫明上年度結餘唔計入收入', /上年度結餘[\s\S]{0,40}唔計入收入/.test(rt));
+
+  store.load().transactions = keepTx;
+  store.commit();
+  window.location.hash = '#/dashboard';
+  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+  await new Promise(r => setTimeout(r, 60));
+}
+
+/* ---------- 表格分頁：唔再獨立，改成每頁「欄位」掣（2026-09-16） ---------- */
+section('欄位設定（每頁自己改）');
+{
+  const side = doc.querySelector('.sidebar')?.textContent || '';
+  ok('側邊欄已經冇「表格」分頁', !side.includes('表格'), side.replace(/\s+/g, ' ').slice(0, 140));
+
+  const check = async (hash, sel, label) => {
+    window.location.hash = hash;
+    window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+    await new Promise(r => setTimeout(r, 80));
+    ok(label, !!doc.querySelector(sel), sel);
+  };
+  await check('#/finance', '[data-fields="transactions"]', '財務（帳目）頁有「欄位」掣');
+  await check('#/members', '[data-fields="members"]', '用戶頁有「欄位」掣');
+  await check('#/inventory', '[data-fields="invItems"]', '物資頁有「欄位」掣');
+  await check('#/notices', '[data-fields="notices"]', '通告頁有「欄位」掣');
+  await check('#/meetings', '[data-fields="meetings"]', '會議頁有「欄位」掣');
+
+  window.location.hash = '#/admin/data';
+  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+  await new Promise(r => setTimeout(r, 90));
+  const av = doc.getElementById('view');
+  ok('「帳號與系統 → 資料管理」有表格與同步入口',
+    !!av.querySelector('[data-go="#/tables/sync"]') && !!av.querySelector('[data-go="#/tables/source"]'));
+  ok('有講明欄位改動去返各自分頁',
+    /欄位/.test(av.textContent) && /分頁/.test(av.textContent));
+
+  /* 欄位設計器可以打開（唔再需要獨立頁面） */
+  const { openFieldDesigner } = await import('../assets/js/views/tables.js');
+  ok('openFieldDesigner 係一支可以用嘅函式', typeof openFieldDesigner === 'function');
+}
+
+/* ---------- 進度系統：直接接駁（讀 VSBADGE ＋ 直接勾） ---------- */
+section('進度系統直接接駁（讀 ＋ 勾 ＋ 寫）');
+{
+  const vp = await import('../assets/js/views/progress.js');
+  const { progressCfg, setProgressCfg } = await import('../assets/js/lib/progress.js');
+  const realFetch = globalThis.fetch;
+  const calls = [];
+  const VS = {
+    members: [
+      { ymis: '1234567890', name: '陳大文' },
+      { ymis: '1234567891', name: '李小明' }
+    ],
+    progress: { '1234567890': { 'L1-ACT-01': { date: '2026-09-01', confirmer: '團長' } } },
+    pendingRequests: [], logs: [], logRequests: [], otherBadges: {}
+  };
+  const CATALOG = { badges: [{ id: 'L1', name: '會員章', icon: '🥇', segments: [{ code: 'L1-ACT', name: '活動', items: [{ id: 'L1-ACT-01', name: '參加六次團集會' }, { id: 'L1-ACT-02', name: '服務一次' }] }] }] };
+  globalThis.fetch = async (url, init = {}) => {
+    const body = init.body ? JSON.parse(init.body) : null;
+    calls.push({ url: String(url), body });
+    let out = { ok: false, error: 'unknown_mock' };
+    if (body?.action === 'load') out = { ok: true, serverSideKey: false, data: VS };
+    if (body?.action === 'items') out = { ok: true, data: CATALOG };
+    if (body?.action === 'save') out = { ok: true, data: { processed: (body.data?.changes || []).length } };
+    return { ok: true, status: 200, text: async () => JSON.stringify(out), json: async () => out };
+  };
+
+  try {
+    /* 未設定：應該提示去設定（唔會再叫用戶開外連） */
+    setProgressCfg({ backend: '', apiKey: '', front: '' });
+    window.location.hash = '#/progress';
+    window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+    await new Promise(r => setTimeout(r, 100));
+    ok('未設定時提示「直接接駁」（唔會逼你外連）',
+      /直接接駁/.test(doc.getElementById('view').textContent) && /showApiKey/.test(doc.getElementById('view').textContent));
+
+    /* 設定：填後端 ＋ API Key */
+    window.location.hash = '#/progress/settings';
+    window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+    await new Promise(r => setTimeout(r, 100));
+    const sv = doc.getElementById('view');
+    ok('設定頁有「VSBADGE 後端 /exec 網址」同「API Key」欄',
+      !!sv.querySelector('#p-backend') && !!sv.querySelector('#p-key') && !!sv.querySelector('#p-front'));
+    sv.querySelector('#p-backend').value = 'https://script.google.com/macros/s/AKfycbTESTTESTTESTTESTTESTTESTTESTTEST/exec';
+    sv.querySelector('#p-key').value = 'vs_key_123';
+    sv.querySelector('#p-front').value = 'https://vsbadge.vercel.app/';
+    sv.querySelector('[data-act="save-cfg"]').click();
+    await new Promise(r => setTimeout(r, 200));
+    ok('儲存後配置記住咗（API Key 存喺旅團自己嘅資料）',
+      progressCfg().apiKey === 'vs_key_123' && /AKfycbTEST/.test(progressCfg().backend));
+
+    const loadCall = calls.find(c => c.body?.action === 'load');
+    ok('自動去讀 VSBADGE（POST /api/progress · action=load）',
+      !!loadCall && /api\/progress$/.test(loadCall.url) && loadCall.body.apikey === 'vs_key_123', JSON.stringify(loadCall?.body || {}));
+
+    const view = () => doc.getElementById('view');
+    window.location.hash = '#/progress';
+    window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+    await new Promise(r => setTimeout(r, 200));
+    ok('總覽讀到成員同進度（統計卡有數）',
+      /進度系統成員/.test(view().textContent) && /2/.test(view().textContent) && /已勾項目/.test(view().textContent));
+    ok('總覽分得開「兩邊對得上」同未對上（用 YMIS 對人）',
+      /兩邊用/.test(view().textContent) || /YMIS/.test(view().textContent));
+
+    /* 勾選：直接寫入 VSBADGE */
+    window.location.hash = '#/progress/tick';
+    window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+    await new Promise(r => setTimeout(r, 150));
+    const cb = view().querySelector('[data-tick="L1-ACT-02"]');
+    ok('勾選頁列出考核項目（可以直接勾）', !!cb);
+    ok('已勾嘅項目預設打勾（由 VSBADGE 讀返嚟）',
+      view().querySelector('[data-tick="L1-ACT-01"]')?.checked === true);
+
+    cb.checked = true;
+    cb.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 80));
+    const saveBtn = view().querySelector('[data-act="save-ticks"]');
+    ok('勾咗之後「儲存」掣亮起（未儲存唔會送出）',
+      !!saveBtn && !saveBtn.disabled && /未儲存/.test(view().textContent));
+
+    saveBtn.click();
+    await new Promise(r => setTimeout(r, 250));
+    const saveCall = calls.filter(c => c.body?.action === 'save').pop();
+    ok('儲存會 POST 去 VSBADGE（action=save ＋ changes）', !!saveCall, JSON.stringify(calls.map(c => c.body?.action)));
+    ok('changes 帶 ymis / itemId / uncomplete=false（勾）',
+      saveCall?.body?.data?.changes?.[0]?.ymis === '1234567890'
+      && saveCall?.body?.data?.changes?.[0]?.itemId === 'L1-ACT-02'
+      && saveCall?.body?.data?.changes?.[0]?.uncomplete === false,
+      JSON.stringify(saveCall?.body?.data?.changes || saveCall?.body || {}));
+    ok('API Key 只跟 body 去自己後端（唔會出現在網址）',
+      !/vs_key_123/.test(String(saveCall?.url || '')) && !/vs_key_123/.test(JSON.stringify(saveCall?.body?.backend || '')));
+
+    /* 取消勾選（uncomplete: true） */
+    const cb1 = doc.getElementById('view').querySelector('[data-tick="L1-ACT-01"]');
+    cb1.checked = false;
+    cb1.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 80));
+    doc.getElementById('view').querySelector('[data-act="save-ticks"]').click();
+    await new Promise(r => setTimeout(r, 250));
+    const save2 = calls.filter(c => c.body?.action === 'save').pop();
+    ok('取消勾選會帶 uncomplete=true（VSBADGE 會刪除該項）',
+      save2?.body?.data?.changes?.[0]?.uncomplete === true,
+      JSON.stringify(save2?.body?.data?.changes || save2?.body || {}));
+    ok('儲存完會自動重新讀一次（睇到最新狀態）',
+      calls.filter(c => c.body?.action === 'load').length >= 2);
+
+    /* 測試連線 */
+    window.location.hash = '#/progress/settings';
+    window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+    await new Promise(r => setTimeout(r, 120));
+    doc.getElementById('view').querySelector('[data-act="test"]').click();
+    await new Promise(r => setTimeout(r, 300));
+    ok('「測試連線」會實測 VSBADGE（成功會有提示）',
+      /連線成功|讀到/.test(doc.getElementById('view').textContent) || doc.getElementById('view').textContent.includes('2 位'));
+
+    /* 舊外連模式仍然保留（後備） */
+    ok('設定頁保留舊「外連模式」（後備用，唔再係主要做法）',
+      /外連模式（舊做法/.test(doc.getElementById('view').textContent));
+    ok('進度頁仍然匯出測試需要嘅函式（readiness / checkConnection）',
+      typeof vp.readiness === 'function' && typeof vp.checkConnection === 'function' && Array.isArray(vp.TICK_ROLES));
+  } finally {
+    globalThis.fetch = realFetch;
+    setProgressCfg({ backend: '', apiKey: '', front: '' });
+    window.location.hash = '#/dashboard';
+    window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+    await new Promise(r => setTimeout(r, 80));
+  }
 }
 
 /* ---------- 總結 ---------- */

@@ -361,7 +361,7 @@ function persist() {
   state.db.meta.updatedAt = nowStamp();
   lsSet(dbKey(state.mode, state.unitCode), JSON.stringify(state.db));
   /* 防呆：改動只會「排隊」等送去總表，永遠唔會即時自動送出。
-     要去「表格與同步 → 總表同步 → 立即同步」先真正寫入 Apps Script。 */
+     要去「帳號與系統 → 資料管理 → 總表同步 → 立即同步」先真正寫入 Apps Script。 */
   if (state.db.sync && state.db.sync.auto) {
     state.db.sync.pending = Number(state.db.sync.pending || 0) + 1;
   }

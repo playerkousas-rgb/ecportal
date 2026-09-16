@@ -1,15 +1,15 @@
-# 🗺️ 82venture 旅團部署指南 · 多旅團架構與進度追蹤整合
+# 🗺️ 執委管理系統 旅團部署指南 · 多旅團架構與進度追蹤整合
 
-> 10 分鐘完成部署。本系統（82venture / ecportal）為深資童軍團**執委管理系統**，並與**深資童軍進度追蹤 (vsbadge)** 深度聯邦整合。
+> 10 分鐘完成部署。本系統為深資童軍團**執委管理系統**，並與**深資童軍進度追蹤 (vsbadge)** 直接接駁整合。
 
 ---
 
 ## 🌟 系統架構概念
 
 ### 1. 雙系統聯邦運作 (Hub & Progress Tracker)
-* **主系統 (82venture · 執委管理系統)**：
+* **主系統（執委管理系統 · ecportal）**：
   - 執委會日常行政：會議紀錄、物資借用及庫存（自動扣除）、團章中英對照、活動通告與即時出席回覆（`notice.html`）、成員手機影相快速記帳（`entry.html`）、雙財政年度（AGM 旅年度 ＋ 4/1–3/31 童軍年度）。
-  - 各旅團進度入口：點擊「進度」模組自動以 Portal 信任模式單一登入帶入身份至 `vsbadge`。
+  - 各旅團進度直接接駁：喺「進度 → 設定」填入旅團自己嘅 VSBADGE `/exec` 網址同 API Key，就可以喺執委系統內**直接讀進度、直接勾進度**（唔使開對面系統）。
 * **進度系統 (vsbadge · 深資童軍進度追蹤)**：
   - 專注深資童軍各階段獎章、活動段章、專科章及訓練班紀錄與審批。
 
@@ -36,7 +36,7 @@
 ## 🔧 部署五部曲 (所有旅團共通，10 分鐘)
 
 ### 第 1 步：下載後端程式碼 (App 內免登入)
-- 訪問系統網址（`https://82venture.vercel.app/` 或本地環境）
+- 訪問系統網址（例 `https://ecportal.vercel.app/` 或本地環境）
 - 於首頁旅團選擇閘直接點擊 **「⬇️ 下載 Code.gs」** 或 **「📋 複製原始碼」**（全於 App 介面完成，毋須登入，亦毋須進入 Git）
 
 ### 第 2 步：建立 Google Sheet
@@ -64,7 +64,7 @@
 1. 點擊右上角 **「部署」→「新增部署作業」**
 2. 點擊齒輪圖示，選擇 **「網頁應用程式」**
 3. 設定：
-   - 描述：`82venture 82旅`
+   - 描述：`執委管理系統 82旅`
    - 執行身分：**我**
    - 具有存取權的使用者：**任何人**（Anyone）
 4. 點擊「部署」→ 複製 **網頁應用程式網址**（`https://script.google.com/macros/s/…/exec`）
@@ -92,7 +92,7 @@
   "code": "0082",
   "name": "第八十二旅深資童軍團",
   "nameEn": "82nd Hong Kong Group Venture Scout Unit",
-  "short": "82venture",
+  "short": "執委管理系統",
   "dataPath": "data/units/0082/",
   "backend": {
     "gasUrl": "https://script.google.com/macros/s/AKfyc.../exec",
@@ -106,7 +106,7 @@
       "unitParam": "0082",
       "role": "exec_committee",
       "ymis": "",
-      "extraParams": "embed=1"
+      "extraParams": """
     }
   }
 }
@@ -117,33 +117,33 @@
 在 Vercel 專案 Settings → Environment Variables 加入：
 - `TROOP_0082_BACKEND` = `https://script.google.com/macros/s/…/exec`
 - `TROOP_0082_APIKEY` = `v82_xxxxxxxxxxxxxxxx`
+- （進度系統）`TROOP_0082_PROGRESSBACKEND` / `TROOP_0082_PROGRESSAPIKEY` / `TROOP_0082_PROGRESSFRONT`
 
 ---
 
-## 🔗 與「深資童軍進度追蹤 (VSBADGE)」無縫聯接
+## 🔗 與「深資童軍進度追蹤 (VSBADGE)」直接接駁
 
-當成員／領袖在 82venture 點選 **「進度」** 模組時：
-1. 系統自動組合 Portal SSO 驗證連結：
-   ```
-   https://vsbadge.vercel.app/?u=0082&role=exec_committee&ymis=PORTAL-0082-EXCO&name=執行委員會&from=portal&src=https://82venture.vercel.app&embed=1
-   ```
-2. **VSBADGE 端伺服器驗證**：
-   - VSBADGE 伺服器端的 `/api/portal` 會核對進入來源網址（`src` 及瀏覽器 `Referer`）是否符合該旅團登記的 `portalOrigin`。
-   - 驗證成功後，領袖／執委即以 `exec_committee` 身分免密碼直接登入，享有完整的獎章考核、批核及審批權限！
+當成員／領袖在執委管理系統點選 **「進度」** 模組時，系統會經同源伺服器端 `/api/progress` 直接同**旅團自己嘅 VSBADGE 後端**通話：
 
-### 進度系統 (VSBADGE) 端的對應登記
-在 VSBADGE 的 `data/troops.json`（或 VSBADGE 的 Vercel env `PORTAL_DEFAULT_ORIGIN`）：
-```json
-"0082": {
-  "name": "第 82 旅",
-  "en": "82nd Group",
-  "backend": "https://script.google.com/macros/s/.../exec",
-  "portalOrigin": "https://82venture.vercel.app",
-  "portalRoles": ["exec_committee", "branch_leader", "group_leader"]
-}
-```
+1. **旅團自己設定**（每個旅團一次）：去「進度 → 設定」填
+   - VSBADGE 嘅 Apps Script **`/exec` 網址**（部署 Web App：執行身分「我」、存取權「任何人」）
+   - VSBADGE 嘅 **API Key**（VSBADGE 選單「顯示 API Key」，或Spreadsheet 工具選單）
+2. **API Key＝執委身份**：API Key 對得上，就代表執委有權讀取同勾選進度 —— 寫入嘅係 VSBADGE 用緊嘅同一個 Google Sheet，
+   所以兩邊永遠睇到同一份進度，唔會出現第二份真相。
+3. **讀同寫都喺執委系統內做**：總覽（全團／逐個獎章）、成員進度（逐個人）、勾選進度（直接勾／取消）——
+   API Key 只會由瀏覽器傳去同源 `/api/progress`，唔會出現在網址、唔會交畀第三方、唔會寫入 log。
+4. **仍有需要開 VSBADGE 自己介面**（例如支部領袖審批）就用設定頁最底嘅「執委入口連結」——
+   呢個係舊做法，需要 VSBADGE 側登記本系統網址，未登記會出 `referer_mismatch`。
 
----
+### 伺服器端設定（可選：唔想旅團自己填就用環境變數）
+
+喺 Vercel 專案 Settings → Environment Variables 加（**進度系統用，優先於前端輸入**）：
+
+- `TROOP_0082_PROGRESSBACKEND` = `https://script.google.com/macros/s/…/exec`
+- `TROOP_0082_PROGRESSAPIKEY` = `v82_xxxxxxxxxxxxxxxx`
+- `TROOP_0082_PROGRESSFRONT` = `https://vsbadge.vercel.app/`（揀選「考核項目」定義時用）
+
+設咗之後，前端「進度 → 設定」可以留空，API Key 完全唔會落前端。
 
 ## 📊 活動通告出席與進度系統活動履歷 (VSBADGE Activity Log) 聯動評估與整合方案
 
@@ -194,4 +194,4 @@
 | `/constitution.html?u=0082` | 旅團團章中英對照公開查閱頁面 |
 
 ---
-COPYRIGHT 2026 82venture & Scout System
+COPYRIGHT 2026 執委管理系統 & Scout System
