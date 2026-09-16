@@ -292,6 +292,10 @@ function detail(id, query) {
               <button class="btn btn-sm btn-block" data-act="qr-image">${icon('download', 15)} 儲存 QR 圖（分享用）</button>
               <button class="btn btn-sm btn-block" data-act="qr-svg">${icon('download', 15)} 下載 QR Code（SVG）</button>
               <button class="btn btn-sm btn-block" data-act="qr-poster">${icon('print', 15)} 列印 QR 海報</button>
+              ${can('table.sync') ? `
+              <div class="xs semibold muted mt-8" style="border-top:1px solid var(--line-2);padding-top:10px">公開頁睇到最新版本</div>
+              <button class="btn btn-sm btn-block btn-accent" data-act="sync-notice">${icon('refresh', 15)} 同步到公開頁</button>
+              <div class="xs faint center mt-6">公開頁讀你旅團 Sheet 嘅「通告全文」分頁 —— 開新／改完通告撳一次，團員先睇到。</div>` : ''}
             </div>` : `
             <div class="sm muted mb-12">發布之後先有分享連結同 QR Code。</div>
             ${can('notice.publish') ? `<button class="btn btn-primary btn-block" data-act="publish" data-id="${n.id}">${icon('megaphone', 16)} 立即發布</button>` : ''}`}
@@ -767,6 +771,9 @@ export function mount(root, params) {
   // 詳情頁動作
   root.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', async () => {
     const act = b.dataset.act;
+    /* 「開新通告」掣（列表頁／頁頭）：一定要喺讀 params.id 之前處理，
+       否則 params.id 唔係通告 id，find() 會回 undefined（跟 views/members.js 嘅寫法） */
+    if (act === 'new') { draft = null; draftPhotos = { photos: [] }; return go('#/notices/new'); }
     const n = find('notices', params.id);
     if (act === 'publish') { update('notices', n.id, { status: 'published', publishAt: n.publishAt || todayISO() }); toast('已發布', 'ok'); refresh(); }
     if (act === 'toggle-publish') { update('notices', n.id, { status: published(n) ? 'draft' : 'published', publishAt: n.publishAt || todayISO() }); refresh(); }
@@ -849,6 +856,24 @@ export function mount(root, params) {
         submitUrl: root.querySelector('#n-submit').value.trim()
       } };
       commit(); toast('已儲存分享設定', 'ok');
+    }
+    /* 「同步到公開頁」：公開頁讀嘅係旅團自己 Sheet 嘅「通告全文」分頁，
+       所以新開／改咗嘅通告要經總表同步先會出到公開頁。 */
+    if (act === 'sync-notice') {
+      const keep = b.innerHTML;
+      b.disabled = true; b.innerHTML = `${icon('refresh', 15)} 同步中…`;
+      const hint = '如失敗，請去「帳號與系統 → 資料管理 → 總表同步」檢查 /exec 網址同 API Key';
+      try {
+        const tables = await import('./tables.js');
+        const r = await tables.pushToMaster({ silent: true });
+        if (r?.ok) toast('已同步到公開頁 —— 通告全文已更新', 'ok');
+        else toast('同步失敗：' + (r?.msg || '送唔到總表') + '（' + hint + '）', 'err');
+      } catch (e) {
+        toast('同步失敗：' + (e?.message || e) + '（' + hint + '）', 'err');
+      } finally {
+        b.disabled = false; b.innerHTML = keep;
+      }
+      return;
     }
     if (act === 'preview-public') {
       const first = notices().find(published) || notices()[0];

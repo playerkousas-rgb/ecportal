@@ -738,6 +738,23 @@ section('通告（開一張・分享・報名）');
   ok('通告頁渲染成功', nt.includes('通告') && (doc.getElementById('view')?.innerHTML || '').length > 200);
   ok('側邊欄／頁面有「通告」', (body() || '').includes('通告'));
 
+  /* 團長回報（2026-09-17）：「開新通告」掣冇綁 handler → 撳落去冇反應。
+     呢度一定要**撳真嗰粒掣**（唔可以 hash = '#/notices/new' 直跳，
+     直跳會繞過 mount() 嘅綁定，所以呢個 bug 一直捉唔到）。 */
+  const newBtn = doc.querySelector('#view [data-act="new"]');
+  ok('通告列表有「開新通告」掣', !!newBtn, doc.querySelector('#view .page-head')?.textContent || '');
+  newBtn?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await new Promise(r => setTimeout(r, 140));
+  ok('撳「開新通告」會跳去編輯器（唔係冇反應）', window.location.hash === '#/notices/new', window.location.hash);
+  ok('編輯器真係開到（有標題欄）', !!doc.getElementById('n-title'));
+  ok('掣開到嘅係一張空白新通告（唔會帶入上一張）',
+    (doc.getElementById('n-title')?.value || '') === '' && /開新通告/.test(doc.querySelector('.page-title')?.textContent || ''),
+    doc.querySelector('.page-title')?.textContent || '');
+  /* 返回清單（下面嘅測試要喺列表頁跑） */
+  window.location.hash = '#/notices';
+  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+  await new Promise(r => setTimeout(r, 80));
+
   const list = store.load().notices || [];
   ok(`通告由資料檔載入（${MODE === 'mock' ? 2 : 2} 張）`, list.length === 2, String(list.length));
   ok('其中一張要報名（needSignup）', list.some(n => n.needSignup), JSON.stringify(list.map(n => n.needSignup)));
@@ -800,6 +817,63 @@ section('通告（開一張・分享・報名）');
   // 報名表輸出 CSV
   const csvOk = typeof noticesMod.exportSignupsCsv === 'function';
   ok('有報名表 CSV 匯出', csvOk);
+}
+
+/* ---------- 團長回報（2026-09-17）：已發布通告 →「同步到公開頁」 ---------- */
+section('通告詳情頁（同步到公開頁）');
+{
+  const pub = (store.load().notices || []).find(n => n.status === 'published');
+  ok('有已發布通告可以做測試', !!pub);
+  const db0 = store.load();
+  const keepSync = db0.sync;
+  db0.sync = { ...(keepSync || {}), url: 'https://script.google.com/macros/s/TESTDEPLOY/exec', apiKey: 'TESTKEY' };
+  store.commit();
+
+  const realFetch = globalThis.fetch;
+  let sent = [];
+  globalThis.fetch = async (url, init = {}) => {
+    if (/script\.google\.com|\/exec/.test(String(url))) {
+      sent.push(init?.body ? JSON.parse(init.body) : null);
+      return { ok: true, status: 200, text: async () => '{"success":true}', json: async () => ({ success: true }) };
+    }
+    return realFetch(url, init);
+  };
+
+  window.location.hash = '#/notices/' + pub.id;
+  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+  await new Promise(r => setTimeout(r, 140));
+  const syncBtn = doc.querySelector('#view [data-act="sync-notice"]');
+  ok('已發布通告詳情頁有「同步到公開頁」掣', !!syncBtn);
+  syncBtn?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await new Promise(r => setTimeout(r, 260));
+  const lastToast = () => [...doc.querySelectorAll('.toast')].map(t => t.textContent).pop() || '';
+  ok('撳一次就會 POST 去總表（action=sync）', sent[0]?.action === 'sync', JSON.stringify(sent[0]?.action));
+  ok('同步內容包括「通告」（公開頁讀嘅通告全文分頁）',
+    Array.isArray(sent[0]?.tables?.notices) && sent[0].tables.notices.some(n => n.id === pub.id),
+    JSON.stringify(Object.keys(sent[0]?.tables || {})));
+  ok('同步帶埋旅團編號同 API Key', sent[0]?.unit && sent[0]?.apiKey === 'TESTKEY', JSON.stringify([sent[0]?.unit, sent[0]?.apiKey]));
+  ok('成功有 toast 提示', /已同步到公開頁/.test(lastToast()), lastToast());
+  ok('同步之後掣會還原（可以再撳）', !!doc.querySelector('#view [data-act="sync-notice"]:not([disabled])'));
+
+  /* 失敗路徑：/exec 回 500 → 要提團長去「總表同步」檢查 */
+  sent = [];
+  globalThis.fetch = async (url, init = {}) => {
+    if (/script\.google\.com|\/exec/.test(String(url))) return { ok: false, status: 500, text: async () => 'boom', json: async () => ({}) };
+    return realFetch(url, init);
+  };
+  doc.querySelector('#view [data-act="sync-notice"]')?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await new Promise(r => setTimeout(r, 260));
+  ok('失敗都有 toast（唔會靜靜地冇反應）', /同步失敗/.test(lastToast()), lastToast());
+  ok('失敗提示去「帳號與系統 → 資料管理 → 總表同步」檢查 /exec 同 API Key',
+    /總表同步/.test(lastToast()) && /\/exec/.test(lastToast()) && /API Key/.test(lastToast()), lastToast());
+
+  globalThis.fetch = realFetch;
+  const db1 = store.load();
+  db1.sync = keepSync;
+  store.commit();
+  window.location.hash = '#/notices';
+  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+  await new Promise(r => setTimeout(r, 60));
 }
 
 /* ---------- v3：表格設計（改名／加欄位） ---------- */
@@ -1896,6 +1970,23 @@ section('財務分頁（本年度 / 過往紀錄 / 報告）');
   ok('帳目分頁只顯示「本年度」帳目（唔會混入上年度）',
     /本年團費收入/.test(lt) && !/舊年捐款/.test(lt) && !/舊年支出/.test(lt));
   ok('帳目分頁有總覽／按月切換', !!lv.querySelector('[data-ledger-mode="overview"]') && !!lv.querySelector('[data-ledger-mode="month"]'));
+
+  /* 團長要求（2026-09-17）：帳目頁統計卡 ＝ 期初結餘 → 收入 → 支出 → 淨額 → 現在結餘（唔好用「期末」） */
+  const cards = [...lv.querySelectorAll('.grid.g-5 .stat .stat-label')].map(e => e.textContent.trim());
+  ok('帳目頁統計卡係「期初結餘 → 收入 → 支出 → 淨額 → 現在結餘」',
+    cards.length === 5 && cards[0] === '期初結餘' && /收入$/.test(cards[1])
+      && cards[2] === '支出' && cards[3] === '淨額' && cards[4] === '現在結餘', JSON.stringify(cards));
+  ok('帳目頁統計卡唔再用「期末」字眼', !lv.querySelector('.grid.g-5').textContent.includes('期末'),
+    lv.querySelector('.grid.g-5').textContent.replace(/\s+/g, ' ').slice(0, 120));
+  ok('帳目頁「現在結餘」＝ 期初 ＋ 本年度收入 − 本年度支出',
+    (() => {
+      const card = [...lv.querySelectorAll('.grid.g-5 .stat')].pop();
+      const t = (card?.textContent || '').replace(/\s+/g, ' ');
+      if (!/期初 .+ ＋ 本年度收入 .+ − 本年度支出 .+/.test(t)) return false;
+      const nums = [...t.matchAll(/HK\$([\d,]+)/g)].map(m => Number(m[1].replace(/,/g, '')));
+      return nums.length === 4 && nums[0] === nums[1] + nums[2] - nums[3];
+    })(),
+    ([...lv.querySelectorAll('.grid.g-5 .stat')].pop()?.textContent || '').replace(/\s+/g, ' '));
   ok('逐月總覽列出 12 個月（包括冇紀錄嘅月份）', lv.querySelectorAll('[data-fy-month]').length === 12);
   ok('逐月總覽有顯示「冇紀錄」嘅月份', /冇紀錄/.test(lt));
   ok('未揀本年以外嘅年度（tab 名叫「帳目（YYYY-YY）」）', /帳目（\d{4}-\d{2}）/.test(lt));

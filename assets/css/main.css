@@ -330,6 +330,7 @@ svg{ display:block; }
 .page-sub{ font-size:13.5px; color:var(--muted); margin-top:3px; }
 
 .grid{ display:grid; gap:14px; }
+.g-5{ grid-template-columns:repeat(5,1fr); }
 .g-4{ grid-template-columns:repeat(4,1fr); }
 .g-3{ grid-template-columns:repeat(3,1fr); }
 .g-2{ grid-template-columns:repeat(2,1fr); }
@@ -345,7 +346,7 @@ svg{ display:block; }
   .main{ margin-left:0; padding-bottom:calc(64px + env(safe-area-inset-bottom)); }
   .topbar{ padding:0 14px; }
   .content{ padding:14px 14px 8px; }
-  .g-4{ grid-template-columns:repeat(2,1fr); }
+  .g-5,.g-4{ grid-template-columns:repeat(2,1fr); }
   .g-3,.g-2,.g-2-1,.g-1-2{ grid-template-columns:1fr; }
   .hide-desktop{ display:inline-flex; }
   .tabbar{
@@ -365,7 +366,7 @@ svg{ display:block; }
   .login-panel{ padding:28px 18px; align-items:flex-start; padding-top:44px; }
 }
 @media (max-width:560px){
-  .g-4{ grid-template-columns:repeat(2,1fr); }
+  .g-5,.g-4{ grid-template-columns:repeat(2,1fr); }
   .stat-value{ font-size:22px; }
   .page-title{ font-size:20px; }
   .card-pad{ padding:14px; }

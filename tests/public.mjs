@@ -236,6 +236,70 @@ function bootNotice(search) {
   globalThis.fetch = realFetch;
 }
 
+// ②c 有靜態通告檔嘅旅團（0082）：app 新開嘅通告喺旅團後端 → 兩邊合併（同 id 以後端為準）
+{
+  const realFetch = globalThis.fetch;
+  const proxyCalls = [];
+  const APP_NEW = {
+    id: 'nt-appnew-2026', type: 'event', status: 'published', needSignup: true,
+    publishAt: '2026-09-17', title: { zh: '秋季露營 — app 新開通告' },
+    body: { zh: '呢張通告只喺旅團後端（未入 Git）。' },
+    eventDate: '2026-10-24', venue: '大帽山', fee: '$150',
+    fields: [{ key: 'name', label: '姓名', type: 'text', required: true }]
+  };
+  const OVERRIDE = {
+    id: 'nt-2026-annfee', type: 'notice', status: 'published', needSignup: false,
+    publishAt: '2026-09-16', title: { zh: '團費通告（後端改咗版本）' },
+    body: { zh: '後端版本：本年度團費改做 $400。' }
+  };
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url);
+    if (/api\/proxy/.test(u)) {
+      const body = init.body ? JSON.parse(init.body) : {};
+      proxyCalls.push(body);
+      if (body.action === 'notices') {
+        return { ok: true, status: 200, text: async () => '', json: async () => ({ success: true, notices: [APP_NEW, OVERRIDE] }) };
+      }
+      return { ok: true, status: 200, text: async () => '', json: async () => ({ success: true, msg: '已記錄' }) };
+    }
+    return realFetch(url, init);
+  };
+
+  /* ① 靜態檔有嘢（0082）都要讀後端：app 新開嘅通告先睇得到 */
+  let w = bootNotice('?u=0082&n=nt-appnew-2026');
+  await import('../assets/js/public-notice.js?case=' + ++noticeCase);
+  await wait(420);
+  let d = w.document;
+  const txt = () => d.getElementById('app')?.textContent || '';
+  ok('靜態檔有嘢都照讀後端（唔係「靜態檔全冇先讀」）',
+    proxyCalls.some(c => c.action === 'notices' && c.unit === '0082'), JSON.stringify(proxyCalls.map(c => c.action)));
+  ok('app 新開嘅通告喺公開頁睇到（合併後端）',
+    txt().includes('秋季露營 — app 新開通告'), txt().slice(0, 90));
+  ok('新通告嘅活動詳情照樣出（地點／費用）', txt().includes('大帽山') && txt().includes('$150'));
+  ok('新通告可以報名（有報名表）', !!d.getElementById('signup-form'));
+
+  /* ② 同 id → 以後端為準 */
+  w = bootNotice('?u=0082&n=nt-2026-annfee');
+  await import('../assets/js/public-notice.js?case=' + ++noticeCase);
+  await wait(420);
+  d = w.document;
+  const txt2 = () => d.getElementById('app')?.textContent || '';
+  ok('同 id 以後端為準（團長改完即刻生效）',
+    txt2().includes('團費通告（後端改咗版本）') && txt2().includes('$400'), txt2().slice(0, 120));
+  ok('唔會同 Git 版本並排出現（合併唔會重複）',
+    !txt2().includes('2026–27 年度團費及活動安排通告') && !txt2().includes('$360'), txt2().slice(0, 120));
+
+  /* ③ 靜態有、後端冇 → 唔會消失 */
+  w = bootNotice('?u=0082&n=nt-2026-pioneer');
+  await import('../assets/js/public-notice.js?case=' + ++noticeCase);
+  await wait(420);
+  ok('靜態有、後端冇嘅通告唔會消失',
+    (w.document.getElementById('app')?.textContent || '').includes('先鋒工程訓練日'),
+    (w.document.getElementById('app')?.textContent || '').slice(0, 90));
+
+  globalThis.fetch = realFetch;
+}
+
 // ③ 搵唔到通告／連結失效
 {
   const w = bootNotice('?u=0082&n=no-such-notice');

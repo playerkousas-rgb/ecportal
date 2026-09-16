@@ -212,11 +212,12 @@ function ledgerView() {
   const yInc = sumBy(yearTx, 'income'), yExp = sumBy(yearTx, 'expense');
 
   return `
-  <div class="grid g-4 mb-16">
+  <div class="grid g-5 mb-16">
+    ${stat('期初結餘', money(opening.amount), `${esc(fy)} 年度開始時嘅結餘（上年度結轉，唔計入收入）`)}
     ${stat(`${ledgerMode === 'month' ? monthText(fMonth) : fy + ' 年度'}收入`, money(inc), `${list.filter(t => t.type === 'income').length} 筆`, 'ok')}
     ${stat('支出', money(exp), `${list.filter(t => t.type === 'expense').length} 筆`, 'danger')}
     ${stat('淨額', money(inc - exp), '所選範圍', inc - exp >= 0 ? 'ok' : 'danger')}
-    ${stat('期末結餘', money(opening.amount + yInc - yExp), `期初 ${money(opening.amount)} ＋ 本年度淨額 ${money(yInc - yExp)} · 全年 ${yearTx.length} 筆`, opening.amount + yInc - yExp < 0 ? 'danger' : '')}
+    ${stat('現在結餘', money(opening.amount + yInc - yExp), `期初 ${money(opening.amount)} ＋ 本年度收入 ${money(yInc)} − 本年度支出 ${money(yExp)} · 全年 ${yearTx.length} 筆`, opening.amount + yInc - yExp < 0 ? 'danger' : '')}
   </div>
 
   <div class="note-box mb-16">${icon('wallet', 15)}<div>
