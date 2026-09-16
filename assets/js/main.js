@@ -7,7 +7,10 @@ import {
   switchUnit, clearMockData
 } from './lib/store.js';
 import { loadRegistry, unitList, unitEntry, defaultUnitCode } from './lib/units.js';
-import { adminInbox, validateApplication, submitApplication, adminChecklist, downloadCodeGs, copyCodeGs } from './lib/onboard.js';
+import {
+  adminInbox, validateApplication, submitApplication, adminChecklist,
+  applicationText, downloadCodeGs, copyCodeGs
+} from './lib/onboard.js';
 import { applyTheme, MAROON } from './lib/theme.js';
 import {
   login, logout, current, currentRole, ROLES, displayName, displaySub,
@@ -28,6 +31,7 @@ import * as accountsView from './views/accounts.js';
 import * as docs from './views/docs.js';
 import * as noticesView from './views/notices.js';
 import * as tables from './views/tables.js';
+import { openFieldDesigner } from './views/tables.js';
 import * as linksView from './views/links.js';
 
 const VIEWS = {
@@ -45,7 +49,6 @@ const NAV = [
   { id: 'notices', label: '通告', icon: 'megaphone', badge: () => (load()?.notices || []).filter(n => n.status === 'published').length },
   { id: 'links', label: '成員連結', icon: 'share' },
   { id: 'constitution', label: '團章', icon: 'book' },
-  { id: 'tables', label: '表格', icon: 'table' },
   { id: 'docs', label: '教學', icon: 'note' },
   { id: 'admin', label: '帳號與系統', icon: 'shield' }
 ];
@@ -108,7 +111,7 @@ function renderUnitGate() {
       <div class="gate-brand">
         <div class="logo">82</div>
         <div>
-          <div class="gate-title">82venture · 執委管理系統</div>
+          <div class="gate-title">執委管理系統</div>
           <div class="gate-sub">第一步：揀你嘅旅團（或者用示範資料試玩）</div>
         </div>
       </div>
@@ -145,6 +148,7 @@ function renderUnitGate() {
             <button class="btn btn-sm" data-act="dl-gs">${icon('download', 15)} 下載 Code.gs</button>
             <button class="btn btn-sm" data-act="guide">${icon('note', 15)} 部署指南</button>
             <button class="btn btn-sm btn-primary" data-act="apply">${icon('plus', 15)} 新旅團申請接入</button>
+
           </div>
         </div>
       </div>
@@ -176,12 +180,12 @@ function renderUnitGate() {
    ============================================================ */
 async function openDeployGuideModal() {
   await modal({
-    title: '🗺️ 82venture 多旅團後端部署指南',
+    title: '🗺️ 執委管理系統 · 多旅團後端部署指南',
     wide: true,
     body: `
       <div class="note-box info mb-12">
         ${icon('check', 16)}
-        <div><b>10 分鐘完成部署！</b>本系統為多旅團架構，每個旅團擁有自己獨立的 Google Sheet 後端，毋須登入即可完成部署並提交登記。</div>
+        <div><b>10 分鐘完成部署！</b>本系統為多旅團架構，每個旅團擁有自己獨立的 Google Sheet 後端，毋須登入即可完成部署並提交登記（申請會直接送去平台管理員嘅 ADMIN 系統）。</div>
       </div>
       
       <div class="col gap-12" style="font-size:13.5px;line-height:1.6">
@@ -208,7 +212,8 @@ async function openDeployGuideModal() {
           <ol class="xs mono" style="padding-left:18px;line-height:1.8">
             <li>在 Apps Script 函數下拉選單選擇 <code>initializeSheets</code></li>
             <li>點擊「▶ 執行」，依照 Google 提示完成授權（進階 → 前往 → 允許）</li>
-            <li>系統自動建立 9 個棗紅主題工作表（帳目、物資、團員、收支申報、通告、報名、物資借用、會議、同步紀錄）</li>
+            <li>系統自動建立全部工作表（帳目、物資、團員、通告、報名、會議…＋同進度前端共用嘅
+              <b>進度追蹤／其他獎章／活動履歷／待批完成／待批履歷／成員名單</b>）</li>
             <li>彈窗會顯示專屬 <b>API Key</b>，請複製保存（日後可執行 <code>showApiKey</code> 再次查看）</li>
           </ol>
         </div>
@@ -223,11 +228,19 @@ async function openDeployGuideModal() {
         </div>
 
         <div class="card" style="padding:14px">
-          <div class="semibold mb-4">第 5 步：登記至 Git 與 Vercel（或點擊申請接入）</div>
+          <div class="semibold mb-4">第 5 步：填申請表 → 直接入 ADMIN 系統</div>
           <div class="xs faint mb-8">
-            將 <b>旅團編號</b>、<b>旅團名稱</b>、<b>Apps Script /exec URL</b>、<b>API Key</b> 提交給 Git 負責人登記至 <code>data/units.json</code>（或 Vercel 環境變數 <code>TROOP_{ID}_BACKEND</code>），完成後即可正式登入使用！
+            撳下面個掣會開<b>申請表</b>（旅團編號、名稱、後端 <code>/exec</code>、API Key、聯絡人）。
+            送出之後，資料會經<b>同源伺服器轉發</b>，直接落到平台管理員嘅
+            <b>ADMIN 系統收件匣</b>（同 VSBADGE 共用同一個收件匣，用 <code>appType: 82venture</code> 分辨）。<br>
+            <b>送出就 OK，唔使等回覆</b>：ADMIN 系統唔會回覆申請人，管理員收到之後會轉寄畀團長跟進，
+            開好團（加好 <code>TROOP_&lt;編號&gt;_*</code> 環境變數）就會 email 通知你。
+            如果幾日都冇消息，用申請內容 WhatsApp／電郵問一聲管理員就得。
+            <br>之後：想埋讀「進度追蹤」＝登入後去「進度 → 設定」貼 <code>/exec</code> ＋ API Key（或者交畀管理員一齊設定）；
+            通告一開就可以用 QR／WhatsApp 分享收報名，報名直接入你自己嘅 Sheet。
           </div>
-          <button class="btn btn-sm" id="guide-apply-btn">${icon('plus', 15)} 填寫申請表自動送出</button>
+          <button class="btn btn-sm btn-primary" id="guide-apply-btn">${icon('plus', 15)} 填寫申請表自動送出（入 ADMIN 系統）</button>
+          <div class="xs faint mt-8">送唔到（例如網絡問題）？申請表會畀你<b>複製申請內容</b>，直接 WhatsApp／電郵畀管理員都一樣開得團。</div>
         </div>
       </div>
     `,
@@ -253,7 +266,7 @@ async function openApplication() {
   try { mainUrl = location.origin; } catch (e) { mainUrl = ''; }
   const r = await modal({
     title: '新旅團申請接入', wide: true,
-    sub: box.configured ? '申請會送去做平台管理員' : '（未設定收件匣）',
+    sub: box.configured ? '申請會送去做平台管理員嘅 ADMIN 系統（呢個系統唔會回覆，送出去就得）' : '（未設定收件匣）',
     body: `
       <div class="note-box mb-12">${icon('alert', 15)}<div>
         <b>申請之前請先起好你自己嘅後端</b>（每個旅團一張自己嘅 Google Sheet）：
@@ -280,9 +293,9 @@ async function openApplication() {
           <input class="input" id="ap-note" placeholder="例：想同時接入進度追蹤系統"></div>
         <div class="field" style="grid-column:1/-1"><label class="label">主系統網址（自動帶）</label>
           <input class="input" value="${esc(mainUrl)}" readonly style="font-family:var(--mono);font-size:12px;background:var(--bg-2)">
-          <div class="hint">呢個係<b>你而家睇緊嘅呢個網站</b>嘅網址。管理員要用佢做進度系統嘅 <code>portalOrigin</code>（核准邊個網站可以帶身份入去）。</div></div>
+          <div class="hint">呢個係<b>你而家睇緊嘅呢個網站</b>嘅網址，方便管理員核對同登記。</div></div>
       </div>
-      <div class="hint mt-8">送出後管理員會把你嘅後端網址加進兩邊嘅 Registry（82venture ＋ 進度追蹤系統），完成開戶同連通。</div>`,
+      <div class="hint mt-8">送出後管理員會把你嘅後端網址加進 Registry，完成開戶。之後你自己喺「<b>進度 → 設定</b>」填入旅團自己嘅 <code>/exec</code> 網址同 API Key，就可以喺呢度直接讀寫進度（一個後端、兩個前端，唔使外連）。</div>`,
     actions: [
       { label: '取消', class: 'btn', value: null },
       { label: '送出申請', class: 'btn-primary', onClick: el => ({
@@ -312,18 +325,55 @@ async function openApplication() {
   const res = await submitApplication(r);
   if (res.ok) {
     await modal({
-      title: '申請已送出', sub: `${res.payload.troopId} · ${res.payload.troopName}`,
-      body: `<div class="note-box info mb-12">${icon('check', 15)}<div>
-          你嘅申請已經送去做平台管理員（${res.ms} ms）。<br>
-          <span class="xs">管理員會把你嘅後端網址加進 Registry，完成之後用同一條網址就可以揀到你嘅旅團。</span></div></div>
-        <div class="xs faint">管理員要做嘅嘢（自動列出，方便你跟進）：</div>
+      title: '申請已送出',
+      sub: `${res.payload.troopId} · ${res.payload.troopName} · ${res.via === 'proxy' ? '經伺服器轉發去 ADMIN 系統' : '直接送去 ADMIN 系統'}${res.ms != null ? ` · ${res.ms} ms` : ''}`,
+      body: `
+        <div class="note-box info mb-12">${icon('check', 15)}<div>
+          你張申請已經送去<b>平台管理員嘅 ADMIN 系統</b>。
+          <br><span class="xs">呢個系統<b>唔會回覆</b>（App 唔會知 ADMIN 收咗未），所以你唔會喺呢度見到「已收到」——正常，唔使擔心。
+          管理員收到之後會轉寄畀團長跟進，開好團就會 email 通知你。</span>
+        </div></div>
+        <div class="row gap-8 mb-12">
+          <button class="btn btn-sm" id="ap-copy-again">${icon('copy', 14)} 複製申請內容（跟進／備用）</button>
+        </div>
+        <div class="xs faint">管理員收到之後會做嘅嘢（方便你跟進）：</div>
         <ol class="xs mono" style="padding-left:18px;line-height:1.9">
           ${adminChecklist(res.payload.troopId).map(x => `<li>${esc(x)}</li>`).join('')}
-        </ol>`,
-      actions: [{ label: '好', class: 'btn-primary', value: true }]
+        </ol>
+        <div class="xs faint mt-8">過幾日都未收到通知？複製上面段字，WhatsApp／電郵畀平台管理員問一聲就得。</div>`,
+      actions: [{ label: '好', class: 'btn-primary', value: true }],
+      onMount: el => {
+        el.querySelector('#ap-copy-again')?.addEventListener('click', async () => {
+          const { copyText } = await import('./lib/util.js');
+          const okCopy = await copyText(applicationText(res.payload));
+          toast(okCopy ? '已複製申請內容' : '複製唔到，請手動抄低', okCopy ? 'ok' : 'err');
+        });
+      }
     });
   } else {
-    toast(res.errors?.[0] || '送出失敗', 'err');
+    const sig = (res.errors || []).join(' · ') || '送出失敗';
+    toast(sig, 'err');
+    await modal({
+      title: '送唔到去 ADMIN 系統', wide: true,
+      sub: res.via === 'proxy' ? '（經伺服器轉發時失敗）' : '（直接送出時失敗）',
+      body: `
+        <div class="note-box danger mb-12">${icon('alert', 15)}<div>
+          <b>${esc(sig)}</b><br>
+          <span class="xs">申請內容仲喺度，你可以複製落嚟，直接 WhatsApp／電郵畀平台管理員，佢一樣開得團。</span>
+        </div></div>
+        <textarea class="input mono" rows="9" readonly style="font-size:12px">${esc(applicationText(res.payload))}</textarea>`,
+      actions: [
+        { label: '關閉', class: 'btn', value: null },
+        { label: '再試一次', class: 'btn', value: 'retry' },
+        { label: '複製申請內容', class: 'btn-primary', value: 'copy' }
+      ]
+    }).then(async v => {
+      if (v === 'copy') {
+        const { copyText } = await import('./lib/util.js');
+        toast((await copyText(applicationText(res.payload))) ? '已複製申請內容' : '複製唔到，請手動抄低', 'ok');
+      }
+      if (v === 'retry') openApplication();
+    });
   }
 }
 
@@ -364,10 +414,10 @@ function renderLogin() {
   <div class="login-wrap">
     <aside class="login-hero">
       <div class="brandmark">
-        <div class="logo">${esc((u.short || '82').slice(0, 3))}</div>
+        <div class="logo">${esc(String(u.code || code || '82').replace(/^0+/, '') || '82')}</div>
         <div>
-          <div style="font-weight:800;font-size:16px;letter-spacing:-.01em">${esc(u.short || '82venture')}</div>
-          <div class="xs" style="color:#F0D3D9">深資童軍 · 自務自治</div>
+          <div style="font-weight:800;font-size:16px;letter-spacing:-.01em">執委管理系統</div>
+          <div class="xs" style="color:#F0D3D9">${esc(u.name || '深資童軍團')} · 自務自治</div>
         </div>
       </div>
       <div>
@@ -381,7 +431,7 @@ function renderLogin() {
             .map(([t, i]) => `<div class="hero-item"><span class="tick">${icon(i, 11)}</span><span>${t}</span></div>`).join('')}
         </div>
       </div>
-      <div class="xs" style="color:#D3A9B2">© ${new Date().getFullYear()} ${esc(u.short || '82venture')} · 內部使用</div>
+      <div class="xs" style="color:#D3A9B2">© ${new Date().getFullYear()} ${esc(u.name || '執委管理系統')} · 內部使用</div>
     </aside>
 
     <main class="login-panel">
@@ -515,10 +565,10 @@ function render() {
   <div class="shell">
     <nav class="sidebar">
       <div class="sb-brand">
-        <div class="logo">${esc((u.short || '82').slice(0, 3))}</div>
+        <div class="logo">${esc(String(u.code || currentUnit() || '82').replace(/^0+/, '') || '82')}</div>
         <div>
-          <div class="t truncate">${esc(u.short || '82venture')}</div>
-          <div class="s truncate">${esc(u.name || '')}</div>
+          <div class="t truncate">${esc(u.name || '深資童軍團')}</div>
+          <div class="s truncate">執委管理系統</div>
         </div>
       </div>
 
@@ -587,6 +637,13 @@ function render() {
     })) { logout(); document.body.classList.add('login-body'); renderLogin(); }
   }));
   app.querySelector('#unitSwitch')?.addEventListener('click', unitPicker);
+
+  /* 任何分頁嘅「欄位」掣（data-fields="transactions" / members / invItems / notices / meetings…）
+     都會打開同一個欄位設計器 —— 唔再需要一個獨立「表格」分頁 */
+  app.querySelectorAll('[data-fields]').forEach(b => b.addEventListener('click', e => {
+    e.preventDefault();
+    openFieldDesigner(b.dataset.fields, { onSaved: () => window.dispatchEvent(new CustomEvent('v82:refresh')) });
+  }));
 
   const root = app.querySelector('#view');
   try { view.mount(root, r); } catch (e) { console.error('mount error', e); }

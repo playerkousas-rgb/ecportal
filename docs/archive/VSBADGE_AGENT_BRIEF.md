@@ -1,3 +1,11 @@
+# 俾進度前端 Agent 嘅工作簡報（已停用 · 歷史記錄）
+
+> ⛔ **2026-09-16：唔需要再改進度前端。**
+> 新模型係**一個後端、兩個前端**：進度資料就喺旅團自己嘅後端（同一支 `/exec`），
+> 執委管理系統自己會讀／寫（`?action=load` / `action=save` / `action=saveOtherBadge`），
+> 唔需要 portal、唔需要 `portalOrigin`、唔需要對方加任何 endpoint。
+> 下面係舊 portal 方案嘅簡報，純粹留底。
+
 # 俾 VSBADGE Agent 嘅工作简报（可以直接貼過去）
 
 > 用法：由呢一行開始，成段貼俾負責 `playerkousas-rgb/vsbadge` 個 agent。

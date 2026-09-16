@@ -5,13 +5,14 @@
    ============================================================ */
 
 import { collection, add, update, remove, commit, load, find } from '../lib/store.js';
-import { esc, icon, modal, confirmDlg, toast, toastAction, uid, fmtDate, todayISO, nowStamp, copyText, qrSvg, photoViewer } from '../lib/util.js';
-import { toWord, printDoc, toCSV, toMarkdown, toStandaloneHtml, download as dlFile, stamp } from '../lib/exporter.js';
+import { esc, icon, modal, confirmDlg, toast, toastAction, uid, fmtDate, todayISO, nowStamp, copyText, qrSvg, qrImg, photoViewer } from '../lib/util.js';
+import { toWord, printDoc, toCSV, toMarkdown, toStandaloneHtml, download as dlFile, downloadQrImage, downloadQrSvg, stamp } from '../lib/exporter.js';
 import { go, parse, setQuery } from '../lib/router.js';
 import { can, current } from '../lib/auth.js';
 import { profile, settings, members } from '../lib/model.js';
 import { pageHead, tabs, stat, empty, noteBox, photoPicker, photoStrip, bindPhotoPicker } from './ui.js';
 import { compressImage, formatBytes } from '../lib/files.js';
+import { NOTICE_INFO_FIELDS, noticeInfoRows } from '../lib/notice-fields.js';
 
 let tab = 'list';
 let filter = 'open';
@@ -93,6 +94,7 @@ export function render(params) {
     sub: `${all.length} 張 · 已發布 ${open.length} 張 · 收到報名 ${totalSignups} 份`,
     actions: `
       <button class="btn btn-sm" data-act="preview-public">${icon('eye', 15)} 公開頁預覽</button>
+      <button class="btn btn-sm" data-fields="notices">${icon('table', 15)} 欄位</button>
       ${can('notice.create') ? `<button class="btn btn-sm btn-primary" data-act="new">${icon('plus', 15)} 開新通告</button>` : ''}`
   })}
   ${tabs([['list', '通告列表', all.length], ['signups', '報名紀錄', totalSignups], ['settings', '分享設定']], tab)}
@@ -264,9 +266,9 @@ function detail(id, query) {
           <button class="btn btn-block" data-act="export-full-pdf">${icon('print', 16)} 通告＋出席回覆（PDF）</button>
           <button class="btn btn-block" data-act="export-attend">${icon('table', 16)} 出席回覆表（CSV）</button>
           <button class="btn btn-block" data-act="export-attend-word">${icon('download', 16)} 出席回覆表（Word）</button>
-          <div class="xs semibold muted mt-8">進度系統聯動 (VSBADGE)</div>
-          <button class="btn btn-block" data-act="export-vsbadge-csv">${icon('table', 16)} 匯出活動履歷（VSBADGE CSV）</button>
-          <button class="btn btn-block" data-act="export-vsbadge-json">${icon('download', 16)} 匯出活動履歷（JSON）</button>
+          <div class="xs semibold muted mt-8">活動履歷（進度系統格式）</div>
+          <button class="btn btn-block" data-act="export-activity-csv">${icon('table', 16)} 匯出活動履歷（CSV）</button>
+          <button class="btn btn-block" data-act="export-activity-json">${icon('download', 16)} 匯出活動履歷（JSON）</button>
           <div class="xs semibold muted mt-8">只出通告</div>
           <button class="btn btn-block" data-act="export-word">${icon('download', 16)} 通告（Word）</button>
           <button class="btn btn-block" data-act="export-pdf">${icon('print', 16)} 通告（PDF / 列印）</button>
@@ -276,19 +278,22 @@ function detail(id, query) {
       </div>
 
       <div class="card">
-        <div class="card-head"><div class="card-title">分享（免登入公開頁）</div>
-          <div class="card-sub">團員／家長掃 QR 就睇到通告同回覆出席</div></div>
+        <div class="card-head"><div><div class="card-title">分享報名（WhatsApp）</div>
+          <div class="card-sub">貼落 WhatsApp 群 → 團員／家長一撳就開通告同報名表（免登入）</div></div></div>
         <div style="padding:14px 16px">
           ${published(n) ? `
-            <div class="qr-box" style="width:170px;margin:0 auto 12px"><div id="noticeQr">${qrSvg(url, 4, 1)}</div></div>
+            <div class="qr-box" style="width:180px;margin:0 auto 10px" id="noticeQr">${qrImg(url, 180)}</div>
             <div class="xs mono" style="word-break:break-all;text-align:center">${esc(url)}</div>
+            ${n.needSignup ? `<div class="xs center faint mt-8">已報名 ${s.length} 份${n.quota ? ` · 名額 ${n.quota}` : ''}${n.deadline ? ` · 截止 ${esc(n.deadline)}` : ''}</div>` : ''}
             <div class="col gap-6 mt-12">
-              <button class="btn btn-sm btn-block" data-act="copy-link">${icon('copy', 15)} 複製連結</button>
-              <button class="btn btn-sm btn-block" data-act="share-text">${icon('send', 15)} 複製 WhatsApp 文字</button>
-              <button class="btn btn-sm btn-block" data-act="qr-svg">${icon('download', 15)} 下載 QR Code</button>
+              <button class="btn btn-sm btn-block btn-primary" data-act="wa-share">${icon('send', 15)} 用 WhatsApp 分享</button>
+              <button class="btn btn-sm btn-block" data-act="copy-link">${icon('copy', 15)} 複製報名連結</button>
+              <button class="btn btn-sm btn-block" data-act="share-text">${icon('copy', 15)} 複製 WhatsApp 文字</button>
+              <button class="btn btn-sm btn-block" data-act="qr-image">${icon('download', 15)} 儲存 QR 圖（分享用）</button>
+              <button class="btn btn-sm btn-block" data-act="qr-svg">${icon('download', 15)} 下載 QR Code（SVG）</button>
               <button class="btn btn-sm btn-block" data-act="qr-poster">${icon('print', 15)} 列印 QR 海報</button>
             </div>` : `
-            <div class="sm muted mb-12">發布之後先有分享連結。</div>
+            <div class="sm muted mb-12">發布之後先有分享連結同 QR Code。</div>
             ${can('notice.publish') ? `<button class="btn btn-primary btn-block" data-act="publish" data-id="${n.id}">${icon('megaphone', 16)} 立即發布</button>` : ''}`}
         </div>
       </div>
@@ -397,14 +402,38 @@ function signupsView() {
   const rows = [];
   notices().forEach(n => signupsOf(n).forEach(r => rows.push({ n, r })));
   rows.sort((a, b) => String(b.r.at || '').localeCompare(String(a.r.at || '')));
+  /* 逐張通告嘅統計（執委一眼睇齊：報名／出席／唔出席／未回覆）*/
+  const perNotice = notices()
+    .filter(n => n.needSignup || signupsOf(n).length)
+    .map(n => ({ n, count: signupsOf(n).length, A: attendanceSummary(n) }))
+    .sort((a, b) => String(b.n.createdAt || b.n.publishAt || '').localeCompare(String(a.n.createdAt || a.n.publishAt || '')));
   return `
   <div class="row-between wrap gap-12 mb-16">
     <div class="toolbar">
       <button class="btn btn-sm" data-act="export-all-signups">${icon('download', 15)} 全部報名 CSV</button>
       <button class="btn btn-sm" data-act="export-all-word">${icon('download', 15)} 全部報名 Word</button>
     </div>
-    <div class="sm muted">共 ${rows.length} 份</div>
+    <div class="sm muted">共 ${rows.length} 份 · ${perNotice.length} 張通告收報名</div>
   </div>
+
+  ${perNotice.length ? `<div class="card mb-16">
+    <div class="card-head"><div><div class="card-title">逐張通告統計</div>
+      <div class="card-sub">報名人數、出席／唔出席、仲有幾多人未回覆（唔使實體通告都數得清）</div></div></div>
+    <div class="scroll-x"><table class="table table-compact">
+      <thead><tr><th>通告</th><th>狀態</th><th class="right">報名</th><th class="right">出席</th><th class="right">唔出席</th><th class="right">未回覆</th><th>截止</th><th></th></tr></thead>
+      <tbody>${perNotice.map(({ n, count, A }) => `<tr>
+        <td class="sm"><div class="semibold">${esc(n.title?.zh || '（無標題）')}</div>
+          <div class="xs faint">${esc(typeLabel(n.type))}${n.eventDate ? ` · ${esc(n.eventDate)}` : ''}</div></td>
+        <td>${published(n) ? '<span class="badge b-ok"><span class="dot"></span>已發布</span>' : '<span class="badge b-warn"><span class="dot"></span>草稿</span>'}</td>
+        <td class="right mono">${count}${n.quota ? `<span class="faint"> / ${n.quota}</span>` : ''}</td>
+        <td class="right mono" style="color:var(--ok)">${A.yes}</td>
+        <td class="right mono" style="color:var(--danger)">${A.no}</td>
+        <td class="right mono">${A.none}</td>
+        <td class="mono sm">${esc(n.deadline || '—')}</td>
+        <td class="right"><button class="btn btn-xs" data-open="${n.id}">明細</button></td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+  </div>` : ''}
   <div class="card">
     ${rows.length ? `<div class="scroll-x"><table class="table">
       <thead><tr><th>時間</th><th>通告</th><th>姓名</th><th>聯絡</th><th>其他</th><th></th></tr></thead>
@@ -450,7 +479,7 @@ function settingsView() {
           <input class="input" id="n-submit" value="${esc(s.submitUrl || '')}" placeholder="https://script.google.com/macros/s/…/exec">
           <div class="hint">設定咗：公開頁嘅報名會直接 POST 去你嘅總表（Google Sheet）。
             未設定：報名會存喺填表人自己嗰部裝置，領袖可以喺該裝置輸出 CSV。
-            Apps Script 範本可以喺「表格與同步」頁下載。</div></div>
+            Apps Script 範本可以喺「帳號與系統 → 資料管理」下載。</div></div>
         ${can('notice.edit') ? `<button class="btn btn-primary mt-12" data-act="save-settings">${icon('save', 15)} 儲存</button>` : ''}
       </div>
     </div>
@@ -465,6 +494,24 @@ function settingsView() {
   </div>`;
 }
 
+/** 由表單讀返所有活動詳情欄位 */
+function theInfoPatch(root) {
+  const out = {};
+  NOTICE_INFO_FIELDS.forEach(f => {
+    const el = root.querySelector('#n-' + f.key);
+    if (!el) return;
+    out[f.key] = f.type === 'number' ? (Number(el.value) || 0) : el.value.trim();
+  });
+  return out;
+}
+
+/** 新通告嘅空白欄位 */
+function emptyInfoFields() {
+  const out = {};
+  NOTICE_INFO_FIELDS.forEach(f => { out[f.key] = f.type === 'number' ? 0 : ''; });
+  return out;
+}
+
 /* ============================================================
    編輯器
    ============================================================ */
@@ -474,7 +521,7 @@ function editor(n) {
       id: 'new', type: 'event', status: 'draft',
       title: { zh: '', en: '' }, body: { zh: '', en: '' },
       needSignup: true, quota: 0, fields: JSON.parse(JSON.stringify(DEFAULT_FIELDS)),
-      attachments: [], publishAt: '', eventDate: '', deadline: '', venue: '', fee: ''
+      attachments: [], publishAt: '', ...emptyInfoFields()
     };
     draftPhotos = { photos: draft.attachments || [] };
     draftFields = draft.fields || [];
@@ -495,8 +542,7 @@ function editor(n) {
         <div class="grid g-2" style="gap:12px">
           <div class="field"><label class="label">通告類型</label>
             <select class="select" id="n-type">${TYPES.map(([v, l]) => `<option value="${v}" ${d.type === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
-          <div class="field"><label class="label">活動日期</label>
-            <input class="input" id="n-event" type="date" value="${esc(d.eventDate || '')}"></div>
+          ${infoFieldHtml('eventDate', d)}
           <div class="field" style="grid-column:1/-1"><label class="label">標題（中文） <span class="req">*</span></label>
             <input class="input" id="n-title" value="${esc(d.title?.zh || '')}" placeholder="例：2026 秋季露營 — 報名及須知"></div>
           <div class="field" style="grid-column:1/-1"><label class="label">Title (English)</label>
@@ -505,14 +551,11 @@ function editor(n) {
             <textarea class="textarea" id="n-body" style="min-height:190px" placeholder="可以直接打，支援換行。&#10;例：&#10;日期：2026-10-17 至 10-18&#10;集合：上午 8:30 康山花園地下&#10;費用：$380（團費津貼 30%，上限 $70）&#10;帶備：睡袋、雨衣、個人藥物">${esc(d.body?.zh || '')}</textarea></div>
           <div class="field" style="grid-column:1/-1"><label class="label">Body (English)</label>
             <textarea class="textarea" id="n-body-en" style="min-height:90px">${esc(d.body?.en || '')}</textarea></div>
-          <div class="field"><label class="label">截止日期</label>
-            <input class="input" id="n-deadline" type="date" value="${esc(d.deadline || '')}"></div>
-          <div class="field"><label class="label">地點</label>
-            <input class="input" id="n-venue" value="${esc(d.venue || '')}" placeholder="例：西貢創興水上活動中心"></div>
-          <div class="field"><label class="label">費用</label>
-            <input class="input" id="n-fee" value="${esc(String(d.fee || ''))}" placeholder="例：$380（會員）/ $420（非會員）"></div>
-          <div class="field"><label class="label">名額</label>
-            <input class="input" id="n-quota" type="number" min="0" value="${Number(d.quota) || 0}" placeholder="0 = 不限"></div>
+        </div>
+
+        <div class="card-sub mt-12" style="border-top:1px solid var(--line-2);padding-top:12px">活動詳情（會顯示喺通告、公開頁、WhatsApp 分享同列印，亦會寫入總表「通告」分頁）</div>
+        <div class="grid g-2" style="gap:12px;margin-top:8px">
+          ${NOTICE_INFO_FIELDS.filter(f => f.key !== 'eventDate').map(f => infoFieldHtml(f.key, d)).join('')}
         </div>
         ${photoPicker('n-photos', { label: '附件 / 相片（可以影海報、通告紙本、位置圖）', hint: '相片會自動壓縮；手機可以直接影相。' })}
         <div id="n-photo-note" class="hint"></div>
@@ -554,6 +597,18 @@ function editor(n) {
   </div>`;
 }
 
+/** 活動詳情欄位（全部由 NOTICE_INFO_FIELDS 產生 —— 加欄位只改嗰張清單） */
+function infoFieldHtml(key, d) {
+  const f = NOTICE_INFO_FIELDS.find(x => x.key === key);
+  if (!f) return '';
+  const v = key === 'quota' ? (Number(d.quota) || 0) : (d[key] ?? '');
+  const attrs = f.type === 'date' ? ' type="date"'
+    : f.type === 'number' ? ' type="number" min="0"' : '';
+  return `<div class="field"${f.wide ? ' style="grid-column:1/-1"' : ''}>
+    <label class="label">${esc(f.label)}</label>
+    <input class="input" id="n-${esc(f.key)}"${attrs} value="${esc(String(v))}" placeholder="${esc(f.ph || '')}"></div>`;
+}
+
 function fieldsHtml() {
   return `
     ${draftFields.length ? draftFields.map((f, i) => `
@@ -584,6 +639,33 @@ export function publicUrl(n) {
   const sep = file.includes('?') ? '&' : '?';
   return `${file}${sep}u=${encodeURIComponent(load().unitCode)}&n=${encodeURIComponent(n.id)}`;
 }
+/* ============================================================
+   分享（執委貼落 WhatsApp 群 → 團員／家長直接報名）
+   ============================================================ */
+/** 一段可以直接貼落 WhatsApp 嘅通告文字（只抽最重要嘅欄位） */
+export function shareText(n) {
+  if (!n) return '';
+  const L = [];
+  const title = n.title?.zh || '通告';
+  L.push(`【${profile().name || ''}】${typeLabel(n.type)}：${title}`);
+  if (n.title?.en) L.push(n.title.en);
+  const rows = noticeInfoRows(n).filter(([k]) => !['內容／程序'].includes(k));
+  if (rows.length) L.push(rows.map(([k, v]) => `${k}：${v}`).join('\n'));
+  const body = String(n.body?.zh || '').trim();
+  if (body) {
+    const lines = body.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+    L.push('', lines.slice(0, 6).join('\n') + (lines.length > 6 ? '…' : ''));
+  }
+  L.push('', n.needSignup ? `👉 報名（免登入）：${publicUrl(n)}` : `👉 詳情（免登入）：${publicUrl(n)}`);
+  if (n.needSignup && n.deadline) L.push(`（截止 ${n.deadline} 前）`);
+  return L.join('\n');
+}
+
+/** WhatsApp 分享連結（一撳就開 WhatsApp，文字同連結都幫你填好） */
+export function whatsappShareUrl(n) {
+  return 'https://wa.me/?text=' + encodeURIComponent(shareText(n));
+}
+
 function typeLabel(t) { return (TYPES.find(x => x[0] === t) || ['', '通告'])[1]; }
 function fieldTypeLabel(t) { return (FIELD_TYPES.find(x => x[0] === t) || ['', t])[1]; }
 
@@ -649,11 +731,7 @@ export function mount(root, params) {
           type: root.querySelector('#n-type').value,
           title: { zh: title, en: root.querySelector('#n-title-en').value.trim() },
           body: { zh: root.querySelector('#n-body').value, en: root.querySelector('#n-body-en').value.trim() },
-          eventDate: root.querySelector('#n-event').value,
-          deadline: root.querySelector('#n-deadline').value,
-          venue: root.querySelector('#n-venue').value.trim(),
-          fee: root.querySelector('#n-fee').value.trim(),
-          quota: Number(root.querySelector('#n-quota').value) || 0,
+          ...theInfoPatch(root),
           needSignup: root.querySelector('#n-need').checked,
           fields: draftFields,
           attachments: draftPhotos.photos
@@ -695,19 +773,22 @@ export function mount(root, params) {
     if (act === 'copy-link') {
       if (await copyText(publicUrl(n))) toast('已複製通告連結', 'ok'); else toast('複製失敗', 'err');
     }
+    if (act === 'wa-share') {
+      const w = window.open(whatsappShareUrl(n), '_blank', 'noopener');
+      if (!w) toast('彈窗被封鎖 —— 用「複製 WhatsApp 文字」再貼落群組', 'warn');
+    }
+    if (act === 'qr-image') {
+      toast('正在準備 QR 圖…');
+      const done = await downloadQrImage(publicUrl(n), `通告QR_${n.id}`, 12, 4);
+      toast(done ? '已儲存 QR 圖 —— 可以直接貼落 WhatsApp' : '未能產生 QR 圖', done ? 'ok' : 'err');
+    }
     if (act === 'share-text') {
-      const url = publicUrl(n);
-      const txt = `【${profile().name || ''}】${n.title?.zh || '通告'}\n`
-        + (n.eventDate ? `日期：${n.eventDate}\n` : '')
-        + (n.deadline ? `報名截止：${n.deadline}\n` : '')
-        + (n.venue ? `地點：${n.venue}\n` : '')
-        + (n.fee ? `費用：${n.fee}\n` : '')
-        + (n.needSignup ? `\n報名／詳情：${url}` : `\n詳情：${url}`);
-      if (await copyText(txt)) toast('已複製 WhatsApp 文字', 'ok'); else toast('複製失敗', 'err');
+      if (await copyText(shareText(n))) toast('已複製 WhatsApp 文字（連報名連結）', 'ok');
+      else toast('複製失敗', 'err');
     }
     if (act === 'qr-svg') {
-      const svg = qrSvg(publicUrl(n), 8, 3);
-      dlFile(`通告QR_${n.id}.svg`, '<?xml version="1.0" encoding="UTF-8"?>' + svg, 'image/svg+xml;charset=utf-8');
+      if (downloadQrSvg(publicUrl(n), `通告QR_${n.id}.svg`, 8, 3)) toast('已下載 QR Code（SVG）', 'ok');
+      else toast('未能產生 QR Code', 'err');
     }
     if (act === 'export-word') exportNoticeWord(n);
     if (act === 'export-pdf') printNotice(n);
@@ -715,8 +796,8 @@ export function mount(root, params) {
     if (act === 'export-full-pdf') { printNoticeFull(n); }
     if (act === 'export-attend') { if (!n) return; exportAttendanceCsv(n); }
     if (act === 'export-attend-word') { if (!n) return; exportAttendanceWord(n); }
-    if (act === 'export-vsbadge-csv') { if (!n) return; exportVsbadgeActivityCsv(n); }
-    if (act === 'export-vsbadge-json') { if (!n) return; exportVsbadgeActivityJson(n); }
+    if (act === 'export-activity-csv') { if (!n) return; exportActivityCsv(n); }
+    if (act === 'export-activity-json') { if (!n) return; exportActivityJson(n); }
     if (act === 'export-md') { if (!n) return; exportNoticeMarkdown(n); }
     if (act === 'export-html') { if (!n) return; exportNoticeStandalone(n); }
     if (act === 'qr-poster') { if (!n) return; qrPoster(n); }
@@ -901,30 +982,47 @@ async function shareDialog(n) {
     n = find('notices', n.id);
   }
   const url = publicUrl(n);
+  const A = attendanceSummary(n);
   await modal({
-    title: '分享通告', sub: n.title?.zh || '', wide: true,
+    title: '分享通告（WhatsApp 報名）', sub: n.title?.zh || '', wide: true,
     body: `
       <div class="grid g-2" style="gap:14px">
-        <div class="center"><div class="qr-box" style="width:200px;margin:0 auto">${qrSvg(url, 5, 2)}</div>
-          <div class="xs faint mt-8">團員／家長掃 QR 就開到通告同報名表</div></div>
+        <div class="center"><div class="qr-box" style="width:220px;margin:0 auto">${qrImg(url, 220)}</div>
+          <div class="xs faint mt-8">團員／家長掃 QR 就開到通告${n.needSignup ? '同報名表' : ''}</div>
+          ${n.needSignup ? `<div class="xs faint mt-4">已報名 ${signupsOf(n).length} 份 · 出席 ${A.yes} · 唔出席 ${A.no} · 未回覆 ${A.none}</div>` : ''}
+        </div>
         <div class="col gap-10">
-          <div class="field"><label class="label">公開連結</label>
+          <div class="field"><label class="label">${n.needSignup ? '報名連結（免登入）' : '通告連結（免登入）'}</label>
             <input class="input" id="sh-url" value="${esc(url)}" readonly></div>
-          <button class="btn btn-primary btn-block" data-sh="copy">${icon('copy', 15)} 複製連結</button>
-          <button class="btn btn-block" data-sh="wa">${icon('send', 15)} 複製 WhatsApp 文字</button>
+          <button class="btn btn-primary btn-block" data-sh="wa-open">${icon('send', 15)} 用 WhatsApp 分享</button>
+          <button class="btn btn-block" data-sh="copy">${icon('copy', 15)} 複製連結</button>
+          <button class="btn btn-block" data-sh="wa-copy">${icon('copy', 15)} 複製 WhatsApp 文字</button>
+          <button class="btn btn-block" data-sh="img">${icon('download', 15)} 儲存 QR 圖（PNG / GIF）</button>
           <button class="btn btn-block" data-sh="svg">${icon('download', 15)} 下載 QR Code（SVG）</button>
-          <div class="hint">貼落 WhatsApp 群／發通告紙本都得。公開頁免登入，只顯示通告內容。</div>
+          <div class="field"><label class="label">文字預覽（可以自己改完再複製）</label>
+            <textarea class="textarea" id="sh-text" rows="7">${esc(shareText(n))}</textarea></div>
+          <div class="hint">「用 WhatsApp 分享」會直接開 WhatsApp（手機／網頁版），文字同連結已經填好；
+            團員撳連結就開通告${n.needSignup ? '、填名報名' : ''}，免登入。</div>
         </div>
       </div>`,
     actions: [{ label: '關閉', class: 'btn', value: null }],
     onMount: el => {
+      const txt = () => el.querySelector('#sh-text')?.value || shareText(n);
+      el.querySelector('[data-sh="wa-open"]')?.addEventListener('click', () => {
+        const w = window.open('https://wa.me/?text=' + encodeURIComponent(txt()), '_blank', 'noopener');
+        if (!w) toast('彈窗被封鎖 —— 可以撳「複製 WhatsApp 文字」再貼落群組', 'warn');
+      });
       el.querySelectorAll('[data-sh]').forEach(b => b.addEventListener('click', async () => {
         const a = b.dataset.sh;
-        if (a === 'copy') { if (await copyText(url)) toast('已複製', 'ok'); }
-        if (a === 'svg') dlFile(`通告QR_${n.id}.svg`, '<?xml version="1.0" encoding="UTF-8"?>' + qrSvg(url, 8, 3), 'image/svg+xml;charset=utf-8');
-        if (a === 'wa') {
-          const txt = `【${profile().name || ''}】${n.title?.zh || '通告'}\n${n.eventDate ? `日期：${n.eventDate}\n` : ''}${n.deadline ? `截止：${n.deadline}\n` : ''}${n.needSignup ? `報名：${url}` : `詳情：${url}`}`;
-          if (await copyText(txt)) toast('已複製 WhatsApp 文字', 'ok');
+        if (a === 'copy') { if (await copyText(url)) toast('已複製連結', 'ok'); }
+        if (a === 'wa-copy') { if (await copyText(txt())) toast('已複製 WhatsApp 文字（連報名連結）', 'ok'); }
+        if (a === 'svg') {
+          if (downloadQrSvg(url, `通告QR_${n.id}.svg`, 8, 3)) toast('已下載 QR Code（SVG）', 'ok');
+        }
+        if (a === 'img') {
+          toast('正在準備 QR 圖…');
+          const done = await downloadQrImage(url, `通告QR_${n.id}`, 12, 4);
+          toast(done ? '已儲存 QR 圖 —— 可以直接貼落 WhatsApp' : '未能產生 QR 圖', done ? 'ok' : 'err');
         }
       }));
     }
@@ -948,8 +1046,8 @@ async function exportDialog(n) {
             <button class="btn btn-block" data-ex="full-pdf">${icon('print', 15)} 通告＋出席回覆（PDF / 列印）</button>
             <button class="btn btn-block" data-ex="attend-csv">${icon('table', 15)} 出席回覆表（CSV）</button>
             <button class="btn btn-block" data-ex="attend-word">${icon('download', 15)} 出席回覆表（Word）</button>
-            <button class="btn btn-block" data-ex="vsbadge-csv">${icon('table', 15)} 匯出活動履歷（VSBADGE CSV）</button>
-            <button class="btn btn-block" data-ex="vsbadge-json">${icon('download', 15)} 匯出活動履歷（JSON）</button>
+            <button class="btn btn-block" data-ex="activity-csv">${icon('table', 15)} 匯出活動履歷（CSV）</button>
+            <button class="btn btn-block" data-ex="activity-json">${icon('download', 15)} 匯出活動履歷（JSON）</button>
           </div>
           <div class="hint mt-8">出席 ${A.yes} · 唔出席 ${A.no} · 未回覆 ${A.none}（名冊 ${A.rosterCount} 位）</div>
         </div>
@@ -972,8 +1070,8 @@ async function exportDialog(n) {
         if (k === 'full-pdf') printNoticeFull(n);
         if (k === 'attend-csv') exportAttendanceCsv(n);
         if (k === 'attend-word') exportAttendanceWord(n);
-        if (k === 'vsbadge-csv') exportVsbadgeActivityCsv(n);
-        if (k === 'vsbadge-json') exportVsbadgeActivityJson(n);
+        if (k === 'activity-csv') exportActivityCsv(n);
+        if (k === 'activity-json') exportActivityJson(n);
         if (k === 'word') { exportNoticeWord(n); toast('已輸出（Word）', 'ok'); }
         if (k === 'pdf') printNotice(n);
         if (k === 'md') exportNoticeMarkdown(n);
@@ -1009,11 +1107,7 @@ function noticeBodyHtml(n) {
     <div class="doc-title">${esc(n.title?.zh || '通告')}</div>
     ${n.title?.en ? `<div class="doc-sub">${esc(n.title.en)}</div>` : ''}</div>`);
   L.push(`<div class="doc-meta"><span>${esc(typeLabel(n.type))}</span><span>發出：${esc(n.publishAt || n.createdAt || '')}</span>${n.deadline ? `<span>截止：${esc(n.deadline)}</span>` : ''}</div>`);
-  const kv = [
-    ['活動日期', n.eventDate], ['地點', n.venue], ['費用', n.fee],
-    ['名額', n.quota ? `${n.quota} 人` : ''],
-    ['報名截止', n.deadline]
-  ].filter(([, v]) => v);
+  const kv = noticeInfoRows(n);
   if (kv.length) L.push(`<p>${kv.map(([k, v]) => `<b>${esc(k)}：</b>${esc(String(v))}`).join('　　')}</p>`);
   L.push(`<p style="white-space:pre-wrap;line-height:1.85">${esc(n.body?.zh || '')}</p>`);
   if (n.body?.en) L.push(`<p class="en-block" style="white-space:pre-wrap">${esc(n.body.en)}</p>`);
@@ -1169,9 +1263,9 @@ export function exportAllSignupsWord() {
 }
 
 /* ============================================================
-   進度系統 (VSBADGE) 活動履歷橋接
+   活動履歷匯出（進度紀錄用）
    ============================================================ */
-export function vsbadgeActivityPayload(n) {
+export function activityRecordPayload(n) {
   const db = load();
   const unit = db.unitCode || '0082';
   const rows = attendanceRows(n);
@@ -1215,8 +1309,8 @@ export function vsbadgeActivityPayload(n) {
   };
 }
 
-export function exportVsbadgeActivityCsv(n) {
-  const payload = vsbadgeActivityPayload(n);
+export function exportActivityCsv(n) {
+  const payload = activityRecordPayload(n);
   const rows = payload.attendees.map(a => [
     payload.unit,
     payload.activity.id,
@@ -1236,17 +1330,17 @@ export function exportVsbadgeActivityCsv(n) {
     headers: ['旅團編號', '通告編號', '活動日期', '活動類別', '活動名稱', '地點', 'YMIS會籍編號', '團員姓名', '團內崗位', '出席狀態', '是否計入進度', '備註與詳情'],
     rows
   });
-  toast('已匯出 VSBADGE 活動履歷 CSV', 'ok');
+  toast('已匯出活動履歷 CSV（可直接匯入後端）', 'ok');
 }
 
-export function exportVsbadgeActivityJson(n) {
-  const payload = vsbadgeActivityPayload(n);
+export function exportActivityJson(n) {
+  const payload = activityRecordPayload(n);
   dlFile(
     `進度系統活動履歷_${payload.unit}_${(n.title?.zh || n.id).slice(0, 15)}_${stamp()}.json`,
     JSON.stringify(payload, null, 2),
     'application/json;charset=utf-8'
   );
-  toast('已匯出 VSBADGE 活動履歷 JSON', 'ok');
+  toast('已匯出活動履歷 JSON', 'ok');
 }
 
 export function refresh() { window.dispatchEvent(new CustomEvent('v82:refresh')); }

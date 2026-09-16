@@ -65,7 +65,7 @@ export function getRegistry() {
   const fileUnits = readFileUnits();
   const idsFromEnv = new Set();
   for (const k of Object.keys(process.env)) {
-    const m = k.match(/^TROOP_([0-9A-Za-z]+)_(BACKEND|GASURL|APIKEY|NOTICE|PORTALORIGIN)$/i);
+    const m = k.match(/^TROOP_([0-9A-Za-z]+)_(BACKEND|GASURL|APIKEY|NOTICE|NAME|NAMEEN|SHORT|PROGRESSBACKEND|PROGRESSAPIKEY|PORTALORIGIN)$/i);
     if (m) idsFromEnv.add(m[1]);
   }
 
@@ -86,14 +86,19 @@ export function getRegistry() {
     const noticeSubmitUrl =
       envVar(`TROOP_${id}_NOTICE`, `TROOP_${idUpper}_NOTICE`, `TROOP_${idNoZero}_NOTICE`) ||
       fileEntry.notice?.submitUrl || gasUrl;
-    const name = fileEntry.name || `第 ${id} 旅`;
+    const envName = envVar(`TROOP_${id}_NAME`, `TROOP_${idUpper}_NAME`, `TROOP_${idNoZero}_NAME`);
+    const name = fileEntry.name || envName || `第 ${id} 旅`;
     const code = fileEntry.code || id;
+    /* 伺服器端已經有進度後端＋Key ＝ 前端唔使填任何嘢（純 env 開團用） */
+    const progressBackend = envVar(`TROOP_${id}_PROGRESSBACKEND`, `TROOP_${idUpper}_PROGRESSBACKEND`, `TROOP_${idNoZero}_PROGRESSBACKEND`);
+    const progressKey = envVar(`TROOP_${id}_PROGRESSAPIKEY`, `TROOP_${idUpper}_PROGRESSAPIKEY`, `TROOP_${idNoZero}_PROGRESSAPIKEY`);
 
     out[id] = {
       code,
       name,
       nameEn: fileEntry.nameEn || fileEntry.en || '',
-      short: fileEntry.short || `${code}venture`,
+      short: fileEntry.short || envVar(`TROOP_${id}_SHORT`, `TROOP_${idUpper}_SHORT`, `TROOP_${idNoZero}_SHORT`) || `${code}venture`,
+      nameEn: fileEntry.nameEn || fileEntry.en || envVar(`TROOP_${id}_NAMEEN`, `TROOP_${idUpper}_NAMEEN`, `TROOP_${idNoZero}_NAMEEN`) || '',
       section: fileEntry.section || '深資童軍',
       region: fileEntry.region || '',
       sponsor: fileEntry.sponsor || '',
@@ -108,7 +113,10 @@ export function getRegistry() {
       notice: {
         submitUrl: noticeSubmitUrl
       },
-      backendTrusted: isTrustedExecUrl(gasUrl)
+      backendTrusted: isTrustedExecUrl(gasUrl),
+      /* 呢個旅團係唔係靠伺服器端 env 開（Git 未加 JSON） */
+      fromEnv: !fileUnits[id],
+      progressServerSide: !!(progressBackend && progressKey)
     };
   }
   return out;
@@ -130,6 +138,35 @@ export function getTrustedUnit(id) {
   };
 }
 
+// ============================================================
+// 進度紀錄：旅團後端 —— 伺服器端設定（可選；一個後端、兩個前端）
+// ------------------------------------------------------------
+// 平常喺介面「進度 → 設定」填就得（存喺旅團自己嘅資料）；亦可以用 Vercel env 覆蓋：
+//   TROOP_<編號>_PROGRESSBACKEND = https://script.google.com/macros/s/…/exec
+//   TROOP_<編號>_PROGRESSAPIKEY  = …（喺旅團自己嘅 Apps Script 執行 showApiKey()）
+//   TROOP_<編號>_PROGRESSCATALOG = https://…/items.json（自訂考核項目，可選）
+// 有設就會優先採用（API Key 就唔會出現在瀏覽器）。
+// ============================================================
+export function getProgressRegistryEntry(id) {
+  /* 一個後端、兩個前端：進度資料就係旅團自己嘅後端（GAS /exec）。
+     伺服器端可以設定 TROOP_<id>_PROGRESSBACKEND / _PROGRESSAPIKEY（可選覆蓋；
+     一般情況喺前端「進度 → 設定」填就得），設定咗就優先於前端輸入（API Key 唔使落前端）。 */
+  const out = { backend: '', apiKey: '', catalog: '' };
+  if (typeof id !== 'string' || !/^[0-9A-Za-z_-]{1,32}$/.test(id)) return out;
+  const idUpper = id.toUpperCase();
+  const idNoZero = id.replace(/^0+/, '') || id;
+  const pick = (key) => envVar(
+    `TROOP_${id}_${key}`, `TROOP_${idUpper}_${key}`, `TROOP_${idNoZero}_${key}`
+  );
+  const backend = pick('PROGRESSBACKEND').trim();
+  out.backend = isTrustedExecUrl(backend) ? backend : '';
+  out.apiKey = pick('PROGRESSAPIKEY').trim();
+  // 可選：自訂考核項目定義（預設用 app 內建 data/progress/items.json）
+  const catalog = pick('PROGRESSCATALOG').trim();
+  if (catalog && /^https:\/\//i.test(catalog)) out.catalog = catalog;
+  return out;
+}
+
 // 前端旅團選擇器專用：只暴露公開資訊，任何情況都不回傳 gasUrl / apiKey
 export function listPublicUnits() {
   const reg = getRegistry();
@@ -144,7 +181,10 @@ export function listPublicUnits() {
       region: u.region,
       sponsor: u.sponsor,
       address: u.address,
-      theme: u.theme
+      theme: u.theme,
+      /* 前端用嚟交代狀態：伺服器端已經有進度後端＋Key（前端唔使填）／通告可以直接送到總表 */
+      progressServerSide: !!u.progressServerSide,
+      noticeReady: !!(u.notice?.submitUrl || u.backend?.gasUrl)
     };
   }
   return out;

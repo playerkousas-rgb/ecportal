@@ -4,7 +4,7 @@
    PDF ：用瀏覽器列印（可「另存為 PDF」），A4 排版
    ============================================================ */
 
-import { esc, qrSvg } from './util.js';
+import { qrDataUrl, esc, qrSvg } from './util.js';
 
 export function download(filename, content, type = 'application/octet-stream') {
   const blob = content instanceof Blob ? content : new Blob([content], { type });
@@ -136,6 +136,58 @@ export function printDoc({ title, org = '', bodyHtml, meta = '' }) {
 /* ---------------- QR ---------------- */
 /* 單一實作在 util.js（避免兩份），喺呢度再出口方便 view 一併匯入 */
 export { qrSvg, downloadSvgEl } from './util.js';
+
+/** data URL → Blob（下載用） */
+function dataUrlToBlob(dataUrl) {
+  const m = /^data:([^;,]+)?(;base64)?,(.*)$/.exec(String(dataUrl)) || [];
+  const mime = m[1] || 'application/octet-stream';
+  const body = m[3] || '';
+  if (m[2]) {
+    const bin = atob(body);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+  }
+  return new Blob([decodeURIComponent(body)], { type: mime });
+}
+
+/** data URL → PNG data URL（用 canvas；冇 canvas／載入唔到就回 null） */
+function dataUrlToPng(dataUrl) {
+  return new Promise(resolve => {
+    try {
+      if (typeof Image !== 'function' || !document.createElement('canvas').getContext) return resolve(null);
+      const img = new Image();
+      const timer = setTimeout(() => resolve(null), 1200);
+      img.onload = () => {
+        clearTimeout(timer);
+        try {
+          const cv = document.createElement('canvas');
+          cv.width = img.width || 512; cv.height = img.height || 512;
+          const ctx = cv.getContext('2d');
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(0, 0, cv.width, cv.height);
+          ctx.drawImage(img, 0, 0);
+          resolve(cv.toDataURL('image/png'));
+        } catch (e) { resolve(null); }
+      };
+      img.onerror = () => { clearTimeout(timer); resolve(null); };
+      img.src = dataUrl;
+    } catch (e) { resolve(null); }
+  });
+}
+
+/**
+ * 儲存 QR 圖（畀執委分享落 WhatsApp／儲存落手機相簿）
+ * 有 canvas 就出 .png，冇就出 .gif —— 兩者 WhatsApp 都收
+ */
+export async function downloadQrImage(text, filename = 'QR', cell = 10, margin = 4) {
+  const dataUrl = qrDataUrl(text, cell, margin);
+  if (!dataUrl) return false;
+  const png = await dataUrlToPng(dataUrl);
+  if (png) { download(`${filename}.png`, dataUrlToBlob(png), 'image/png'); return true; }
+  download(`${filename}.gif`, dataUrlToBlob(dataUrl), 'image/gif');
+  return true;
+}
 
 export function downloadQrSvg(text, filename = 'qrcode.svg', cell = 8, margin = 3) {
   const svg = qrSvg(text, cell, margin);

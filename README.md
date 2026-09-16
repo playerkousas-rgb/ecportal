@@ -1,11 +1,12 @@
-# 82venture · 執委管理系統
+# 執委管理系統
 
-> 深資童軍團自務自治管理平台 —— 會議 · 財務 · 用戶 · 物資 · 團章 · 通告 · 進度 · 表格與總表同步
+> 深資童軍團自務自治管理平台 —— 會議 · 財務 · 用戶 · 物資 · 團章 · 通告 · 進度 · 欄位與總表同步
 > 純靜態網站（HTML + CSS + 原生 JS ES Modules），**零依賴、零 build**，可即開即用。
 >
-> **最新修正（2026-09-15）**：8 項問題已全部處理，詳見 **[docs/UPDATES_2026-09-15.md](docs/UPDATES_2026-09-15.md)**
-> （Code.gs 語法 · 用戶可編輯＋身份 · 防呆暫存 · 通告輸出連出席回覆 · 先揀旅團再登入 ·
-> 成員連結 · 進度連通檢查 · 首頁現在結餘）
+> **最新修正（2026-09-16）**：團長 10 項要求已完成 9 項（第 10 項通告等緊附件）
+> （改名做「執委管理系統」· 領袖免收團費 · 報告唔再混上年度結餘 · 帳目／過往紀錄分頁 · 冇紀錄嘅月份都揀得到 ·
+> 欄位改喺各自分頁 · 進度紀錄改成「一個後端、兩個前端」）。
+> 前次（2026-09-15）8 項詳見 **[docs/UPDATES_2026-09-15.md](docs/UPDATES_2026-09-15.md)**。
 
 主色：**深資童軍棗紅 `#7B2233`**（配 `#5E1826` / `#4A111C`，金色 `#B8892B`）。
 
@@ -14,7 +15,7 @@
 ## 快速開始
 
 ```bash
-cd 82venture
+cd ecportal
 python3 -m http.server 8000     # 或用任何靜態伺服器（必須用 http:// 開啟，唔可以雙擊檔案）
 # 瀏覽器打開 http://localhost:8000
 ```
@@ -60,11 +61,11 @@ python3 -m http.server 8000     # 或用任何靜態伺服器（必須用 http:/
 | 5 | 生日內建、可改可輸出、當月＋前 7 日提示（顯示邊位） | `data/units/0082/members.json`（16 位，其中 1 位未填生日）、「用戶 → 生日」頁（月曆／年表／下載 .ics）、儀表板提示卡（會顯示姓名） |
 | 6 | 物資紀錄＋借用面板，任何已登入帳戶可批核，借出／歸還自動加減庫存 | 「物資」頁：物資清單、借用與批核、盤點紀錄；`inv.approve` 三個角色都有；庫存由 `model.itemTotals()` 即時計算（批准即鎖定、歸還即回復） |
 | 7 | 財務內建，取代 Google Form；**出兩條數**（旅 31/3 年結 vs 旅團 AGM 起計） | 「財務」頁：帳目／財政年度報告／**團費收款表（每年每人 $360，逐人記錄邊個交咗）**／申報／預算／匯入；`assets/js/lib/fiscal.js` 同時計算**童軍年度（4/1–3/31）**同**旅年度（AGM → 下屆 AGM 前一日）**；AGM 日期**逐年輸入**（每年唔同） |
-| 8 | 進度系統整合（開一個執委帳戶直入對面系統） | 「進度」頁支援三種接駁：**Portal 信任模式（預設）**、專用帳戶模式、純連結模式；可出 QR、可內嵌預覽 |
-| 9 | MOCK 與真實資料完全分離；多旅團系統（參考 VSBADGE） | `data/mock/*.json` vs `data/units/<編號>/*.json`；`data/units.json` 係 Git Registry，每個旅團一個資料夾 |
+| 8 | 進度紀錄（**一個後端、兩個前端**） | 旅團只有**一個後端**（Google Sheet ＋ Apps Script）：**執委管理系統**同**進度前端**都係前端，讀寫同一份資料。呢邊**唔連任何其他系統** —— 直接讀後端（`?action=load`）／寫後端（`action=save`），通常用返 Registry 登記嘅後端，API Key＝執委身份；分頁有總覽／成員進度／勾選進度／審批中心／設定 |
+| 9 | MOCK 與真實資料完全分離；多旅團系統（Git Registry） | `data/mock/*.json` vs `data/units/<編號>/*.json`；`data/units.json` 係 Git Registry，每個旅團一個資料夾 |
 | 10 | 成員用手機**影相＋揀欄目**就入得帳（取代 Google Form）；領袖／執委亦可在 APP 內填 | 公開收集頁 **`entry.html?u=0082`**（免登入：影相 → 揀欄目 → 金額 → 送出）＋ APP 內「儀表板 → 影相記一筆」／「財務 → 收支申報」；相機會自動壓縮，送出可經 Apps Script 直接入總表 |
-| 11 | 每個旅團可以**插入自己嘅 SHEET** 取代預設；欄目可改名／加減（內建類 Google Sheet） | 「**表格與同步**」頁：① 表格設計（改名／加欄／改類型／必填／隱藏／排序／還原）② 插入自己嘅 Sheet（貼連結 → 自動對應欄位 → 匯入／儲存做同步來源） |
-| 12 | 所有內容經 **SCRIPT 寫入旅團專屬後端 SHEET**（每個旅團獨立專屬 Google Sheet） | 「表格與同步 → 總表同步」：填 Apps Script `/exec` → 下載內建 **`Code.gs`** → 一鍵同步全部（自動寫入 帳目／物資／團員／收支申報／通告／報名／會議／同步紀錄 分頁）、可選 Drive 相片上載 |
+| 11 | 每個旅團可以**插入自己嘅 SHEET** 取代預設；欄目可改名／加減（內建類 Google Sheet） | 每個模組頁右上「**欄位**」掣（帳目／物資／借用／團員／通告／會議）：改名／加欄／改類型／必填／隱藏／排序／還原；「**插入自己嘅 Sheet**」搬去「**帳號與系統 → 資料管理**」 |
+| 12 | 所有內容經 **SCRIPT 寫入旅團專屬後端 SHEET**（每個旅團獨立專屬 Google Sheet） | 「**帳號與系統 → 資料管理 → 總表同步**」：填 Apps Script `/exec` → 下載內建 **`Code.gs`** → 一鍵同步全部（自動寫入 帳目／物資／團員／收支申報／通告／報名／會議／同步紀錄 分頁）、可選 Drive 相片上載 |
 | 13 | 通告：**每次開一張**，可分享出去畀人睇＋報名 | 「通告」頁：清單／編輯器／**報名欄目自訂（含出席與否）**／發布 → 分享（公開連結＋QR＋WhatsApp 文字）；公開頁 **`notice.html?u=0082&n=通告編號`** 免登入閱讀＋回覆出席；詳情頁文件式排版，右面輸出面板可以**連出席回覆一齊出 Word／PDF／CSV** |
 | 14 | **用戶**（領袖／執委／團員）名冊可編輯 | 「用戶」頁：名冊＋身份篩選、個人紀錄、生日表；每一行都有「編輯」掣（`#/members/edit/<id>`），身份可以改做領袖／執委／團員 |
 | 15 | **防呆**：避免即時寫入，先以瀏覽器儲存 | `assets/js/lib/guard.js`：編輯器草稿自動暫存 `localStorage`（未撳「儲存」唔會入資料庫）、刪除要打字確認、刪除／改動可「還原」、總表同步只排隊唔會自動送出 |
@@ -149,18 +150,19 @@ python3 -m http.server 8000     # 或用任何靜態伺服器（必須用 http:/
 | 通告報名／出席回覆 | `notice.html?u=0082&n=<編號>` | 睇通告 → 回覆出席與否 |
 | 團章 | `constitution.html?u=0082` | 免登入閱讀 |
 
-* 每條連結：**複製** / **QR**（可下載 SVG）/ **列印海報**（A4 貼旅部）/ 開新分頁
+* 每條連結：**複製** / **QR**（可下載 SVG / 圖檔）/ **列印海報**（A4 貼旅部）/ 開新分頁
 * 另有「列印全部 QR 一覽」同「複製全部連結」（貼 WhatsApp 群）
 * 已設定 Apps Script：成員一送出就寫入總表（申報 → 待批申報、借用 → 物資借用、報名 → 報名）
 * 未設定都唔怕：紀錄存喺成員自己部手機，可以「複製內容」傳畀司庫／執委
 * 收到之後去邊批核：申報 → 財務；借用 → 物資；報名／出席 → 通告
 
-### 表格與同步（欄位自己話事，最後入一張總 Sheet）
-* **表格設計**：帳目／物資／團員／收支申報／通告／會議 —— 欄位可以**改名、加、刪、改類型（文字／數字／日期／下拉／相片）、必填、隱藏、排序、還原預設**
-* **插入自己嘅 Sheet**：貼上旅團自己嘅 Google Sheet 連結（帶 `gid=`、設定「知道連結嘅人可檢視」）→ 讀欄位 →
-  **自動對應**（日期／項目／金額／負責人…）→ 可逐個改 → 匯入（可選先清空）或儲存做同步來源隨時再拉
-* 亦支援直接貼上 CSV／Tab 分隔內容
-* **總表同步**：內建 **`Code.gs`（Apps Script）** 下載 → 部署 Web App（任何人可存取）→ 填 `/exec` 網址 →
+### 欄位與同步（每頁自己話事，最後入一張總 Sheet）
+* **欄位**：每個模組頁右上角都有「**欄位**」掣（帳目、物資、借用、團員、通告、會議）——
+  欄位可以**改名、加、刪、改類型（文字／數字／日期／下拉／相片）、必填、隱藏、排序、還原預設**，儲存即刻套用到嗰頁
+* **插入自己嘅 Sheet**（進階，喺「帳號與系統 → 資料管理」）：貼上旅團自己嘅 Google Sheet 連結（帶 `gid=`、
+  設定「知道連結嘅人可檢視」）→ 讀欄位 → **自動對應**（日期／項目／金額／負責人…）→ 可逐個改 →
+  匯入（可選先清空）或儲存做同步來源隨時再拉；亦支援直接貼上 CSV／Tab 分隔內容
+* **總表同步**（進階，喺「帳號與系統 → 資料管理」）：內建 **`Code.gs`（Apps Script）** 下載 → 部署 Web App（任何人可存取）→ 填 `/exec` 網址 →
   「測試連線」／「立即同步全部」／可開「每次改動後自動同步」
   * 自動寫入分頁：帳目、收支申報、物資、團員、通告、**報名**、會議、同步紀錄（每個旅團可獨立分頁或用「旅團」欄分辨）
   * 每次同步重寫該旅團嘅資料（唔會重複累積）；相片只記數量，填咗 `DRIVE_FOLDER_ID` 就會上載去 Drive 並貼連結
@@ -189,47 +191,41 @@ python3 -m http.server 8000     # 或用任何靜態伺服器（必須用 http:/
 Word／PDF／Markdown／單一 HTML／JSON 匯出、QR Code、
 **公開閱讀頁 `constitution.html`**（免登入、可獨立上載或貼連結）。
 
-### 進度系統接駁（聯邦式：兩個系統，一條身份）
-進度追蹤係**獨立系統**（VSBADGE，都係多旅團、同一前端指向唔同後端）。
-呢邊做**入口＋管理**，進度資料由對方擁有 —— 呢邊唔複製、唔做第二份真相。
+### 進度紀錄（一個後端、兩個前端）
+旅團只有**一個後端**：一張 Google Sheet ＋ 一支 Apps Script（`/exec`）。
+**執委管理系統**同**進度前端**（團員／領袖用嗰個）係**兩個前端**，讀寫同一份資料 ——
+所以執委系統**唔需要連去任何其他系統**：唔開分頁、唔用 portal，亦唔會出 `referer_mismatch`。
 
-三種模式，預設 **Portal 信任模式**：
+* **讀**：`GET ?action=load` → 成員、進度、待批完成、其他獎章、活動履歷（經同源 `/api/progress` 轉發）
+* **寫**：`POST {action:'save'|'saveOtherBadge', apikey, changes|records}` → 直接勾／取消勾，寫入同一個 Sheet
+* **批**：`POST {action:'reviewRequest'|'reviewLogRequest', apikey, request_id, decision}` → **審批中心**批准／拒絕團員申報；
+  批准即刻寫入「進度追蹤」（已有紀錄會更新完成日期）／「活動履歷」，拒絕只改狀態、唔會刪紀錄
+* **設定**：通常唔使填 —— 旅團後端登記喺 `data/units.json`（`backend.gasUrl` / `apiKey`）就會自動用返；
+  未登記就去「進度 → 設定」填 `/exec` ＋ API Key（Apps Script 執行 `showApiKey()` 複製）。**API Key＝執委身份**
+* **考核項目**：第 11 版綱要已經**內建**喺 `data/progress/items.json`（離線可用，唔使連任何網站）；
+  旅團自己改過項目就喺設定填一條公開 https 網址
+* **後端範本**：`Code.gs` 已經同時支援兩邊（`sync` / `claim` / `noticeSignup` / `loan` ＋ `load` / `save` / `saveOtherBadge`）；
+  執行一次 `initializeSheets` 會建好 `進度追蹤`／`其他獎章`／`待批完成`／`活動履歷`／`待批履歷`／`成員名單` 分頁，
+  同步時亦會更新 `成員名單`，令兩個前端見到同一批人
+* **安全**：`/api/progress` 只准 GAS `/exec`、payload ≤ 1 MB、45 秒逾時，log 只記 metadata（唔記 API Key）。
+  要埋讀取進度追蹤：去「進度 → 設定」貼 `/exec` 網址（Apps Script → 部署 → 管理部署）＋ API Key
+  （Apps Script 執行 `showApiKey()`）→ 撳「測試連線」見到團員名單就成功（存在旅團自己嘅資料，跟 JSON 備份走）。
+  想收埋條 Key 唔落前端，先設伺服器端 env（`TROOP_<旅團>_PROGRESSBACKEND` / `_PROGRESSAPIKEY`）覆蓋
+* **身份對應**：團員／執委用 **YMIS（10 位數字）**、領袖用 **Email**
 
-```
-https://vsbadge.vercel.app/?u=0082&role=exec_committee&ymis=EXCO-82&name=執行委員會&from=portal&embed=1
-```
-
-* **要填對方系統嘅「前端」網址**（例 `https://vsbadge.vercel.app/`），
-  **唔好填 Google Apps Script 嘅 `/exec`** —— 嗰條係 API 端點，
-  開出嚟只會見到 `{"success":false,"error":"Unknown action"}` 而唔係系統介面
-  （對方 v3.0 起由佢自己嘅同源 `/api/proxy` 搵旅團後端，GAS URL 唔經瀏覽器）
-* **四個參數缺一不可**（對方 `index.html` 嘅判斷係 `from==='portal' && ymis && role`）：
-  `u`＝旅團編號（要已登記喺對方 Registry）、`role`、`ymis`、`from=portal`。
-  **冇 `ymis` 就會跌返登入頁** —— 表面連通、實際冇帶到身份
-* `role` 要用對方認得嘅值先有勾選／審批權：
-  `exec_committee`／`branch_leader`／`group_leader`／`admin`／`super_admin`（`member` 只可以睇自己）
-* 唔使喺對方系統開新帳號、唔使喺網址帶密碼、唔需要改對方系統
-* 另有「專用帳戶模式」（喺對面系統正常開一個執委帳戶）同「純連結模式」
-
-**Portal 身份自動產生，旅團零設定**：`portal.ymis` 留空就會自動派
-`PORTAL-<旅團編號>-<角色>`（例 `PORTAL-0082-EXCO`），
-**唔使先去進度系統開帳戶再返嚟填** —— 新旅團接入時唔使多做嘢。
-（實測：對方 portal 分支唔會核對 `ymis` 係咪真成員，所以主系統可以自己派身份。）
-
-**跨系統對人靠身份欄，按身份分**：對方規矩係**團員用 YMIS（10 位數字）、領袖用 Email**，
-所以要補啱嗰個欄（`data/units/0082/members.json` 嘅 `ymis` / `email`）。
-未補嘅只可以用姓名配對（會撞名、會漏）。用戶頁會顯示覆蓋率同「未對得上」名單，
-進度頁會分開顯示「連結就緒」同「身份對齊」兩件事。
-
-> ⚠️ **對方 portal 模式而家完全冇驗證** —— 任何人砌一條
-> `?u=0082&from=portal&role=super_admin&ymis=x` 就攞到最高權限。
-> 放寬成「自動有權限」之前**必須先加驗證**。改法（registry 加 `portalOrigin` /
-> `portalRoles` ＋ `/api/portal` 驗證 endpoint）已寫好：
-> [`docs/PROGRESS_PORTAL_HANDOFF.md`](docs/PROGRESS_PORTAL_HANDOFF.md)
+### 通告：欄位 + 一撳 WhatsApp 分享 + QR 報名
+通告有齊常規欄位：**活動日期、報名截止、活動地點、集合時間及地點、解散時間及地點、內容／程序、服裝、費用、名額、查詢**
+（清單喺 `assets/js/lib/notice-fields.js`；加一行，編輯器／詳情／公開頁／分享文字／列印／總表分頁自動跟）。
+空欄位唔會顯示。
+「通告」清單或詳情頁 →「分享報名」：
+* **用 WhatsApp 分享**：直接開 `wa.me`，標題／日期／地點／費用／截止／內容重點同**報名連結**都自動填好（可以改完先送）
+* **QR Code**：畫面即時顯示，可以儲存圖（PNG／GIF，貼落群組）、下載 SVG、列印 A4 海報
+* **報名連結**：`notice.html?u=<旅團>&n=<通告>` 免登入 —— 團員／家長撳入去睇通告＋填名報名（截止／名額自動擋）
+* 報名會直接寫入旅團後端（`報名` 分頁）；「通告 → 所有報名」有**逐張通告統計**（報名／出席／唔出席／未回覆）
 
 ### 教學（內建）
 12 章使用說明：快速開始、帳戶與權限、團章、財務、**日常點輸入**、**手機記帳與通告**、
-物資、生日、進度接駁、示範資料、多旅團部署、**表格設計與總表同步**、輸出與備份。
+物資、生日、進度接駁、示範資料、多旅團部署、**欄位設定與總表同步**、輸出與備份。
 
 ### 帳號與系統
 帳戶 CRUD、密碼重設、權限總表、旅團設定、資料管理（JSON 備份／還原／重設）、
@@ -237,7 +233,7 @@ https://vsbadge.vercel.app/?u=0082&role=exec_committee&ymis=EXCO-82&name=執行�
 
 ---
 
-## 多旅團（VSBADGE 式 Git Registry）
+## 多旅團（Git Registry）
 
 ```
 data/
@@ -258,6 +254,8 @@ data/
 
 新增旅團：喺 `data/units.json` 加一個 key，再 copy 一個資料夾改名即可。
 詳見 **[docs/ADD_NEW_UNIT.md](docs/ADD_NEW_UNIT.md)**。
+想最快開團（唔改 Git）：喺 Vercel 加 `TROOP_<編號>_BACKEND` / `_APIKEY` / `_NAME`
+（＋ `_PROGRESSBACKEND` / `_PROGRESSAPIKEY`）→ Redeploy 就得。
 
 網址參數：`?u=0082`（指定旅團）、`?mock=1`（示範模式）。
 
@@ -279,14 +277,18 @@ data/
 
 ```bash
 npm install          # 只裝測試用嘅 jsdom（網站本身零依賴）
-npm test             # = node tests/smoke.mjs real && node tests/smoke.mjs mock && node tests/public.mjs
+npm run dev          # 本機開發伺服器（靜態檔 + /api/*，進度讀寫要用呢個）
+npm run build:gas    # 由 assets/js/lib/gastemplate.js 產生 apps-script/Code.gs（單一來源）
+npm test             # build:gas + smoke(real/mock) + public + gate + api + progress
 ```
 
-| 測試 | 內容 | 結果（2026-09） |
+| 測試 | 內容 | 結果（2026-09-16） |
 |---|---|---|
-| `node tests/smoke.mjs real` | 真實模式：種子資料、登入／密碼權限、雙財政年度、AGM 逐年輸入、**團費收款紀錄（自動入帳／撤銷／金額可改）**、生日、全部頁面渲染、**分頁對位**、QR、文件輸出、物資加減庫存、財務匯入解析（你嘅 Google Form 格式＋對數）、**一鍵匯入 56 筆參考帳**、**通告（開一張・分享・報名）**、**表格設計（改名／還原）**、**插入自己嘅 Sheet（gviz 解析／自動對應／同步 payload）**、**快速記帳（影相＋選欄目）**、**總表同步下載**、**後端已連接（三條路同一條 `/exec`）** | **262 通過 / 0 失敗** |
-| `node tests/smoke.mjs mock` | 示範模式：同樣項目 + 示範／真實隔離 | **234 通過 / 0 失敗** |
-| `node tests/public.mjs` | 公開頁：團章（免登入、中英對照、語言切換、搜尋）＋ **通告公開頁（分享連結、報名表、送出、失效連結）** ＋ **手機記一筆（影相＋揀欄目、必填驗證、送出紀錄）** | **57 通過 / 0 失敗** |
+| `node tests/smoke.mjs real` | 真實模式：種子資料、登入／密碼權限、雙財政年度、AGM 逐年輸入、**團費收款紀錄（含領袖免收）**、生日、全部頁面渲染、**分頁對位**、QR、文件輸出、物資加減庫存、財務匯入解析、**帳目（本年度總覽／按月／過往紀錄）**、**報告唔混上年度結餘**、**通告（開一張・分享・報名・統計）**、**欄位設計（改名／還原，每頁入口）**、**插入自己嘅 Sheet**、**快速記帳**、**總表同步下載**、**進度直接接駁**、**新旅團申請經 `/api/proxy` 送去 ADMIN 系統（收件匣唔回執，送到就 OK）** | **562 通過 / 0 失敗** |
+| `node tests/smoke.mjs mock` | 示範模式：同樣項目 + 示範／真實隔離 | **523 通過 / 0 失敗** |
+| `node tests/public.mjs` | 公開頁：團章（免登入、中英對照、語言切換、搜尋）＋ 通告公開頁（分享連結、報名表、送出、失效連結）＋ 手機記一筆 | **80 通過 / 0 失敗** |
+| `node tests/gate.mjs` | 旅團閘：揀旅團、只顯示已啟用、**部署指南（毋須登入嘅開新旅團教學）**、申請接入（Code.gs → initializeSheets → 部署 → **入 ADMIN 系統**）、驗證 | **29 通過 / 0 失敗** |
+| `node tests/api.mjs` · `node tests/progress.mjs` | `/api/units` 個資收窄；**新旅團申請轉發**（目的地伺服器端固定、appType／appName、唔回執／回空白都當送到、連線失敗先 502/504）；**進度讀寫**（只准 GAS `/exec`、逾時、payload 上限、伺服器端 env 優先、log 唔記 API Key、自訂考核項目 SSRF 防護） | **29 · 33 通過 / 0 失敗** |
 
 ---
 
@@ -331,7 +333,8 @@ https://script.google.com/macros/s/AKfycbySGLBg5KuWzgM9EySiOIppqnzrL0QASIYLlhbCI
    QR Code 就會指向公開頁；亦可以喺「團章 → 公開網址」填自訂網址
 4. 想公開通告／收手機記帳：同樣要上載 `notice.html`、`entry.html`、`data/units.json`、
    `data/units/0082/notices.json`（公開頁會讀呢啲檔；`entry.html` 只讀 `unit.json` 嘅基本資料）
-4. 進度系統 Portal：喺「進度」頁填 `ymis` 對應嘅網址參數同旅團編號即可
+4. 進度紀錄：旅團後端登記喺 `data/units.json`（`backend.gasUrl` / `apiKey`）就會自動用返；要覆蓋先喺「進度 → 設定」填 `/exec` ＋ API Key
+   （**需要支援 `/api/` 嘅部署**：Vercel 或本機 `npm run dev`；純靜態主機冇 API，進度接駁會停用）
 
 ---
 
@@ -352,7 +355,7 @@ assets/js/views/               dashboard · meetings · finance · members · in
 assets/vendor/                 qrcode.js（MIT，離線產生 QR）
 data/                          units.json 註冊處 + 每個旅團一個資料夾 + mock 示範資料
 vercel.json                    Vercel 靜態部署設定（cleanUrls / 快取）
-docs/                          DAILY_ENTRY.md（日常輸入流程）、MASTER_SHEET.md（總表同步＋合併系統）、ADD_NEW_UNIT.md（多旅團）
+docs/                          DAILY_ENTRY.md（日常輸入流程）、MASTER_SHEET.md（總表同步＋合併系統）、ADD_NEW_UNIT.md（多旅團）、GAS_QUOTA_AND_LIMITS.md（Apps Script 配額詳細）
 tests/                         jsdom 端對端測試
 ```
 
@@ -364,13 +367,17 @@ tests/                         jsdom 端對端測試
    一鍵可匯入。其他年度分頁如有需要，將連結（連 `gid=`）發我，我可以同樣內建。
 2. **AGM 日期**：現時用「8 月最後一個星期六」推算 2023–2026 並標示「未確認」，
    請到「財務 → 財政年度報告 → 逐年輸入 AGM 日期」填每年實際日期（每年唔同）。
-3. **進度系統 Portal**：預設用信任模式；如對方系統需要開專用帳戶，請轉用「專用帳戶模式」。
-4. **多裝置同步**：APP 仍然係單機 localStorage；但「**表格與同步 → 總表同步**」已經可以一鍵將所有資料
+3. **進度紀錄**：一個後端、兩個前端 —— 執委管理系統同進度前端讀寫同一份資料，冇外連、冇 portal。
+   後端要係本系統嘅 `Code.gs`（支援 `?action=load` / `action=save`），`npm run build:gas` 會由範本產生。
+4. **多裝置同步**：APP 仍然係單機 localStorage；但「**帳號與系統 → 資料管理 → 總表同步**」已經可以一鍵將所有資料
    經 Apps Script 寫入你嘅**後端總 Sheet**（成員手機交單、通告報名都可以直接入總表），
    即係話多人共用嘅「總表」已經有，唔需要等新後端亦可以先用。
 5. **團員職位／聯絡**：名冊暫只有姓名＋生日（來自生日表），其餘欄位待你補充
-   （亦可以直接喺「表格與同步 → 表格設計 → 團員」自己加欄位）。
+   （亦可以直接喺「用戶」頁右上「欄位」自己加欄位）。
 6. **公開收集頁需要託管**：`entry.html` / `notice.html` 要放喺 https 網址（Vercel / GitHub Pages 等）先方便成員用手機開；
    純本機 `localhost` 只適合測試。
-7. **Apps Script 版本**：你嗰條 `/exec` 而家冇 `doGet`（只有 `doPost`）；建議貼上內建 `Code.gs` 並用
+7. **進度讀寫需要 `/api/` 後端**：Vercel 部署自動有；本機用 `npm run dev`；
+   GitHub Pages 之類純靜態主機冇 API，進度頁會提示（其他功能照用）。
+   * 旅團後端要係本系統嘅 `Code.gs`（或已支援 `?action=load` / `action=save`）；`npm run build:gas` 會由範本產生 `apps-script/Code.gs`。
+8. **Apps Script 版本**：你嗰條 `/exec` 而家冇 `doGet`（只有 `doPost`）；建議貼上內建 `Code.gs` 並用
    「管理部署作業 → 編輯 → 新版本」更新（網址不變），咁 `sync` / `claim` / `noticeSignup` 三個動作就齊。

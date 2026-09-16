@@ -8,12 +8,14 @@
 
 import { esc, icon, toast, uid } from './lib/util.js';
 import { todayISO } from './lib/dates.js';
+import { noticeInfoRows } from './lib/notice-fields.js';
 
 const q = new URLSearchParams(location.search);
 const app = document.getElementById('app');
 const unitCode = q.get('u') || '0082';
 const noticeId = q.get('n') || '';
 let notice = null, meta = {}, sent = false;
+let registryData = null;   // data/units.json 讀返嚟嘅 Registry（表單送出要用嚟解析目的地）
 
 const LOCAL_KEY = `venture82.pub.signup.${unitCode}.${noticeId}`;
 
@@ -23,22 +25,51 @@ async function loadJson(url) {
   return r.json();
 }
 
+/** 由旅團自己後端讀已發布通告（經同源 /api/proxy；免登入、冇 API Key） */
+async function fetchBackendNotices() {
+  try {
+    const r = await fetch('api/proxy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'notices', unit: unitCode })
+    });
+    const j = await r.json();
+    return Array.isArray(j?.notices) ? j.notices : [];
+  } catch (e) { return []; }
+}
+
 async function boot() {
   try {
     let registry = null;
     try { registry = await loadJson('data/units.json'); } catch (e) { /* ignore */ }
+    registryData = registry;
     if (registry?.units) {
       if (!q.get('u') && registry.defaultUnit) unitCode = registry.defaultUnit;
       meta = registry.units[unitCode] || {};
     }
+    /* 伺服器 Registry（環境變數開嘅旅團）都要知個名 */
+    if (!meta || !meta.name) {
+      try {
+        const srv = await loadJson('api/units');
+        if (srv?.units?.[unitCode]) meta = { ...(srv.units[unitCode] || {}), ...(meta || {}) };
+      } catch (e) { /* 靜態部署冇 API：略過 */ }
+    }
+
     const src = q.get('src') || (meta.dataPath ? `${meta.dataPath}notices.json` : `data/units/${unitCode}/notices.json`);
-    const data = await loadJson(src);
-    const list = data.notices || [];
+    let list = [];
+    try {
+      const data = await loadJson(src);
+      list = data.notices || [];
+      if (!meta.name && data.unitName) meta.name = data.unitName;
+    } catch (e) { list = []; }
+
+    /* 靜態檔未有（或者新通告未入 Git）→ 直接讀旅團自己後端嘅「通告全文」 */
+    if (!list.length) list = await fetchBackendNotices();
+
     notice = noticeId
       ? list.find(x => String(x.id) === String(noticeId)) || list.find(x => String(x.publicId) === String(noticeId))
       : list.filter(x => x.status === 'published')[0];
     if (!notice) throw new Error('搵唔到通告');
-    if (!meta.name && data.unitName) meta.name = data.unitName;
     document.title = `${notice.title?.zh || '通告'} · ${meta.name || unitCode}`;
     render();
   } catch (e) {
@@ -101,7 +132,7 @@ function render() {
 
     ${n.needSignup ? signupCard(n, { closed, full, inner }) : ''}
 
-    <div class="center xs faint mt-16 no-print">本頁免登入公開閱讀 · 由 82venture 執委管理系統發出</div>
+    <div class="center xs faint mt-16 no-print">本頁免登入公開閱讀 · 由執委管理系統發出</div>
   </div>`;
 
   // 相片檢視
@@ -114,10 +145,7 @@ function render() {
 }
 
 function detailRows(n) {
-  const rows = [
-    ['活動日期', n.eventDate], ['地點', n.venue], ['費用', n.fee],
-    ['名額', n.quota ? `${n.quota} 人` : ''], ['報名截止', n.deadline]
-  ].filter(([, v]) => v);
+  const rows = noticeInfoRows(n);
   if (!rows.length) return '';
   return `<div class="mt-12" style="display:grid;gap:6px">${rows.map(([k, v]) =>
     `<div class="row gap-8"><span class="xs faint" style="width:76px">${esc(k)}</span><span class="semibold sm">${esc(String(v))}</span></div>`).join('')}</div>`;
@@ -150,9 +178,14 @@ function signupCard(n, { closed, full, inner }) {
 
 function submitHint() {
   const url = notice?.submitUrl || meta?.notice?.submitUrl || '';
-  return url
-    ? '提交後會直接記錄到旅團嘅總表（報名分頁）。'
-    : '提交後會記錄喺你呢部裝置，領袖會同你確認（旅團未設定線上總表）。';
+  if (url) return '提交後會直接記錄到旅團嘅總表（報名分頁）。';
+  if (canUseProxy()) return '提交後會直接記錄到旅團嘅總表（報名分頁）。';
+  return '提交後會記錄喺你呢部裝置，領袖會同你確認（旅團未設定線上總表）。';
+}
+
+/** 冇公開網址時：可以經同源 /api/proxy 轉發（伺服器端知道旅團後端） */
+function canUseProxy() {
+  return /^https?:$/.test(location.protocol) && !!unitCode && location.protocol !== 'file:';
 }
 
 function fieldHtml(f) {
@@ -213,7 +246,12 @@ function bindSignup(n, { closed, full }) {
       at: new Date().toISOString(), values, unit: unitCode
     };
 
-    const endpoint = n.submitUrl || meta.notice?.submitUrl || registry?.backend?.gasUrl || '';
+    /* 目的地：① 通告／旅團公開設定嘅網址 ② 同源 /api/proxy（伺服器端解析旅團後端） */
+    /* 只可以用「呢個旅團自己」嘅後端：唔喺 Registry 就唔可以借用其他旅團嘅（免送錯資料） */
+    const mine = registryData?.units?.[unitCode] || null;
+    const direct = n.submitUrl || meta.notice?.submitUrl
+      || (mine ? (mine.backend?.gasUrl || registryData.backend?.gasUrl || '') : '') || '';
+    const endpoint = direct || (canUseProxy() ? 'api/proxy' : '');
     let delivered = false, serverMsg = '';
     if (endpoint) {
       try {

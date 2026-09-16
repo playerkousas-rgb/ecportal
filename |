@@ -1,0 +1,14 @@
+assets/js/lib/model.js:63:      desc: `免登入閱讀${n.needSignup ? '＋回覆出席與否' : ''}${n.deadline ? `（截止 ${n.deadline}）` : ''}`,
+assets/js/views/notices.js:137:          ${n.deadline ? `<span>截止 ${esc(n.deadline)}</span>` : ''}
+assets/js/views/notices.js:186:          ${n.deadline ? `<span class="badge b-warn">回覆截止 ${esc(n.deadline)}</span>` : ''}
+assets/js/views/notices.js:199:          回覆方式：${esc(url)}　·　截止 ${esc(n.deadline || '—')}</div>` : ''}
+assets/js/views/notices.js:287:            ${n.needSignup ? `<div class="xs center faint mt-8">已報名 ${s.length} 份${n.quota ? ` · 名額 ${n.quota}` : ''}${n.deadline ? ` · 截止 ${esc(n.deadline)}` : ''}</div>` : ''}
+assets/js/views/notices.js:432:        <td class="mono sm">${esc(n.deadline || '—')}</td>
+assets/js/views/notices.js:506:      attachments: [], publishAt: '', eventDate: '', deadline: '', venue: '', fee: ''
+assets/js/views/notices.js:548:            <input class="input" id="n-deadline" type="date" value="${esc(d.deadline || '')}"></div>
+assets/js/views/notices.js:638:    ['名額', n.quota ? `${n.quota} 人` : ''], ['截止', n.deadline]
+assets/js/views/notices.js:647:  if (n.needSignup && n.deadline) L.push(`（截止 ${n.deadline} 前）`);
+assets/js/views/notices.js:740:          deadline: root.querySelector('#n-deadline').value,
+assets/js/views/notices.js:1102:      <div class="doc-sub">${esc(profile().name || '')}${n.eventDate ? ' · ' + esc(n.eventDate) : ''}${n.deadline ? ' · 回覆截止 ' + esc(n.deadline) : ''}</div>
+assets/js/views/notices.js:1118:  L.push(`<div class="doc-meta"><span>${esc(typeLabel(n.type))}</span><span>發出：${esc(n.publishAt || n.createdAt || '')}</span>${n.deadline ? `<span>截止：${esc(n.deadline)}</span>` : ''}</div>`);
+assets/js/views/notices.js:1122:    ['報名截止', n.deadline]

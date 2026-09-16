@@ -107,8 +107,14 @@ export const DEFAULT_TABLES = {
       { key: 'type', label: '類型', type: 'text', show: true },
       { key: 'eventDate', label: '活動日期', type: 'date', show: true },
       { key: 'deadline', label: '截止日期', type: 'date', show: true },
-      { key: 'venue', label: '地點', type: 'text', show: true },
+      { key: 'venue', label: '活動地點', type: 'text', show: true },
+      { key: 'assembly', label: '集合時間及地點', type: 'text', show: false },
+      { key: 'dismissal', label: '解散時間及地點', type: 'text', show: false },
+      { key: 'programme', label: '內容／程序', type: 'text', show: false },
+      { key: 'dress', label: '服裝', type: 'text', show: false },
       { key: 'fee', label: '費用', type: 'text', show: true },
+      { key: 'quota', label: '名額', type: 'number', show: false },
+      { key: 'enquiry', label: '查詢', type: 'text', show: false },
       { key: 'status', label: '狀態', type: 'select', options: ['draft', 'published'], optionLabels: ['草稿', '已發布'], show: true },
       { key: 'body.zh', label: '內容', type: 'textarea', show: false }
     ]
@@ -179,7 +185,112 @@ function cellText(row, f) {
 /* ============================================================
    畫面
    ============================================================ */
-export function title() { return '表格'; }
+export function title() { return '表格與同步'; }
+
+/* ============================================================
+   欄位設計（可以由**每個分頁**直接打開）
+   ------------------------------------------------------------
+   2026-09-16 團長要求：唔要一個獨立嘅「表格」分頁，
+   而係要喺財務／物資／用戶／通告／會議各自嘅分頁直接改欄位。
+   用法：任何元素加 data-fields="transactions"（main.js 有全域委派），
+   或者直接呼叫 openFieldDesigner('transactions')。
+   ============================================================ */
+export function openFieldDesigner(key, { onSaved = null } = {}) {
+  const def = tableDefs()[key];
+  if (!def) { toast('搵唔到呢個表格', 'err'); return Promise.resolve(false); }
+  const edit = can('table.design');
+  const fields = JSON.parse(JSON.stringify(def.fields));
+  const state = { listEl: null };
+
+  const paint = () => {
+    if (!state.listEl) return;
+    state.listEl.innerHTML = fields.map((f, i) => fieldRow(f, i, edit)).join('');
+    bindRows();
+  };
+  const save = () => { saveDef(key, fields, def.label); onSaved?.(); };
+  const bindRows = () => {
+    const list = state.listEl;
+    if (!list) return;
+    list.querySelectorAll('[data-field]').forEach(row => {
+      const i = Number(row.dataset.field);
+      row.querySelectorAll('[data-k]').forEach(el => el.addEventListener('change', () => {
+        const k = el.dataset.k;
+        if (k === 'required') fields[i].required = el.checked;
+        else if (k === 'show') fields[i].show = el.checked;
+        else if (k === 'options') fields[i].options = String(el.value).split(/[、,，]/).map(x => x.trim()).filter(Boolean);
+        else fields[i][k] = el.value;
+        save(); paint();
+      }));
+    });
+    list.querySelectorAll('[data-up]').forEach(b => b.addEventListener('click', () => {
+      const i = Number(b.dataset.up); if (i <= 0) return;
+      [fields[i - 1], fields[i]] = [fields[i], fields[i - 1]]; save(); paint();
+    }));
+    list.querySelectorAll('[data-down]').forEach(b => b.addEventListener('click', () => {
+      const i = Number(b.dataset.down); if (i >= fields.length - 1) return;
+      [fields[i + 1], fields[i]] = [fields[i], fields[i + 1]]; save(); paint();
+    }));
+    list.querySelectorAll('[data-delf]').forEach(b => b.addEventListener('click', async () => {
+      const i = Number(b.dataset.delf); const f = fields[i];
+      if (!(await confirmDlg({ title: '刪除欄位', danger: true, okText: '確定刪除',
+        message: `刪除「${esc(f.label)}」？（已存在嘅資料唔會刪，只係唔再顯示）` }))) return;
+      fields.splice(i, 1); save(); paint();
+    }));
+  };
+
+  return modal({
+    title: `${def.label} · 欄位`,
+    sub: '改欄位名／改類型／加欄位／排次序 —— 只影響顯示同輸入方式，資料唔會唔見',
+    wide: true,
+    body: `
+      <div class="row-between wrap gap-8 mb-12">
+        <div class="xs faint">欄位會跟旅團儲存；匯出 JSON 備份會一齊帶走。</div>
+        ${edit ? `<div class="row gap-6">
+          <button class="btn btn-sm" data-fd="add">${icon('plus', 15)} 加欄位</button>
+          <button class="btn btn-sm" data-fd="reset">${icon('refresh', 15)} 還原預設</button>
+        </div>` : '<span class="badge b-grey">唯讀（你冇改欄位權限）</span>'}
+      </div>
+      <div id="fd-list">${fields.map((f, i) => fieldRow(f, i, edit)).join('')}</div>
+      <div class="hint mt-12">隱藏嘅欄位唔會刪資料，只係唔顯示；<b>核心</b>欄位唔可以刪。</div>`,
+    actions: [{ label: '完成', class: 'btn-primary', value: true }],
+    onMount: (el) => {
+      state.listEl = el.querySelector('#fd-list');
+      bindRows();
+      el.querySelectorAll('[data-fd]').forEach(b => b.addEventListener('click', async ev => {
+        ev.preventDefault(); ev.stopPropagation();
+        const act = b.dataset.fd;
+        if (act === 'add') {
+          const r = await modal({
+            title: '加欄位',
+            body: `<div class="grid g-2" style="gap:12px">
+              <div class="field"><label class="label">欄位名稱</label><input class="input" id="nf-label" placeholder="例：小隊 / 收據編號"></div>
+              <div class="field"><label class="label">類型</label><select class="select" id="nf-type">
+                ${Object.entries(TYPE_LABEL).map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('')}</select></div>
+              <div class="field" style="grid-column:1/-1"><label class="label">選項（下拉用，用、分隔）</label>
+                <input class="input" id="nf-options" placeholder="例：甲小隊、乙小隊"></div>
+            </div>`,
+            actions: [{ label: '取消', class: 'btn', value: null },
+              { label: '加入', class: 'btn-primary', onClick: m => ({
+                label: m.querySelector('#nf-label').value.trim(),
+                type: m.querySelector('#nf-type').value,
+                options: m.querySelector('#nf-options').value.split(/[、,，]/).map(x => x.trim()).filter(Boolean)
+              }) }]
+          });
+          if (!r || !r.label) return;
+          fields.push({ key: 'x' + Math.random().toString(36).slice(2, 7), label: r.label, type: r.type, options: r.options, show: true });
+          save(); paint(); toast('已加欄位', 'ok');
+        }
+        if (act === 'reset') {
+          if (!(await confirmDlg({ title: '還原預設欄位', danger: true, okText: '確定還原', message: '會還原成系統預設欄位（資料唔會刪）。' }))) return;
+          resetDef(key);
+          const fresh = tableDefs()[key].fields;
+          fields.splice(0, fields.length, ...JSON.parse(JSON.stringify(fresh)));
+          paint(); toast('已還原預設欄位', 'ok');
+        }
+      }));
+    }
+  });
+}
 
 export function render(params) {
   const keys = Object.keys(tableDefs());
@@ -193,9 +304,10 @@ export function render(params) {
 
   return `
   ${pageHead({
-    title: '表格與同步',
-    sub: '好似內建一個 Google Sheet：欄位自己改，亦可以插入其他旅團自己嘅 Sheet，最後經 Apps Script 寫入總表',
+    title: '表格與同步（進階）',
+    sub: '欄位設計已經搬去各自嘅分頁（財務／用戶／物資／通告／會議 都有「欄位」掣）；呢度放「插入自己嘅 Sheet」同「總表同步」',
     actions: `
+      <button class="btn btn-sm" data-go="#/admin/data">${icon('chevronL', 15)} 返回帳號與系統</button>
       <button class="btn btn-sm" data-act="export-all-csv">${icon('download', 15)} 全部表格 CSV</button>
       ${can('table.sync') ? `<button class="btn btn-sm" data-go="#/tables/sync">${icon('cloud', 15)} 總表同步</button>` : ''}`
   })}

@@ -5,7 +5,7 @@
 //
 // 安全原則：
 //   1. 前端可提交 unitCode，由伺服器端 Registry 安全解析真實 GAS URL
-//   2. 只接受白名單 action (ping, status, sync, claim, loan, noticeSignup, submitRegistration)
+//   2. 只接受白名單 action (ping, status, sync, claim, loan, noticeSignup, notices, submitRegistration)
 //   3. 永不在 log 記錄密碼／apiKey／payload 機密
 //
 // 同時兼容前端直接打 GAS 或透過同源 proxy 轉發。
@@ -21,12 +21,18 @@ const UPSTREAM_TIMEOUT_MS = (() => {
 })();
 const MAX_DATA_BYTES = 4 * 1024 * 1024; // 單次請求上限 4MB
 
-// 中央管理員收件匣（新旅團接入申請）
+// 中央管理員收件匣（新旅團接入申請）—— 目的地係伺服器端常數，前端改唔到。
+// 呢個收件匣同 VSBADGE 共用（用 appType 分辨：82venture / vsbadge）。
+// 注意：收件匣**唔會回執** —— 申請人 App 唔會知 ADMIN 收唔收到，
+// 所以只要 POST 過得去（有回應）就當送到，只有連線／逾時先當失敗。
 const SCOUT_ADMIN_API = process.env.SCOUT_ADMIN_API ||
   'https://script.google.com/macros/s/AKfycbxj5BDDGgjs559smkK4Z5aYImWYeXbN5af8U1ObON0z9WnsN6QJW4I1XWolhs5kQ_H-UQ/exec';
 
 const ALLOWED_ACTIONS = new Set([
-  'ping', 'status', 'test', 'sync', 'claim', 'loan', 'noticeSignup', 'submitRegistration'
+  'ping', 'status', 'test', 'sync', 'claim', 'loan', 'noticeSignup',
+  /* 公開通告：免登入讀旅團自己後端嘅「通告全文」（只回已發布） */
+  'notices',
+  'submitRegistration'
 ]);
 
 function sendJson(res, status, obj) {
@@ -100,6 +106,7 @@ export default async function handler(req, res) {
       scriptUrl: String(body.scriptUrl || '').substring(0, 300),
       apiKey: String(body.apiKey || '').substring(0, 120),
       appType: '82venture',
+      appName: '執委管理系統',
       contact: String(body.contact || '').substring(0, 120),
       mainSystemUrl: String(body.mainSystemUrl || '').substring(0, 300),
       note: String(body.note || '').substring(0, 500),
@@ -107,11 +114,15 @@ export default async function handler(req, res) {
     };
     try {
       const up = await callUpstream(SCOUT_ADMIN_API, regPayload);
-      if (!up.json && up.status >= 400) {
-        return sendJson(res, 502, { success: false, error: '申請未能送達管理員，請稍後重試' });
+      /* 收件匣冇回執機制：POST 過得去就當送到（ADMIN 系統收到就 OK）。
+         唯一例外：收件匣真係回咗 JSON 而且話 success:false，就照當失敗。 */
+      const said = (up.json && typeof up.json === 'object') ? up.json : null;
+      if (said && said.success === false) {
+        safeLog({ result: 'admin_upstream_refused', status: up.status, ms: Date.now() - t0 });
+        return sendJson(res, 502, { success: false, error: said.error || '管理員收件匣話收唔到呢張申請' });
       }
-      safeLog({ result: 'registration_ok', status: up.status, ms: Date.now() - t0 });
-      return sendJson(res, 200, { success: true, message: '申請已提交' });
+      safeLog({ result: 'registration_sent', status: up.status, json: !!up.json, ms: Date.now() - t0 });
+      return sendJson(res, 200, { success: true, message: '申請已提交', delivered: 'sent', receipt: false });
     } catch (e) {
       const timeout = e && e.name === 'TimeoutError';
       return sendJson(res, timeout ? 504 : 502, { success: false, error: timeout ? '提交逾時，請稍後重試' : '申請未能送達管理員' });

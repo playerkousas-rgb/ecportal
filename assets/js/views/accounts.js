@@ -15,7 +15,8 @@ import {
 } from '../lib/auth.js';
 import { profile, settings, members, memberName, money, balance, tx, invItems } from '../lib/model.js';
 import { unitList, unitEntry, isLocalUnit, saveLocalUnit, removeLocalUnit, loadRegistry, registry } from '../lib/units.js';
-import { esc, icon, modal, confirmDlg, toast, download, fmtDate, avatar, todayISO } from '../lib/util.js';
+import { envUnitTemplate } from '../lib/onboard.js';
+import { esc, icon, modal, confirmDlg, toast, download, copyText, fmtDate, avatar, todayISO } from '../lib/util.js';
 import { download as dlFile, toCSV, stamp } from '../lib/exporter.js';
 import { go } from '../lib/router.js';
 import { pageHead, tabs, empty, kv, stat, noteBox } from './ui.js';
@@ -211,7 +212,15 @@ function unitView() {
             </div>`).join('')}
         </div>
         <div style="padding:14px 16px;border-top:1px solid var(--line-2)">
-          ${noteBox(`<b>新增正式旅團：</b>喺 <code>data/units.json</code> 加一個編號，再建立 <code>data/units/&lt;編號&gt;/</code> 資料夾（unit.json / constitution.json / members.json / inventory.json / finance.json）。詳見「教學 → 多旅團部署」。`, 'info')}
+          ${isSuper()
+            ? `${noteBox('<b>想開新旅團？</b>（只限超級管理員）最快嘅方法 B：喺 Vercel 加 5 個 '
+                + '<code>TROOP_&lt;編號&gt;_*</code> 環境變數 → Redeploy，唔使改 Git。'
+                + '（方法 A：喺 <code>data/units.json</code> ＋ <code>data/units/&lt;編號&gt;/</code> 加檔案，可以預載資料。）', 'info')}
+              <div class="row gap-8 wrap mt-12">
+                <button class="btn btn-sm btn-primary" data-go="#/docs/newunit">${icon('note', 15)} 開新旅團逐步教學（含變數範本）</button>
+                <button class="btn btn-sm" data-act="env-template">${icon('copy', 15)} 即刻產生環境變數</button>
+              </div>`
+            : ''}
           <button class="btn btn-sm btn-block mt-12" data-act="add-local-unit">${icon('plus', 15)} 新增本地旅團（測試用，只存呢部機）</button>
         </div>
       </div>
@@ -262,6 +271,22 @@ function dataView() {
             <button class="btn" data-act="export-members">${icon('download', 16)} 匯出團員 CSV</button>
           </div>
           <div class="hint mt-12">匯入時會檢查備份係「真實」定「示範」——示範備份唔可以匯入真實資料庫，防止污染。</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><div><div class="card-title">表格與同步（進階）</div>
+          <div class="card-sub">欄位已經搬去各自嘅分頁；呢度淨係放「插入自己嘅 Sheet」同「總表同步」</div></div></div>
+        <div style="padding:16px 18px">
+          <div class="col gap-8">
+            <button class="btn btn-block" data-go="#/tables/source">${icon('link', 16)} 插入旅團自己嘅 Google Sheet（匯入舊資料）</button>
+            <button class="btn btn-block" data-go="#/tables/sync">${icon('cloud', 16)} 總表同步（Apps Script / Code.gs）</button>
+            <button class="btn btn-block" data-go="#/tables/data">${icon('table', 16)} 儲存用量與逐表匯出</button>
+          </div>
+          <div class="hint mt-12">
+            想改某個表嘅欄位？去返嗰個分頁按「<b>欄位</b>」掣就得：
+            財務（帳目）、用戶、物資、通告、會議 每一頁都有。
+          </div>
         </div>
       </div>
 
@@ -426,6 +451,29 @@ export function mount(root) {
       commit();
       toast('已儲存旅團資料', 'ok'); refresh(); return;
     }
+    if (act === 'env-template') {
+      if (!isSuper()) { toast('只有超級管理員可以開新旅團（要改 Vercel 設定）', 'err'); return; }
+      const r = await modal({
+        title: '產生環境變數（開新旅團）', sub: '方法 B：唔使改 Git，貼落 Vercel 就得',
+        body: `<div class="grid g-2" style="gap:12px">
+            <div class="field"><label class="label">旅團編號</label><input class="input" id="q-code" placeholder="0081"></div>
+            <div class="field"><label class="label">旅團名稱</label><input class="input" id="q-name" placeholder="第八十一旅深資童軍團"></div>
+            <div class="field" style="grid-column:1/-1"><label class="label">/exec 網址</label><input class="input" id="q-exec" placeholder="https://script.google.com/macros/s/AKfy…/exec"></div>
+            <div class="field" style="grid-column:1/-1"><label class="label">API Key</label><input class="input" id="q-key" placeholder="showApiKey() 複製嘅字串"></div>
+          </div>
+          <pre class="code mt-12" id="q-out">${esc(envUnitTemplate('0081'))}</pre>
+          <div class="hint">貼落 Vercel → Settings → Environment Variables；之後要 <b>Redeploy</b> 先生效。</div>`,
+        actions: [{ label: '關閉', class: 'btn', value: null },
+          { label: '複製環境變數', class: 'btn-primary', onClick: async el => {
+            const v = k => el.querySelector(k)?.value.trim() || '';
+            const txt = envUnitTemplate(v('#q-code') || '0081', v('#q-name'), v('#q-exec'), v('#q-key'));
+            const ok = await copyText(txt);
+            toast(ok ? '已複製 —— 貼落 Vercel 環境變數' : '複製失敗，請手動選取', ok ? 'ok' : 'err');
+            return false;   /* 唔關窗，方便再改 */
+          } }]
+      });
+      void r; return;
+    }
     if (act === 'reload-registry') {
       await loadRegistry(true);
       toast('已重新載入旅團 Registry', 'ok'); refresh(); return;
@@ -450,7 +498,7 @@ export function mount(root) {
 
     /* --- 資料 --- */
     if (act === 'export-json') {
-      dlFile(`82venture_${currentUnit()}_${isMock() ? 'MOCK_' : ''}備份_${stamp()}.json`, exportAll(), 'application/json');
+      dlFile(`ecportal_${currentUnit()}_${isMock() ? 'MOCK_' : ''}備份_${stamp()}.json`, exportAll(), 'application/json');
       toast('已匯出備份', 'ok'); audit('匯出備份'); return;
     }
     if (act === 'import-json') {
@@ -530,7 +578,7 @@ export function mount(root) {
       return;
     }
     if (act === 'export-mock') {
-      dlFile(`82venture_MOCK_示範資料_${stamp()}.json`, exportAll({ includeMock: true }), 'application/json');
+      dlFile(`ecportal_MOCK_示範資料_${stamp()}.json`, exportAll({ includeMock: true }), 'application/json');
       toast('已匯出示範資料', 'ok'); return;
     }
   }));

@@ -43,7 +43,7 @@ https://script.google.com/macros/s/AKfycbySGLBg5KuWzgM9EySiOIppqnzrL0QASIYLlhbCI
 
 ## 1. 設定總表（做一次，約 10 分鐘）
 
-1. 開一個 **Google Sheet**（例：`82venture 總表`）。
+1. 開一個 **Google Sheet**（例：`執委管理系統 總表`）。
 2. 選單「**擴充功能 → Apps Script**」。
 3. APP 內去「**表格與同步 → 總表同步 → 下載 Code.gs**」，將內容**全部取代**貼上。
 4. （可選）改頂部兩個設定：
@@ -51,7 +51,7 @@ https://script.google.com/macros/s/AKfycbySGLBg5KuWzgM9EySiOIppqnzrL0QASIYLlhbCI
    * `DRIVE_FOLDER_ID = ''` —— 填 Google Drive 資料夾 ID，成員影嘅單據相片就會自動上載去 Drive
      （資料夾 → 共用 → 複製 `/folders/xxxx` 後面嗰串）
 5. 按「**部署 → 新增部署作業 → 類型：網頁應用程式**」
-   * 說明：`82venture sync`
+   * 說明：`執委管理系統 sync`
    * 執行身分：**我**
    * 具有存取權的使用者：**任何人** ← 一定要，否則 APP 送唔到資料
 6. 複製 **`/exec` 網址**，返到 APP：「表格與同步 → 總表同步」——你嘅網址**已經預填**，
@@ -127,7 +127,7 @@ https://script.google.com/macros/s/AKfycbySGLBg5KuWzgM9EySiOIppqnzrL0QASIYLlhbCI
 
 ---
 
-## 4.5 合併系統（82venture + VSBADGE 用同一條後端）
+## 4.5 合併系統（一個後端、兩個前端）
 
 ```
 成員手機 entry.html ─┐
@@ -138,7 +138,8 @@ https://script.google.com/macros/s/AKfycbySGLBg5KuWzgM9EySiOIppqnzrL0QASIYLlhbCI
 * 三邊都係同一個 payload 格式：`{ action, unit, source:'82venture', payload / tables, at }`
 * Apps Script 支援動作：`ping`（測試連線）、`status`、`sync`（全部表格）、`claim`（成員手機記帳）、`noticeSignup`（通告報名）
 * 唔識嘅 `action` 會回 `{ ok:false, error:'未知 action：…' }`，APP 嘅「同步紀錄」會顯示出嚟，方便對格式
-* VSBADGE 嘅進度系統照舊用 Portal 連結（附 `from=portal&embed=1`），同呢條後端可以並存
+* 進度紀錄：**同一個後端**（`?action=load` / `action=save`）—— 執委管理系統同進度前端係兩個前端、一份資料；
+  後端範本 `Code.gs` 已經兩邊都支援（`initializeSheets` 會建 `進度追蹤`／`其他獎章`／`活動履歷` 等分頁）
 
 ---
 

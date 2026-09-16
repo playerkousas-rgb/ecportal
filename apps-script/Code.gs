@@ -26,7 +26,8 @@
  */
 
 /** 呢份 Script 會用到嘅分頁名稱（同步／查詢時用） */
-var SHEET_TABS = ['帳目', '物資', '團員', '收支申報', '通告', '報名', '物資借用', '會議', '設定', '同步紀錄'];
+var SHEET_TABS = ['帳目', '物資', '團員', '收支申報', '通告', '通告全文', '報名', '物資借用', '會議', '設定', '同步紀錄',
+  '進度追蹤', '其他獎章', '待批完成', '活動履歷', '待批履歷', '成員名單'];
 
 /** 每個旅團分開一個 Sheet（工作表）定用同一個 Sheet 加「旅團」欄？ */
 var MODE = 'per-unit-sheet';   // 'per-unit-sheet' = 每個旅團獨立工作表；'one-sheet' = 全部用同一張
@@ -56,10 +57,10 @@ function showApiKey() {
   var ui = null;
   try { ui = SpreadsheetApp.getUi(); } catch (e) { /* headless */ }
   if (ui) {
-    ui.alert('82venture API Key', '你嘅旅團 API Key 為：\n\n' + apiKey + '\n\n請複製並交由 Git/Vercel 管理員作登記。', ui.ButtonSet.OK);
+    ui.alert('執委管理系統 API Key', '你嘅旅團 API Key 為：\n\n' + apiKey + '\n\n請複製並交由 Git/Vercel 管理員作登記。', ui.ButtonSet.OK);
   }
   Logger.log('==============================');
-  Logger.log('82venture API Key: ' + apiKey);
+  Logger.log('執委管理系統 API Key: ' + apiKey);
   Logger.log('==============================');
   return apiKey;
 }
@@ -76,10 +77,19 @@ function initializeSheets() {
     { name: '物資', headers: ['旅團', 'id', '物資編號', '物資名稱', '分類', '總數量', '單位', '存放位置', '狀態', '備註', '同步時間'] },
     { name: '物資借用', headers: ['旅團', '時間', '申請人', '聯絡電話', '物資編號', '物資名稱', '數量', '借用日', '歸還日', '用途', '狀態', '紀錄編號'] },
     { name: '團員', headers: ['旅團', 'id', 'ymis', 'systemId', '姓名', '英文名', '身份', '生日', '職位', '狀態', '電話', '電郵', '加入日期', '備註', '同步時間'] },
-    { name: '通告', headers: ['旅團', 'id', '標題(中)', '標題(英)', '類型', '狀態', '活動日期', '截止日期', '地點', '費用', '發布日期', '同步時間'] },
+    { name: '通告', headers: ['旅團', 'id', '標題(中)', '標題(英)', '類型', '狀態', '活動日期', '截止日期', '活動地點', '集合時間及地點', '解散時間及地點', '內容／程序', '服裝', '費用', '名額', '查詢', '發布日期', '同步時間'] },
+    /* 通告全文（JSON）：公開頁直接讀呢個分頁 —— 新通告唔使改 Git 都公開得到 */
+    { name: '通告全文', headers: ['旅團', 'id', '狀態', '標題', 'JSON', '更新時間'] },
     { name: '報名', headers: ['旅團', '通告編號', '通告標題', '報名時間', '姓名', '聯絡', '出席與否', '全部欄位(JSON)'] },
     { name: '會議', headers: ['旅團', 'id', '日期', '標題', '地點', '狀態', '備註', '同步時間'] },
-    { name: '同步紀錄', headers: ['時間', '旅團', '旅團名稱', '統計內容'] }
+    { name: '同步紀錄', headers: ['時間', '旅團', '旅團名稱', '統計內容'] },
+    /* ↓↓↓ 同「進度前端」共用嘅分頁（一個後端、兩個前端）：欄位順序唔可以改 ↓↓↓ */
+    { name: '進度追蹤', headers: ['YMIS', '項目 ID', '完成日期', '更新時間', '確認者', '備註'] },
+    { name: '其他獎章', headers: ['YMIS', '獎章 ID', '獎章名稱', '完成日期', '證書編號', '備註', '更新時間'] },
+    { name: '待批完成', headers: ['request_id', 'ymis', 'name', 'item_id', 'item_name', 'requested_date', 'evidence', 'status', 'created_at', 'reviewed_by', 'reviewed_at', 'review_note', 'confirmed_date'] },
+    { name: '活動履歷', headers: ['record_id', 'type', 'ymis', 'name', 'date', 'title', 'role', 'hours', 'cert_no', 'detail', 'recorder', 'recorded_at', 'updated_at'] },
+    { name: '待批履歷', headers: ['request_id', 'kind', 'target_record_id', 'type', 'ymis', 'name', 'date', 'title', 'role', 'hours', 'cert_no', 'detail', 'status', 'created_at', 'reviewed_by', 'reviewed_at', 'review_note'] },
+    { name: '成員名單', headers: ['YMIS', '姓名', '加入日期', '支部', '聯絡'] }
   ];
 
   sheetConfigs.forEach(function(cfg) {
@@ -102,7 +112,7 @@ function initializeSheets() {
   if (ui) {
     ui.alert(
       '初始化完成！',
-      '82venture 所有分頁已建立成功！\n\n' +
+      '執委管理系統 所有分頁已建立成功（包括進度追蹤／其他獎章／活動履歷 —— 同進度前端共用同一個後端）！\n\n' +
       '你嘅 API Key 為：\n' + apiKey + '\n\n' +
       '下一步：\n' +
       '1. 點擊「部署」→「新增部署作業」\n' +
@@ -124,10 +134,51 @@ function doPost(e) {
   try {
     var body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     var expectedKey = PropertiesService.getScriptProperties().getProperty('API_KEY');
+    // 兩個前端都會用同一條 key（大寫 apiKey / 細寫 apikey 都收）
+    var key = body.apiKey || body.apikey || '';
+    body.apiKey = key;
 
-    // 若伺服器端有設定 API_KEY，且請求有傳入 apiKey，進行核對
-    if (expectedKey && body.apiKey && body.apiKey !== expectedKey) {
-      return json({ ok: false, error: 'API key 唔正確' });
+    // 若伺服器端有設定 API_KEY，且請求有傳入 key，進行核對
+    if (expectedKey && key && key !== expectedKey) {
+      return json({ ok: false, success: false, error: 'API key 唔正確' });
+    }
+
+    /* ---- 進度追蹤（同進度前端共用同一個後端；API Key＝執委身份）---- */
+    if (body.action === 'save' || body.action === 'saveOtherBadge') {
+      if (!expectedKey || key !== expectedKey) {
+        return json({ ok: false, success: false, error: '未授權：API Key 唔正確' });
+      }
+      if (body.action === 'save') {
+        var pr = withLock(function () { return saveProgress(body.changes || [], body.confirmer || ''); });
+        return json({ ok: pr.success === true, success: pr.success === true, processed: pr.processed || 0, error: pr.error || '' });
+      }
+      var pbo = withLock(function () { return saveOtherBadges(body.records || []); });
+      return json({ ok: pbo.success === true, success: pbo.success === true, processed: pbo.processed || 0, error: pbo.error || '' });
+    }
+
+    /* ---- 審批中心（執委系統內直接批；同一個 API Key＝執委身份）---- */
+    if (body.action === 'reviewRequest' || body.action === 'reviewLogRequest') {
+      if (!expectedKey || key !== expectedKey) {
+        return json({ ok: false, success: false, error: '未授權：API Key 唔正確' });
+      }
+      if (body.action === 'reviewRequest') {
+        var rq = withLock(function () {
+          return reviewProgressRequest(body.request_id, body.decision, body.review_note,
+            body.reviewer || '執委管理系統', body.confirmed_date);
+        });
+        return json({ ok: rq.success === true, success: rq.success === true,
+          message: rq.message || '', error: rq.error || '' });
+      }
+      var lq = withLock(function () {
+        return reviewLogRequest(body.request_id, body.decision, body.review_note, body.reviewer || '執委管理系統');
+      });
+      return json({ ok: lq.success === true, success: lq.success === true,
+        message: lq.message || '', record_id: lq.record_id || '', error: lq.error || '' });
+    }
+
+    /* 公開通告（免 API Key）：只回已發布嘅通告全文 */
+    if (body.action === 'notices') {
+      return json({ success: true, ok: true, unit: textOf(body.unit), notices: loadPublicNotices(textOf(body.unit)) });
     }
 
     if (body.action === 'ping') return json({ ok: true, msg: 'pong', unit: body.unit, at: body.at });
@@ -155,21 +206,35 @@ function doPost(e) {
       var c2 = syncAll(body);
       return json({ ok: true, msg: '已寫入總表（無 action，當 sync）', counts: c2, unit: body.unit });
     }
-    return json({ ok: false, error: '未知 action：' + body.action, got: Object.keys(body || {}), hint: '82venture 支援 action: ping / sync / status / claim / noticeSignup / loan' });
+    return json({ ok: false, error: '未知 action：' + body.action, got: Object.keys(body || {}), hint: '支援 action: ping / sync / status / claim / noticeSignup / loan / save / saveOtherBadge / reviewRequest / reviewLogRequest' });
   } catch (err) {
     return json({ ok: false, error: String(err) });
   }
 }
 
-/** 收到 GET 時回傳狀態與說明 */
+/** 收到 GET 時處理：?action=load 讀進度（兩個前端用同一份資料） */
 function doGet(e) {
+  var action = '';
+  var supplied = '';
+  try {
+    action = String((e && e.parameter && e.parameter.action) || '');
+    supplied = String((e.parameter && (e.parameter.apikey || e.parameter.apiKey)) || '');
+  } catch (err0) { action = ''; }
+  if (action === 'notices') return json({ success: true, ok: true, unit: textOf((e.parameter && e.parameter.unit) || ''), notices: loadPublicNotices(textOf((e.parameter && e.parameter.unit) || '')) });
+  if (action === 'load') {
+    var expected = PropertiesService.getScriptProperties().getProperty('API_KEY');
+    if (supplied && expected && supplied !== expected) return json({ success: false, ok: false, error: 'Invalid API Key' });
+    var data = loadProgressData();
+    data.success = true; data.ok = true;
+    return json(data);
+  }
   return json({
     ok: true,
-    msg: '82venture 後端已啟動',
+    msg: '執委管理系統 後端已啟動',
     spreadsheet: (function () { try { return SpreadsheetApp.getActiveSpreadsheet().getName(); } catch (err) { return '(未綁定試算表)'; } })(),
     tabs: SHEET_TABS,
-    api: ['ping', 'status', 'sync', 'claim', 'noticeSignup', 'loan'],
-    usage: 'APP 內「表格與同步 → 總表同步」填呢個 /exec 網址即可'
+    api: ['ping', 'status', 'sync', 'claim', 'noticeSignup', 'loan', 'load', 'save', 'saveOtherBadge'],
+    usage: 'APP 內「帳號與系統 → 資料管理 → 總表同步」填呢個 /exec 網址即可'
   });
 }
 
@@ -190,8 +255,16 @@ function syncAll(body) {
   counts['invItems'] = writeTab(ss, body, '物資', tables.invItems, schema.invItems, ['code', 'name', 'category', 'total', 'unit', 'location', 'condition', 'note']);
   counts['members'] = writeTab(ss, body, '團員', tables.members, schema.members, ['ymis', 'systemId', 'name', 'eng', 'identity', 'birthday', 'role', 'status', 'phone', 'email', 'join', 'note']);
 
+  // 成員名單（同進度前端共用，兩邊見同一批人）
+  counts['memberList'] = writeMemberList(ss, tables.members || []);
+
   // 通告：一張通告一行
-  counts['notices'] = writeTab(ss, body, '通告', tables.notices, schema.notices, ['title.zh', 'title.en', 'type', 'status', 'eventDate', 'deadline', 'venue', 'fee', 'publishAt']);
+  counts['notices'] = writeTab(ss, body, '通告', tables.notices, schema.notices,
+    ['title.zh', 'title.en', 'type', 'status', 'eventDate', 'deadline', 'venue', 'assembly', 'dismissal',
+     'programme', 'dress', 'fee', 'quota', 'enquiry', 'publishAt']);
+
+  // 通告全文（公開頁讀呢個分頁；只公開 status=published）
+  counts['noticesFull'] = writeNoticesFull(ss, unit, tables.notices || []);
 
   // 報名：每一份報名一行（由通告內嘅 signups 攤開）
   counts['signups'] = writeSignups(ss, body, tables.notices || []);
@@ -236,6 +309,54 @@ function writeTab(ss, body, baseName, rows, schema, fallbackKeys) {
   return rows.length;
 }
 
+/** 通告全文：一行一張通告（JSON 原樣存起，公開頁免登入讀） */
+function writeNoticesFull(ss, unit, notices) {
+  var sh = ss.getSheetByName('通告全文') || ss.insertSheet('通告全文');
+  sh.clear();
+  sh.getRange(1, 1, 1, 6).setValues([['旅團', 'id', '狀態', '標題', 'JSON', '更新時間']]).setFontWeight('bold');
+  var data = (notices || []).map(function (n) {
+    var slim = {
+      id: n.id, type: n.type, status: n.status,
+      title: n.title || {}, body: n.body || {},
+      eventDate: n.eventDate || '', deadline: n.deadline || '',
+      venue: n.venue || '', assembly: n.assembly || '', dismissal: n.dismissal || '',
+      programme: n.programme || '', dress: n.dress || '', fee: n.fee || '',
+      quota: Number(n.quota) || 0, enquiry: n.enquiry || '',
+      needSignup: n.needSignup !== false,
+      fields: n.fields || [], publishAt: n.publishAt || '',
+      signupCount: (n.signups && n.signups.length) || 0,
+      unit: unit, unitName: n.unitName || ''
+    };
+    return [unit, textOf(n.id), textOf(n.status), textOf(n.title && n.title.zh), JSON.stringify(slim), new Date()];
+  });
+  if (data.length) sh.getRange(2, 1, data.length, 6).setValues(data);
+  sh.setFrozenRows(1);
+  return data.length;
+}
+
+/**
+ * 讀公開通告（免登入）：只回 published
+ * 兩個前端共用一個後端 —— 公開頁唔使等改 Git，同步完就見到新通告
+ */
+function loadPublicNotices(unit) {
+  var out = [];
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('通告全文');
+  if (!sh) return out;
+  var rows = sh.getDataRange().getValues();
+  for (var i = 1; i < rows.length; i++) {
+    var u = textOf(rows[i][0]);
+    if (unit && u && u !== unit) continue;
+    if (textOf(rows[i][2]) !== 'published') continue;
+    var raw = rows[i][4];
+    if (!raw) continue;
+    try {
+      var obj = JSON.parse(String(raw));
+      if (obj && obj.id) out.push(obj);
+    } catch (e) { /* 壞行就略過 */ }
+  }
+  return out;
+}
+
 /** 通告報名（攤開） */
 function writeSignups(ss, body, notices) {
   var rows = [];
@@ -253,6 +374,362 @@ function writeSignups(ss, body, notices) {
   if (rows.length) sh.getRange(2, 1, rows.length, header.length).setValues(rows);
   sh.setFrozenRows(1);
   return rows.length;
+}
+
+/* ============================================================
+   一個後端、兩個前端：進度追蹤
+   ------------------------------------------------------------
+   呢個後端同時餵兩個前端：
+     ① 執委管理系統（呢邊）   ② 進度追蹤前端（團員／領袖用）
+   共用分頁：進度追蹤 / 其他獎章 / 待批完成 / 活動履歷 / 待批履歷 / 成員名單
+   讀：GET  ?action=load[&apikey=…]
+   寫：POST { action:'save' | 'saveOtherBadge', apikey, changes / records }
+   ============================================================ */
+
+function textOf(v) { return String(v === null || v === undefined ? '' : v).trim(); }
+
+function dateOf(v) {
+  if (!v) return '';
+  if (Object.prototype.toString.call(v) === '[object Date]') {
+    try { return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd'); } catch (err) { /* 用下面嘅 fallback */ }
+    try { return v.toISOString().slice(0, 10); } catch (err2) { return String(v); }
+  }
+  return textOf(v);
+}
+
+/** 成員名單：以「成員名單」為主，補上「團員」分頁（執委系統同步過嚟嘅） */
+function progressMembers() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var out = [];
+  var seen = {};
+  var mSheet = ss.getSheetByName('成員名單');
+  if (mSheet) {
+    var m = mSheet.getDataRange().getValues();
+    for (var i = 1; i < m.length; i++) {
+      var ymis = textOf(m[i][0]);
+      if (!ymis || seen[ymis]) continue;
+      out.push({ ymis: ymis, name: textOf(m[i][1]) });
+      seen[ymis] = true;
+    }
+  }
+  var tSheet = null;
+  var all = ss.getSheets();
+  for (var k = 0; k < all.length; k++) {
+    var nm = all[k].getName();
+    if (nm === '團員' || nm.indexOf('團員·') === 0) { tSheet = all[k]; break; }
+  }
+  if (tSheet) {
+    var t = tSheet.getDataRange().getValues();
+    for (var j = 1; j < t.length; j++) {
+      var y2 = textOf(t[j][2]);
+      if (!y2 || seen[y2]) continue;
+      out.push({ ymis: y2, name: textOf(t[j][4]) });
+      seen[y2] = true;
+    }
+  }
+  return out;
+}
+
+/** 讀全部進度資料（同進度前端嘅 /exec?action=load 同一種格式） */
+function loadProgressData() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var progress = {};
+  var flat = {};
+  var i, rows;
+
+  var pSheet = ss.getSheetByName('進度追蹤');
+  if (pSheet) {
+    rows = pSheet.getDataRange().getValues();
+    for (i = 1; i < rows.length; i++) {
+      var ymis = textOf(rows[i][0]);
+      var itemId = textOf(rows[i][1]);
+      if (!ymis || !itemId) continue;
+      if (!progress[ymis]) { progress[ymis] = {}; flat[ymis] = {}; }
+      progress[ymis][itemId] = { date: dateOf(rows[i][2]), confirmer: textOf(rows[i][4]) };
+      flat[ymis][itemId] = dateOf(rows[i][2]);
+    }
+  }
+
+  var other = {};
+  var oSheet = ss.getSheetByName('其他獎章');
+  if (oSheet) {
+    rows = oSheet.getDataRange().getValues();
+    for (i = 1; i < rows.length; i++) {
+      var oy = textOf(rows[i][0]);
+      var ob = textOf(rows[i][1]);
+      if (!oy || !ob) continue;
+      if (!other[oy]) other[oy] = {};
+      other[oy][ob] = { name: textOf(rows[i][2]), date: dateOf(rows[i][3]), cert: textOf(rows[i][4]) };
+    }
+  }
+
+  var pending = [];
+  var prSheet = ss.getSheetByName('待批完成');
+  if (prSheet) {
+    rows = prSheet.getDataRange().getValues();
+    for (i = 1; i < rows.length; i++) {
+      if (textOf(rows[i][7]) !== 'pending') continue;
+      pending.push({
+        request_id: textOf(rows[i][0]), ymis: textOf(rows[i][1]), name: textOf(rows[i][2]),
+        item_id: textOf(rows[i][3]), item_name: textOf(rows[i][4]),
+        requested_date: dateOf(rows[i][5]), evidence: textOf(rows[i][6]),
+        status: 'pending', created_at: dateOf(rows[i][8])
+      });
+    }
+  }
+
+  var logs = [];
+  var lSheet = ss.getSheetByName('活動履歷');
+  if (lSheet) {
+    rows = lSheet.getDataRange().getValues();
+    for (i = 1; i < rows.length; i++) {
+      if (!textOf(rows[i][0])) continue;
+      logs.push({
+        record_id: textOf(rows[i][0]), type: textOf(rows[i][1]) || 'activity',
+        ymis: textOf(rows[i][2]), name: textOf(rows[i][3]), date: dateOf(rows[i][4]),
+        title: textOf(rows[i][5]), role: textOf(rows[i][6]), hours: textOf(rows[i][7]),
+        cert_no: textOf(rows[i][8]), detail: textOf(rows[i][9]), recorder: textOf(rows[i][10]),
+        recorded_at: textOf(rows[i][11])
+      });
+    }
+  }
+
+  var logRequests = [];
+  var lrSheet = ss.getSheetByName('待批履歷');
+  if (lrSheet) {
+    rows = lrSheet.getDataRange().getValues();
+    for (i = 1; i < rows.length; i++) {
+      if (!textOf(rows[i][0]) || textOf(rows[i][12]) !== 'pending') continue;
+      logRequests.push({
+        request_id: textOf(rows[i][0]), kind: textOf(rows[i][1]) || 'new',
+        target_record_id: textOf(rows[i][2]), type: textOf(rows[i][3]) || 'activity',
+        ymis: textOf(rows[i][4]), name: textOf(rows[i][5]), date: dateOf(rows[i][6]),
+        title: textOf(rows[i][7]), role: textOf(rows[i][8]), hours: textOf(rows[i][9]),
+        cert_no: textOf(rows[i][10]), detail: textOf(rows[i][11]),
+        status: 'pending', created_at: textOf(rows[i][13])
+      });
+    }
+  }
+
+  return {
+    members: progressMembers(),
+    progress: progress,
+    flatProgress: flat,
+    pendingRequests: pending,
+    otherBadges: other,
+    logs: logs,
+    logsSupported: !!ss.getSheetByName('活動履歷'),
+    logRequests: logRequests,
+    logRequestsSupported: !!ss.getSheetByName('待批履歷'),
+    at: new Date()
+  };
+}
+
+/**
+ * 同時多人寫入就排隊（LockService）
+ * 一個帳號同時最多 30 個執行；同一張 Sheet 嘅「讀→改→寫」要鎖住先唔會撞
+ * （例：通告一出，全團同一秒撳報名）。等唔到鎖都照做，唔好卡死用戶。
+ */
+function withLock(fn) {
+  var lock = LockService.getScriptLock();
+  var got = false;
+  try { got = lock.tryLock(20000); } catch (e) { got = false; }
+  try {
+    return fn();
+  } finally {
+    if (got) { try { lock.releaseLock(); } catch (e2) {} }
+  }
+}
+
+/** 勾／取消勾（同進度前端寫入同一個分頁） */
+function saveProgress(changes, confirmer) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('進度追蹤');
+  if (!sheet) return { success: false, error: '搵唔到「進度追蹤」分頁（請先執行 initializeSheets）' };
+  var processed = 0;
+  (changes || []).forEach(function (c) {
+    var ymis = textOf(c.ymis);
+    var itemId = textOf(c.itemId);
+    if (!ymis || !itemId) return;
+    var rows = sheet.getDataRange().getValues();
+    var found = false;
+    for (var i = 1; i < rows.length; i++) {
+      if (textOf(rows[i][0]) === ymis && textOf(rows[i][1]) === itemId) {
+        if (c.uncomplete) {
+          sheet.deleteRow(i + 1);
+        } else {
+          sheet.getRange(i + 1, 3).setValue(c.date || '');
+          sheet.getRange(i + 1, 4).setValue(new Date());
+          sheet.getRange(i + 1, 5).setValue(confirmer || c.confirmer || '');
+          sheet.getRange(i + 1, 6).setValue(c.note || '');
+        }
+        found = true; processed++; break;
+      }
+    }
+    if (!found && !c.uncomplete) {
+      sheet.appendRow([ymis, itemId, c.date || '', new Date(), confirmer || c.confirmer || '', c.note || '']);
+      processed++;
+    }
+  });
+  return { success: true, processed: processed };
+}
+
+/** 其他獎章（服務／活動／訓練班以外嘅證書紀錄） */
+function saveOtherBadges(records) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName('其他獎章');
+  if (!sheet) return { success: false, error: '搵唔到「其他獎章」分頁（請先執行 initializeSheets）' };
+  var processed = 0;
+  (records || []).forEach(function (r) {
+    var ymis = textOf(r.ymis);
+    var badgeId = textOf(r.badgeId || r.id);
+    if (!ymis || !badgeId) return;
+    var rows = sheet.getDataRange().getValues();
+    var found = false;
+    for (var i = 1; i < rows.length; i++) {
+      if (textOf(rows[i][0]) === ymis && textOf(rows[i][1]) === badgeId) {
+        if (r.uncomplete) { sheet.deleteRow(i + 1); }
+        else {
+          sheet.getRange(i + 1, 3).setValue(textOf(r.name));
+          sheet.getRange(i + 1, 4).setValue(r.date || '');
+          sheet.getRange(i + 1, 5).setValue(textOf(r.cert));
+          sheet.getRange(i + 1, 6).setValue(textOf(r.note));
+          sheet.getRange(i + 1, 7).setValue(new Date());
+        }
+        found = true; processed++; break;
+      }
+    }
+    if (!found && !r.uncomplete) {
+      sheet.appendRow([ymis, badgeId, textOf(r.name), r.date || '', textOf(r.cert), textOf(r.note), new Date()]);
+      processed++;
+    }
+  });
+  return { success: true, processed: processed };
+}
+
+/* ============================================================
+   審批中心：待批完成（團員申報 → 執委／領袖喺執委管理系統批）
+   批准＝寫入「進度追蹤」（同一個後端、兩個前端都即刻見到）
+   ============================================================ */
+function reviewProgressRequest(reqId, decision, note, reviewer, confirmedDate) {
+  reqId = textOf(reqId);
+  if (!reqId) return { success: false, error: '缺少 request_id' };
+  if (decision !== 'approved' && decision !== 'rejected') return { success: false, error: '無效決定' };
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName('待批完成');
+  if (!sheet) return { success: false, error: '搵唔到「待批完成」分頁（請先執行 initializeSheets）' };
+  var rows = sheet.getDataRange().getValues();
+  for (var i = 1; i < rows.length; i++) {
+    if (textOf(rows[i][0]) !== reqId) continue;
+    if (textOf(rows[i][7]) !== 'pending') return { success: false, error: '呢個申請已經處理過' };
+    var reqDate = dateOf(rows[i][5]);
+    var finalDate = textOf(confirmedDate) || reqDate || dateOf(new Date());
+    sheet.getRange(i + 1, 8).setValue(decision);
+    sheet.getRange(i + 1, 10).setValue(textOf(reviewer));
+    sheet.getRange(i + 1, 11).setValue(new Date());
+    sheet.getRange(i + 1, 12).setValue(textOf(note));
+    sheet.getRange(i + 1, 13).setValue(finalDate);
+    if (decision !== 'approved') return { success: true, message: '已拒絕' };
+    var ymis = textOf(rows[i][1]);
+    var itemId = textOf(rows[i][3]);
+    var pSheet = ss.getSheetByName('進度追蹤');
+    if (!pSheet) return { success: false, error: '搵唔到「進度追蹤」分頁' };
+    var prow = pSheet.getDataRange().getValues();
+    var hit = -1;
+    for (var k = 1; k < prow.length; k++) {
+      if (textOf(prow[k][0]) === ymis && textOf(prow[k][1]) === itemId) { hit = k; break; }
+    }
+    var memo = '由申請轉入：' + textOf(note);
+    if (hit >= 0) {
+      pSheet.getRange(hit + 1, 3).setValue(finalDate);
+      pSheet.getRange(hit + 1, 4).setValue(new Date());
+      pSheet.getRange(hit + 1, 5).setValue(textOf(reviewer));
+      pSheet.getRange(hit + 1, 6).setValue(memo);
+    } else {
+      pSheet.appendRow([ymis, itemId, finalDate, new Date(), textOf(reviewer), memo]);
+    }
+    return { success: true, message: '已批准並寫入進度' };
+  }
+  return { success: false, error: '搵唔到申請（可能已經處理）' };
+}
+
+/* 待批履歷：團員自行申報活動履歷 → 執委／領袖批准 */
+function reviewLogRequest(reqId, decision, note, reviewer) {
+  reqId = textOf(reqId);
+  if (!reqId) return { success: false, error: '缺少 request_id' };
+  if (decision !== 'approved' && decision !== 'rejected') return { success: false, error: '無效決定' };
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName('待批履歷');
+  if (!sheet) return { success: false, error: '搵唔到「待批履歷」分頁（請先執行 initializeSheets）' };
+  var rows = sheet.getDataRange().getValues();
+  var rowIndex = -1, row = null;
+  for (var i = 1; i < rows.length; i++) {
+    if (textOf(rows[i][0]) === reqId) { rowIndex = i + 1; row = rows[i]; break; }
+  }
+  if (!row) return { success: false, error: '搵唔到申報' };
+  if (textOf(row[12]) !== 'pending') return { success: false, error: '呢個申報已經處理過' };
+  var kind = textOf(row[1]) || 'new';
+  var rec = {
+    type: textOf(row[3]) || 'activity', ymis: textOf(row[4]), name: textOf(row[5]),
+    date: dateOf(row[6]), title: textOf(row[7]), role: textOf(row[8]), hours: textOf(row[9]),
+    cert_no: textOf(row[10]), detail: textOf(row[11])
+  };
+  if (decision !== 'approved') {
+    sheet.getRange(rowIndex, 13).setValue('rejected');
+    sheet.getRange(rowIndex, 15).setValue(textOf(reviewer));
+    sheet.getRange(rowIndex, 16).setValue(new Date());
+    sheet.getRange(rowIndex, 17).setValue(textOf(note));
+    return { success: true, message: '已拒絕申報' };
+  }
+  var lSheet = ss.getSheetByName('活動履歷');
+  if (!lSheet) return { success: false, error: '搵唔到「活動履歷」分頁' };
+  var recordId = '';
+  var recorder = '';
+  if (kind === 'edit') {
+    var targetId = textOf(row[2]);
+    var ld = lSheet.getDataRange().getValues();
+    var li = -1;
+    for (var j = 1; j < ld.length; j++) { if (textOf(ld[j][0]) === targetId) { li = j; break; } }
+    if (li < 0) return { success: false, error: '搵唔到原紀錄（可能已被刪除）' };
+    recorder = textOf(ld[li][10]);
+    lSheet.getRange(li + 1, 2, 1, 12).setValues([[
+      rec.type, rec.ymis, rec.name, rec.date, rec.title, rec.role,
+      rec.hours, rec.cert_no, rec.detail, recorder, textOf(ld[li][11]), new Date()
+    ]]);
+    recordId = targetId;
+  } else {
+    recordId = 'LOG_' + new Date().getTime() + '_' + Math.random().toString(36).substr(2, 5);
+    recorder = rec.name + '（自行申報）';
+    lSheet.appendRow([recordId, rec.type, rec.ymis, rec.name, rec.date, rec.title, rec.role,
+      rec.hours, rec.cert_no, rec.detail, recorder, new Date(), '']);
+  }
+  sheet.getRange(rowIndex, 13).setValue('approved');
+  sheet.getRange(rowIndex, 15).setValue(textOf(reviewer));
+  sheet.getRange(rowIndex, 16).setValue(new Date());
+  sheet.getRange(rowIndex, 17).setValue(textOf(note));
+  return { success: true, message: kind === 'edit' ? '已批准修改並更新紀錄' : '已批准並寫入活動履歷', record_id: recordId };
+}
+
+/** 成員名單：由執委系統嘅名冊更新（唔會刪人，進度紀錄照樣對得返） */
+function writeMemberList(ss, rows) {
+  var sh = ss.getSheetByName('成員名單');
+  if (!sh) {
+    sh = ss.insertSheet('成員名單');
+    sh.appendRow(['YMIS', '姓名', '加入日期', '支部', '聯絡']);
+    sh.getRange(1, 1, 1, 5).setFontWeight('bold');
+  }
+  var existing = {};
+  var data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) existing[textOf(data[i][0])] = i + 1;
+  var n = 0;
+  (rows || []).forEach(function (m) {
+    var ymis = textOf(m.ymis);
+    if (!ymis) return;
+    var row = [ymis, textOf(m.name), textOf(m.join || m.joinDate), textOf(m.role || m.branch), textOf(m.phone || m.email)];
+    if (existing[ymis]) sh.getRange(existing[ymis], 1, 1, 5).setValues([row]);
+    else { sh.appendRow(row); existing[ymis] = sh.getLastRow(); }
+    n++;
+  });
+  return n;
 }
 
 /* ============================================================

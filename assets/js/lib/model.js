@@ -123,7 +123,7 @@ export function memberName(id) { return member(id)?.name || '—'; }
 export function activeMembers() { return members().filter(m => m.status !== 'alumni'); }
 
 /* ---------- 跨系統身份 key（同進度追蹤等外部系統對人用） ----------
-   對方（VSBADGE）嘅身份規則：**成員用 YMIS（10 位數字），領袖用 Email**。
+   進度資料嘅身份規則：**成員用 YMIS（10 位數字），領袖用 Email**。
    （佢登入頁：「成員：YMIS 10位數字 + 密碼；領袖：Email + 密碼」）
    所以唔可以一刀切要求所有人都有 YMIS —— 領袖本來就唔會有，
    把領袖當「未填 YMIS」係計錯。呢度按身份揀啱嘅 key。 */
@@ -268,6 +268,43 @@ export function allMonths() {
   set.add(todayISO().slice(0, 7));
   return [...set].sort().reverse();
 }
+
+/**
+ * 某財政年度嘅 12 個月（YYYY-MM，按時間順序）。
+ * 重點（2026-09-16 團長要求）：**冇紀錄嘅月份都要揀得到** ——
+ * 所以呢度係由年度起計「砌」足 12 個月出嚟，唔係由帳目反推。
+ */
+export function fyMonths(yearKey = currentFY()) {
+  const r = yearRange(yearKey);            // 童軍年度（4/1–3/31）
+  const out = [];
+  let y = Number(String(r.start).slice(0, 4));
+  let m = Number(String(r.start).slice(5, 7));
+  for (let i = 0; i < 12; i++) {
+    out.push(`${y}-${String(m).padStart(2, '0')}`);
+    m += 1;
+    if (m > 12) { m = 1; y += 1; }
+  }
+  return out;
+}
+/** '2026-04' → '2026 年 4 月' */
+export function monthText(key) {
+  const [y, m] = String(key || '').split('-');
+  if (!y || !m) return String(key || '');
+  return `${y} 年 ${Number(m)} 月`;
+}
+/** 某年度 + 月份嘅帳目（月份可以係空） */
+export function txOfMonth(yearKey, monthKey) {
+  return tx().filter(t => String(t.date).slice(0, 7) === monthKey);
+}
+/** 逐月統計（12 個月，包括冇紀錄嘅） */
+export function fyMonthStats(yearKey = currentFY()) {
+  const list = tx().filter(t => inRange(t.date, yearRange(yearKey).start, yearRange(yearKey).end));
+  return fyMonths(yearKey).map(k => {
+    const rows = list.filter(t => String(t.date).slice(0, 7) === k);
+    const income = sumBy(rows, 'income'), expense = sumBy(rows, 'expense');
+    return { month: k, label: monthText(k), count: rows.length, income, expense, net: income - expense };
+  });
+}
 export function categoryBreakdown(list, type) {
   const map = {};
   list.filter(t => t.type === type).forEach(t => {
@@ -411,9 +448,26 @@ export function feeSummary(list = fees()) {
     rate: list.length ? Math.round(paid.length / list.length * 100) : 0
   };
 }
+/**
+ * 免收團費？
+ *   1) 領袖（身份 = leader）→ **一律免收團費**（2026-09-16 團長要求）
+ *   2) 個別成員可以喺「用戶」頁剔「免收團費」（例：榮譽會員、指導員）
+ *   3) m.feeExempt === false 可以明確推翻（例：有位領袖要交返）
+ */
+export function feeExempt(m) {
+  if (!m) return false;
+  if (m.feeExempt === true) return true;
+  if (m.feeExempt === false) return false;
+  return identityOf(m) === 'leader';
+}
+/** 免收團費名單（用嚟喺團費頁交代點解某人唔喺表入面） */
+export function feeExemptList() {
+  return members().filter(m => m.status !== 'alumni' && feeExempt(m));
+}
+
 export function overdueFees() {
   const today = todayISO();
-  return fees().filter(f => !f.paid && f.due && f.due < today);
+  return fees().filter(f => !f.paid && f.due && f.due < today && !feeExempt(member(f.memberId)));
 }
 
 /* ---------- 團費（金額可改，唔係寫死） ---------- */
@@ -447,11 +501,11 @@ export function feePeriods() {
 export function feeOf(memberId, period) {
   return fees().find(f => f.memberId === memberId && f.period === period) || null;
 }
-/** 團費收款表：每位（非舊團員）團員 × 某一期 */
+/** 團費收款表：每位（非舊團員、非免收）團員 × 某一期 */
 export function feeGrid(period = feePeriodOf(todayISO()), { includeAlumni = false } = {}) {
   const fallback = standardFee();
   return members()
-    .filter(m => includeAlumni || m.status !== 'alumni')
+    .filter(m => (includeAlumni || m.status !== 'alumni') && !feeExempt(m))
     .map(m => {
       const f = feeOf(m.id, period);
       return {

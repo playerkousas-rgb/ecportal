@@ -121,7 +121,7 @@ export function migrateOpeningBalances(db) {
 }
 
 /* ---------------- 跨系統身份（federation L1） ----------------
-   進度追蹤（VSBADGE）係獨立系統。兩邊要對得上同一個人，就要一個共同 key：
+   進度資料喺旅團自己嘅後端（一個後端、兩個前端）。要對得上同一個人，就要一個共同 key：
      ymis      會籍編號／YMIS —— **權威** key（人手填，同對面系統一樣）
      systemId  本系統派嘅穩定 ID —— 冇 YMIS 時嘅 fallback（一旦產生就唔會再改）
    冇呢兩個 key，任何同步都只可以靠姓名配對（會撞名、會漏）。 */
@@ -180,7 +180,7 @@ function blankDb(mode, code, entry = {}) {
     methods: ['現金', '轉數快 FPS', '銀行轉賬', '自動扣賬', '支票', 'PayMe', '其他'],
     invItems: [], invLoans: [], invAudits: [], invNextCode: 'G-001',
     auditLog: [],
-    meta: { createdAt: nowStamp(), updatedAt: nowStamp(), seedSource: mode === 'mock' ? 'data/mock/' : (entry.local ? '（本地旅團：空白資料）' : (dataPathOf(code) || '')), real: mode === 'real' }
+    meta: { createdAt: nowStamp(), updatedAt: nowStamp(), seedSource: mode === 'mock' ? 'data/mock/' : (entry.local ? '（本地旅團：空白資料）' : (entry.fromApi ? '（伺服器 Registry：由空白資料庫開始）' : (dataPathOf(code) || ''))), real: mode === 'real' }
   };
 }
 
@@ -195,7 +195,11 @@ async function buildSeed(mode, code) {
     pick('finance.reference.json'), pick('notices.json'), pick('tables.json')
   ]);
   const got = [unit, cons, members, finance, inventory, meetings, finRef, notices, tables].filter(Boolean).length;
-  if (!got) { db.meta.seedFailed = true; return db; }
+  if (!got) {
+    /* 伺服器旅團（純環境變數開）本身冇靜態資料檔 —— 由空白資料庫開始，唔算失敗 */
+    if (entry.fromApi) { db.meta.seedSource = '（伺服器 Registry：由空白資料庫開始）'; return db; }
+    db.meta.seedFailed = true; return db;
+  }
 
   if (unit) {
     db.unit = { ...db.unit, ...unit };
@@ -361,7 +365,7 @@ function persist() {
   state.db.meta.updatedAt = nowStamp();
   lsSet(dbKey(state.mode, state.unitCode), JSON.stringify(state.db));
   /* 防呆：改動只會「排隊」等送去總表，永遠唔會即時自動送出。
-     要去「表格與同步 → 總表同步 → 立即同步」先真正寫入 Apps Script。 */
+     要去「帳號與系統 → 資料管理 → 總表同步 → 立即同步」先真正寫入 Apps Script。 */
   if (state.db.sync && state.db.sync.auto) {
     state.db.sync.pending = Number(state.db.sync.pending || 0) + 1;
   }

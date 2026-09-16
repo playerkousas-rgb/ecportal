@@ -1,17 +1,20 @@
 {
-  "name": "82venture",
+  "name": "ecportal",
   "version": "2.0.0",
   "private": true,
-  "description": "深資童軍團執委管理系統（純靜態，零依賴）。jsdom 只係測試用。",
+  "description": "執委管理系統（純靜態，零依賴）。jsdom 只係測試用。",
   "type": "module",
   "scripts": {
+    "dev": "node dev-server.mjs",
     "serve": "python3 -m http.server 8000",
-    "test": "node tests/smoke.mjs real && node tests/smoke.mjs mock && node tests/public.mjs && node tests/gate.mjs && node tests/api.mjs",
-    "test:api": "node tests/api.mjs",
+    "test": "node scripts/build-gas.mjs && node tests/smoke.mjs real && node tests/smoke.mjs mock && node tests/public.mjs && node tests/gate.mjs && node tests/api.mjs && node tests/progress.mjs",
+    "test:api": "node tests/api.mjs && node tests/progress.mjs",
     "test:real": "node tests/smoke.mjs real",
     "test:mock": "node tests/smoke.mjs mock",
     "test:public": "node tests/public.mjs",
-    "test:gate": "node tests/gate.mjs"
+    "test:gate": "node tests/gate.mjs",
+    "test:progress": "node tests/progress.mjs",
+    "build:gas": "node scripts/build-gas.mjs"
   },
   "devDependencies": {
     "jsdom": "^26.0.0"

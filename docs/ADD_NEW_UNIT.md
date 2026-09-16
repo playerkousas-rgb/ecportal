@@ -1,8 +1,60 @@
 # 新增一個旅團（多旅團部署）
 
-82venture 用 **Git Registry** 方式管理多個旅團（同 VSBADGE 做法一樣）：
-`data/units.json` 係唯一註冊處，每個旅團一個資料夾 `data/units/<旅團編號>/`。
-唔需要開帳號、唔需要後端，加檔案 + 部署就完成。
+有兩種開法，揀一個：
+
+| 方法 | 要改嘅嘢 | 適合 |
+| --- | --- | --- |
+| **A. Git Registry（完整）** | `data/units.json` ＋ `data/units/<編號>/` 資料夾（可以連種子資料／團章／名冊） | 想預先載入資料、團章、名冊 |
+| **B. 純 Vercel 環境變數（最快，唔使改 Git）** | Vercel → Settings → Environment Variables 加 3–4 個變數 → Redeploy | 旅團自己已經有 Apps Script 後端，資料由空白開始用 |
+
+兩個方法並存：B 開嘅旅團，之後想補資料夾／團章，隨時可以搬去 A。
+
+---
+
+## 旅團點申請 / 點交資料畀你
+
+旅團**唔使登入**就睇得到教學：喺旅團閘撳「**部署指南**」（5 步：下載 Code.gs → 貼落自己張 Sheet →
+`initializeSheets` → 部署 Web App → **填申請表**）。撳「填寫申請表自動送出」之後：
+
+```
+申請人瀏覽器 ──POST /api/proxy（action=submitRegistration）──▶ Vercel 伺服器端
+                                                            └──▶ 中央管理員收件匣 Apps Script
+```
+
+* 目的地係**伺服器端常數**（`api/proxy.js` 嘅 `SCOUT_ADMIN_API`，同 VSBADGE 共用同一個收件匣，
+  用 `appType: '82venture'` 分辨）——前端改唔到，申請一定落到你嗰邊。
+* **收件匣唔會回執**（ADMIN 系統收到就 OK）：POST 過得去就當送到，唔會因為你回 HTML／空白而報錯。
+  只有連線／逾時，或者你明確回 `{success:false}` 先當失敗 —— 嗰陣 App 會叫申請人
+  **複製申請內容**（WhatsApp／電郵畀你）或者**再試一次**。
+* 你嘅跟進：收到申請 → 轉寄畀負責團長 → 開好團 → **email 通知旅團**（申請人 App 唔會收到任何自動通知）。
+* Payload 帶 `appType: '82venture'`、`appName: '執委管理系統'`、旅團編號／名稱、`/exec`、
+  API Key、聯絡人、主系統網址、時間戳。**你嘅收件匣 GAS 如果有 `appType` 白名單，要加 `'82venture'`。**
+* 你收到之後照下面（方法 B 或方法 A）開團，再通知旅團。
+
+---
+
+## 方法 B：Vercel 環境變數（唔改 Git）
+
+旅團畀你 `/exec` 網址同 API Key 之後，喺 Vercel 加：
+
+| 變數 | 值（例子） | 作用 |
+| --- | --- | --- |
+| `TROOP_0081_BACKEND` | `https://script.google.com/macros/s/AKfy…/exec` | 旅團後端（總表同步、申報、通告報名） |
+| `TROOP_0081_APIKEY` | 旅團嘅 API Key | 伺服器端代為寫入（唔會落前端） |
+| `TROOP_0081_NAME` | `第八十一旅深資童軍團` | 顯示名（唔填＝「第 0081 旅」） |
+| `TROOP_0081_PROGRESSBACKEND` | 同 `…_BACKEND`（或者另一支 Script） | 進度紀錄讀寫用 |
+| `TROOP_0081_PROGRESSAPIKEY` | 進度用 API Key | 前端唔使填任何嘢就直接讀到進度 |
+
+* 加完喺 Vercel 撳 **Redeploy**（環境變數要重新部署先生效）
+* 旅團即刻出現喺旅團清單；資料由**空白**開始（唔會讀 `data/units/0081/`，因為根本冇呢個資料夾）
+* 公告／通告：喺執委系統開通告 → 同步一次（資料會寫入旅團 Sheet 嘅 `通告全文` 分頁）
+  → 公開頁（`notice.html?u=0081&n=<通告編號>`）會直接由佢自己嘅後端讀，**唔使改 Git 都公開到、收得到報名**
+* 選填：`TROOP_0081_NOTICE`（通告報名送去邊）、`TROOP_0081_NAMEEN`、`TROOP_0081_SHORT`、`TROOP_0081_PROGRESSCATALOG`
+* 安全：公開清單（`/api/units`）**唔會**回傳 gasUrl／API Key；所有寫入都經伺服器端白名單驗證
+
+---
+
+## 方法 A：Git Registry（完整）
 
 ```
 data/
@@ -14,7 +66,7 @@ data/
 
 ---
 
-## 五步完成
+### 五步完成
 
 ### 1. 開一個資料夾
 
@@ -28,7 +80,7 @@ cp -r data/units/0082 data/units/0137
 
 | 檔案 | 要改嘅內容 |
 |---|---|
-| `unit.json` | `code`、`name`／`nameEn`、`short`、`region`、`sponsor`、`address`、`founded`、`theme`（主色）、`settings`（團費、津貼、期初結餘、AGM 日期）、`progress`（進度系統網址／Portal 參數）、`inventory`（物資分類） |
+| `unit.json` | `code`、`name`／`nameEn`、`short`、`region`、`sponsor`、`address`、`founded`、`theme`（主色）、`settings`（團費、津貼、期初結餘、AGM 日期）、`inventory`（物資分類） |
 | `constitution.json` | 你嘅團章（中英對照）。未寫好可以留 `chapters: []`，之後喺 app 內編輯並發布 |
 | `members.json` | 團員名冊，生日欄位格式：`"2006-06-10"`（有年份）或 `"03-26"`（只有月日） |
 | `inventory.json` | 物資。可以係空：`"items": []`、`"loans": []`、`"audits": []` |
@@ -58,10 +110,8 @@ cp -r data/units/0082 data/units/0137
       "dataPath": "data/units/0137/",
       "theme": { "brand700": "#7B2233", "brand800": "#5E1826" },
       "progress": {
-        "name": "深資童軍進度及行政平台 (VSBADGE)",
-        "url": "https://script.google.com/macros/s/…/exec",
-        "mode": "portal",
-        "portal": { "unitParam": "0137", "role": "exec_committee", "extraParams": "embed=1" }
+        "name": "進度紀錄（同一個後端）",
+        "backend": { "backend": "", "apiKey": "", "catalogUrl": "" }
       }
     }
   }
