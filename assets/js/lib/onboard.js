@@ -1,23 +1,31 @@
 /* ============================================================
-   onboard.js — 新旅團申請接入與部署協助
+   onboard.js — 新旅團申請接入與部署協助（全前端 App 內完成，毋須存取 Git）
    流程（旅團嗰邊）：
-     1. 登入前直接下載 Code.gs（毋須登入）
+     1. 登入前直接喺 App 內下載或複製 Code.gs（毋須登入、毋須 Git）
      2. 建自己嘅 Google Sheet → 執行 initializeSheets → 複製 API Key
      3. 部署做 Web App（執行身分：我；存取權：任何人）
-     4. 填寫申請表提交 URL 與 API Key，或由 Git 負責人加進 data/units.json 與 Vercel 作登記
+     4. 喺 App 內填寫「申請接入」自動送出，管理員於系統後台／Vercel 登記後即時生效
    ============================================================ */
 
 import { registry } from './units.js';
 import { gasTemplate } from './gastemplate.js';
 import { download } from './exporter.js';
-import { toast, icon } from './util.js';
+import { toast, copyText, icon } from './util.js';
 
 export const APP_TYPE = '82venture';
 
-/** 登入前／任何時候直接下載 Code.gs */
+/** 登入前／任何時候直接在 App 內下載 Code.gs */
 export function downloadCodeGs() {
   download('Code.gs', gasTemplate(), 'text/plain;charset=utf-8');
   toast('已下載 Code.gs（Apps Script 後端程式碼）', 'ok');
+}
+
+/** 登入前／任何時候直接複製 Code.gs 原始碼到剪貼簿（方便手機／平板使用） */
+export async function copyCodeGs() {
+  const code = gasTemplate();
+  const ok = await copyText(code);
+  if (ok) toast('已複製 Code.gs 全部原始碼到剪貼簿！', 'ok');
+  else toast('未能複製，請使用「下載 Code.gs」', 'err');
 }
 
 /** 管理員收件匣（Apps Script /exec） */

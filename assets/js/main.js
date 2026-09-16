@@ -7,7 +7,7 @@ import {
   switchUnit, clearMockData
 } from './lib/store.js';
 import { loadRegistry, unitList, unitEntry, defaultUnitCode } from './lib/units.js';
-import { adminInbox, validateApplication, submitApplication, adminChecklist, downloadCodeGs } from './lib/onboard.js';
+import { adminInbox, validateApplication, submitApplication, adminChecklist, downloadCodeGs, copyCodeGs } from './lib/onboard.js';
 import { applyTheme, MAROON } from './lib/theme.js';
 import {
   login, logout, current, currentRole, ROLES, displayName, displaySub,
@@ -187,8 +187,11 @@ async function openDeployGuideModal() {
       <div class="col gap-12" style="font-size:13.5px;line-height:1.6">
         <div class="card" style="padding:14px">
           <div class="semibold mb-4">第 1 步：下載後端程式碼（Code.gs）</div>
-          <div class="xs faint mb-8">毋須登入，直接點擊下方按鈕下載最新單一檔案後端程式碼：</div>
-          <button class="btn btn-sm btn-primary" id="guide-dl-btn">${icon('download', 15)} ⬇️ 立即下載 Code.gs</button>
+          <div class="xs faint mb-8">毋須登入，直接點擊下方按鈕下載或複製最新單一檔案後端程式碼：</div>
+          <div class="row gap-8 wrap">
+            <button class="btn btn-sm btn-primary" id="guide-dl-btn" type="button">${icon('download', 15)} ⬇️ 立即下載 Code.gs</button>
+            <button class="btn btn-sm" id="guide-copy-btn" type="button">${icon('copy', 15)} 📋 複製原始碼</button>
+          </div>
         </div>
 
         <div class="card" style="padding:14px">
@@ -231,6 +234,7 @@ async function openDeployGuideModal() {
     actions: [{ label: '關閉', class: 'btn-primary', value: null }],
     onMount: el => {
       el.querySelector('#guide-dl-btn')?.addEventListener('click', () => downloadCodeGs());
+      el.querySelector('#guide-copy-btn')?.addEventListener('click', () => copyCodeGs());
       el.querySelector('#guide-apply-btn')?.addEventListener('click', async () => {
         const { closeModal } = await import('./lib/util.js');
         closeModal(null);
@@ -254,7 +258,9 @@ async function openApplication() {
       <div class="note-box mb-12">${icon('alert', 15)}<div>
         <b>申請之前請先起好你自己嘅後端</b>（每個旅團一張自己嘅 Google Sheet）：
         <div class="xs mt-4 mb-8">
-          1. 下載 <b>Code.gs</b>（免登入）：<button class="btn btn-xs btn-primary ml-8" id="ap-dl-btn" type="button">${icon('download', 13)} 下載 Code.gs</button><br>
+          1. 獲取 <b>Code.gs</b>（免登入）：
+          <button class="btn btn-xs btn-primary ml-8" id="ap-dl-btn" type="button">${icon('download', 13)} 下載 Code.gs</button>
+          <button class="btn btn-xs ml-4" id="ap-copy-btn" type="button">${icon('copy', 13)} 複製原始碼</button><br>
           2. 建一張新 Google Sheet → 擴充功能 → Apps Script → 貼上 Code.gs<br>
           3. 執行 <code>initializeSheets</code>（會建好全部分頁），複製 API Key<br>
           4. 部署做<b>網頁應用程式</b>（執行身分：我；存取權：任何人），複製 <code>/exec</code> 網址
@@ -292,6 +298,10 @@ async function openApplication() {
       el.querySelector('#ap-dl-btn')?.addEventListener('click', (ev) => {
         ev.preventDefault();
         downloadCodeGs();
+      });
+      el.querySelector('#ap-copy-btn')?.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        copyCodeGs();
       });
     }
   });
