@@ -23,7 +23,10 @@ export const SCHEMA = 2;
 const K = {
   session: 'venture82.session.v2',
   mode: 'venture82.mode.v2',
-  unit: 'venture82.currentUnit.v2'
+  unit: 'venture82.currentUnit.v2',
+  /* 最後一個**真實**旅團 —— 「離開示範」之後可以一撳就返去自己旅團，
+     唔使喺清單再揀一次。示範模式永遠唔會寫呢個 key。 */
+  lastReal: 'venture82.lastRealUnit.v2'
 };
 export const dbKey = (mode, code) => mode === 'mock' ? `venture82.mock.db.v${SCHEMA}` : `venture82.unit.${code}.db.v${SCHEMA}`;
 
@@ -273,11 +276,46 @@ function seedBackend(db, mode, code) {
 }
 
 /* ---------------- 初始化 ---------------- */
+/** 由網址／記錄決定「而家係邊個模式、邊個旅團」。
+ *
+ * 【為咩要咁寫】2026-09 團長回報「去過 MOCK 之後，喺首頁揀返 Vercel 登記嘅旅團，
+ * 入到去仍然係 MOCK，資料又冇同後端同步」。
+ * 原因：`state.mode = lsGet(K.mode) || 'real'` —— mode 一寫入 localStorage 就
+ * **永遠**贏，之後就算網址係 `?u=0081`（真人真旅團、冇 mock=1）都照樣當示範模式，
+ * 於是：資料庫 key 變咗 mock 空間、MOCK 橫額照出、syncBoot() 又第一時間 return，
+ * 用家嘅感覺就係「我揀咗自己旅團但入唔到」。
+ *
+ * 正確嘅優先次序（網址永遠最權威）：
+ *   1. init({ mode, unit }) —— 程式內部指定（測試、公開頁）
+ *   2. ?mock=1 或者 ?u=MOCK  → 示範
+ *   3. ?u=<真實編號>         → 真實（就算 localStorage 仲寫住 mock）
+ *   4. localStorage 記錄
+ *   5. 'real'
+ */
+function resolveTarget(opts = {}, url = new URLSearchParams(location.search)) {
+  const urlUnitRaw = String(url.get('u') || '').trim();
+  const isMockCode = urlUnitRaw.toUpperCase() === 'MOCK';
+  const urlMock = url.get('mock') === '1';
+
+  let mode;
+  if (opts.mode) mode = opts.mode;
+  else if (urlMock || isMockCode) mode = 'mock';
+  else if (urlUnitRaw) mode = 'real';
+  else mode = lsGet(K.mode) || 'real';
+
+  let code;
+  if (opts.unit) code = String(opts.unit);
+  else if (mode === 'mock') code = 'MOCK';                  // 示範永遠用自己嘅命名空間
+  else code = urlUnitRaw || lsGet(K.unit) || defaultUnitCode();
+
+  /* 記錄最後一個真實旅團（唔好記錄 MOCK／空） */
+  if (mode === 'real' && code && code.toUpperCase() !== 'MOCK') lsSet(K.lastReal, code);
+  return { mode, code };
+}
+
 export async function init(opts = {}) {
-  state.mode = opts.mode || lsGet(K.mode) || 'real';
-  const url = new URLSearchParams(location.search);
-  if (url.get('mock') === '1') state.mode = 'mock';
-  const code = opts.unit || url.get('u') || lsGet(K.unit) || defaultUnitCode();
+  const { mode, code } = resolveTarget(opts);
+  state.mode = mode;
   state.unitCode = code;
 
   const key = dbKey(state.mode, code);
@@ -333,9 +371,13 @@ export function setUnitCode(code) { lsSet(K.unit, code); }
 
 /** 切換旅團（重載頁面，確保所有模組用新資料） */
 export function switchUnit(code) {
+  const isMockCode = String(code || '').toUpperCase() === 'MOCK';
   lsSet(K.unit, code);
+  lsSet(K.mode, isMockCode ? 'mock' : 'real');       // 由示範切去真旅團 = 一定要離開示範
   const u = new URL(location.href);
   u.searchParams.set('u', code);
+  if (isMockCode) u.searchParams.set('mock', '1');
+  else u.searchParams.delete('mock');
   u.hash = '#/dashboard';
   location.href = u.toString();
 }
@@ -343,10 +385,17 @@ export function switchUnit(code) {
    離開示範／重置選擇時要一齊清，否則下一次開機會由呢度直接跳返入去。 */
 export const CHOSEN_UNIT_KEY = 'venture82.unitChosen.v2';
 
+/** 最後一個用過嘅真實旅團（示範模式唔會覆蓋佢） */
+export function lastRealUnit() {
+  const c = lsGet(K.lastReal);
+  return c && c.toUpperCase() !== 'MOCK' ? c : '';
+}
+
 export function enterMock() {
   const u = new URL(location.href);
   u.searchParams.set('mock', '1');
-  u.hash = '';
+  u.searchParams.set('u', 'MOCK');       // ⬅️ 一定要帶 u=MOCK，否則 ?mock=1 會被當成
+  u.hash = '';                           //    「真旅團 MOCK」→ 冇橫額、出唔返嚟（2026-09 真實 bug）
   location.href = u.toString();
 }
 
@@ -356,18 +405,42 @@ export function enterMock() {
  * 以前 exitMock 只係由 URL 刪走 mock=1 —— 但 localStorage 仲留緊
  * mode=mock、unit=MOCK，URL 又有 u=MOCK，下次 boot 照樣入返示範，
  * 用家撳「離開示範」永遠出唔到（2026-09 真實 bug：被困喺 MOCK）。
+ *
+ * 2026-09 追加：連登入 session 都要清 —— 示範 session（mock leader）唔應該
+ * 帶到真實旅團，否則登入身份會係「示範領袖」。
  */
 export function resetToGate() {
   lsDel(K.mode);
   lsDel(K.unit);
   lsDel(CHOSEN_UNIT_KEY);
+  try { setSession(null); } catch { /* 未初始化都冇問題 */ }
   const u = new URL(location.href);
   u.searchParams.delete('mock');
   u.searchParams.delete('u');
   u.hash = '';
   location.href = u.toString();
 }
+
+/** 離開示範 → 旅團選擇閘（清晒示範痕跡） */
 export function exitMock() { resetToGate(); }
+
+/**
+ * 離開示範 → 直接返最後一個真實旅團（冇用過真實旅團就返閘）。
+ * 畀「試完 MOCK，想即刻返自己旅團」用家一撳返去。
+ */
+export function exitMockToUnit() {
+  const back = lastRealUnit();
+  if (!back) return resetToGate();
+  lsDel(K.mode);
+  lsDel(K.unit);
+  lsDel(CHOSEN_UNIT_KEY);
+  try { setSession(null); } catch { /* ignore */ }
+  const u = new URL(location.href);
+  u.searchParams.delete('mock');
+  u.searchParams.set('u', back);
+  u.hash = '';
+  location.href = u.toString();
+}
 
 /* ---------------- 讀寫 ---------------- */
 export function load() {
