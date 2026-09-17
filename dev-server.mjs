@@ -15,6 +15,7 @@
 
 import http from 'node:http';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import url from 'node:url';
 
@@ -68,6 +69,40 @@ function wrapRes(res) {
   return res;
 }
 
+/* ---------- API module cache ----------
+   Node 會 cache ES module，所以改完 api/*.js（例如 _registry.js）如果照舊 import，
+   再開網頁都仲係行緊舊 code —— 好容易令人以為「改極都唔 work」。
+   做法：每次 api/ 有改動，就複製一份去 temp 目錄（新 generation），
+   再由嗰度 import。相對 import（./_registry.js）就會用返同一份新 code。
+   process.cwd() 冇變，所以 data/units.json 之類嘅檔案照讀得到。 */
+const API_DIR = path.join(ROOT, 'api');
+const API_TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'ecportal-api-'));
+let apiGen = -1;
+let apiStamp = '';
+
+function apiFilesChanged() {
+  try {
+    const files = fs.readdirSync(API_DIR).filter(f => f.endsWith('.js')).sort();
+    const stamp = files.map(f => `${f}:${fs.statSync(path.join(API_DIR, f)).mtimeMs}`).join('|');
+    if (stamp === apiStamp) return false;
+    apiStamp = stamp;
+    return true;
+  } catch (e) { return false; }
+}
+
+function apiGenDir() {
+  if (apiFilesChanged() || apiGen < 0) {
+    apiGen++;
+    const dir = path.join(API_TMP, 'g' + apiGen);
+    fs.mkdirSync(dir, { recursive: true });
+    for (const f of fs.readdirSync(API_DIR)) {
+      if (f.endsWith('.js')) fs.copyFileSync(path.join(API_DIR, f), path.join(dir, f));
+    }
+    return dir;
+  }
+  return path.join(API_TMP, 'g' + apiGen);
+}
+
 async function handleApi(req, res, name) {
   const file = path.join(ROOT, 'api', `${name}.js`);
   if (!file.startsWith(path.join(ROOT, 'api')) || !fs.existsSync(file)) {
@@ -79,7 +114,8 @@ async function handleApi(req, res, name) {
   const qIdx = req.url.indexOf('?');
   req.query = Object.fromEntries(new URLSearchParams(qIdx >= 0 ? req.url.slice(qIdx + 1) : '').entries());
   try {
-    const mod = await import(url.pathToFileURL(file).href + `?t=${Date.now()}`);
+    const live = path.join(apiGenDir(), `${name}.js`);
+    const mod = await import(url.pathToFileURL(live).href + `?t=${Date.now()}`);
     const handler = mod.default;
     if (typeof handler !== 'function') throw new Error(`${name}.js 冇 default handler`);
     await handler(req, wrapRes(res));

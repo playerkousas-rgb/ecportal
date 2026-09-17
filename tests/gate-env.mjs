@@ -1,0 +1,371 @@
+/* ============================================================
+   tests/gate-env.mjs — 多旅團「Vercel 環境變數登記」＋ 示範模式逃生門
+   ------------------------------------------------------------
+   呢個檔係為咗兩個 2026-09-17 團長回報嘅真實問題寫嘅：
+
+   ① 「旅團後端／API Key 全用 Vercel 環境變數登記，但首頁揀唔到自己旅團」
+      - 旅團清單真係有出現（regression：/api/units → 閘）
+      - 去過 MOCK 之後再揀真旅團，一定要真係入真實模式
+        （以前 localStorage 嘅 mode=mock 會蓋過 URL 嘅 ?u=0082
+          → 資料庫 key 變咗示範空間、又唔會同步後端）
+      - 清單讀唔到時要有得「直接輸入編號」入去 + 診斷
+
+   ② 「入咗 MOCK 之後好難離開」
+      - 示範唔會再自動記住（下次由普通網址開一定返旅團選擇閘）
+      - ?u=MOCK（冇 mock=1）唔會變咗一個「真旅團 MOCK」空殼
+      - 離開示範清晒 mode／unit／已揀記錄／session
+      - 有「返 <真實旅團>」一撳返自己團
+
+   用法：node tests/gate-env.mjs
+   ============================================================ */
+
+import { JSDOM } from 'jsdom';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+import unitsHandler from '../api/units.js';
+import { getRegistry, getTrustedUnit, listPublicUnits, registryDiagnostics } from '../api/_registry.js';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const t0 = Date.now();
+let pass = 0, fail = 0;
+const errors = [];
+function ok(name, cond, extra = '') {
+  if (cond) { pass++; console.log('  ✓ ' + name); }
+  else { fail++; console.log('  ✗ ' + name + (extra ? '  → ' + extra : '')); }
+}
+function section(t) { console.log('\n▌' + t); }
+const wait = (ms) => new Promise(r => setTimeout(r, ms));
+
+const GAS_81 = 'https://script.google.com/macros/s/AKfycbxj5BDDGgjs559smkK4Z5aYImWYeXbN5af8U1ObON0z9WnsN6QJW4I1XWolhs5kQ_H-UQ/exec';
+const GAS_82 = 'https://script.google.com/macros/s/AKfycbTEST82FixtureOnlyNotRealDeployment00000000000/exec';
+
+/* 真旅團（Vercel 環境變數登記）—— 同生產完全一樣嘅登記方式 */
+process.env.TROOP_0081_BACKEND = GAS_81;
+process.env.TROOP_0081_APIKEY = 'troop_81_secret_should_never_reach_browser';
+process.env.TROOP_0081_NAME = '第八十一旅深資童軍團';
+
+/* ============================================================
+   fetch：/api/units 行**真**嘅 Vercel handler，其他檔案由 repo 讀
+   ============================================================ */
+function mockRes() {
+  const r = { statusCode: 0, headers: {}, body: null };
+  r.setHeader = (k, v) => { r.headers[k] = v; return r; };
+  r.status = (s) => { r.statusCode = s; return r; };
+  r.json = (o) => { r.body = o; return r; };
+  return r;
+}
+function callUnitsApi(url) {
+  const q = String(url).split('?')[1] || '';
+  const res = mockRes();
+  unitsHandler({ method: 'GET', url: String(url), query: Object.fromEntries(new URLSearchParams(q)) }, res);
+  return res;
+}
+
+globalThis.fetch = async (url) => {
+  const raw = String(url);
+  const clean = raw.split('?')[0].replace(/^\.?\//, '');
+  if (/^api\/units$/.test(clean)) {
+    const res = callUnitsApi(raw);
+    return { ok: res.statusCode === 200, status: res.statusCode, json: async () => res.body, text: async () => JSON.stringify(res.body) };
+  }
+  const file = path.join(ROOT, clean);
+  if (!file.startsWith(ROOT) || !fs.existsSync(file)) {
+    return { ok: false, status: 404, json: async () => { throw new Error('404 ' + clean); } };
+  }
+  const text = fs.readFileSync(file, 'utf8');
+  return { ok: true, status: 200, text: async () => text, json: async () => JSON.parse(text) };
+};
+
+/* ============================================================
+   一部「瀏覽器」
+   ============================================================ */
+function makeBrowser(url, prefill = {}) {
+  const dom = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
+    url, pretendToBeVisual: true, runScripts: 'dangerously'
+  });
+  const { window } = dom;
+  window.scrollTo = () => {};
+  try { Object.defineProperty(window, 'crypto', { value: globalThis.crypto, configurable: true }); } catch { /* ignore */ }
+
+  /* 捕捉「轉頁」：jsdom 唔會真係轉，用 Proxy 接住 location.href = …
+     （一定要喺掛 globalThis.location 之前換，否則 module 拎到嘅係原本嗰個） */
+  const nav = { href: '' };
+  const locProxy = new Proxy(window.location, {
+    set(t, k, v) { if (k === 'href') nav.href = String(v); return true; },
+    get(t, k) { const v = t[k]; return typeof v === 'function' ? v.bind(t) : v; }
+  });
+  try { Object.defineProperty(window, 'location', { configurable: true, value: locProxy }); } catch { /* jsdom 唔畀換 window.location */ }
+
+  for (const k of ['window', 'document', 'navigator', 'localStorage', 'location', 'HTMLElement',
+    'CustomEvent', 'Event', 'Node', 'getComputedStyle', 'URL', 'URLSearchParams', 'Blob', 'FileReader']) {
+    if (window[k] === undefined) continue;
+    try { Object.defineProperty(globalThis, k, { value: window[k], configurable: true, writable: true }); }
+    catch { /* 唯讀 → 略過 */ }
+  }
+  /* app 嘅 module 用嘅係全域 location —— 一定要換成 proxy 先捕捉到轉頁 */
+  try { Object.defineProperty(globalThis, 'location', { value: locProxy, configurable: true, writable: true }); } catch { /* ignore */ }
+  globalThis.window = window;
+  for (const [k, v] of Object.entries(prefill)) window.localStorage.setItem(k, v);
+  return { dom, window, nav };
+}
+
+/* ============================================================
+   ① 首頁旅團閘：Vercel 登記嘅旅團要出現
+   ============================================================ */
+section('首頁旅團閘（Vercel 環境變數登記）');
+{
+  const { window, nav } = makeBrowser('http://localhost:8080/');
+  await import('../assets/js/main.js?gateenv1=1');
+  await wait(600);
+
+  const doc = window.document;
+  const text = () => (doc.getElementById('app')?.textContent || '').replace(/\s+/g, ' ');
+  ok('第一步仍然係旅團選擇閘', /揀你嘅旅團/.test(text()));
+  ok('★ 環境變數登記嘅 0081 出現在清單', !!doc.querySelector('[data-pick="0081"]'),
+    [...doc.querySelectorAll('[data-pick]')].map(b => b.dataset.pick).join(','));
+  ok('旅團名由 TROOP_0081_NAME 讀到', /第八十一旅深資童軍團/.test(text()));
+  ok('標示「Vercel 登記」', /Vercel 登記/.test(text()));
+  ok('閘面顯示伺服器登記狀態（1 個旅團）', /伺服器登記（Vercel 環境變數）：/.test(text()) && /1/.test(text()));
+  ok('有「重新載入清單」同「診斷伺服器登記」入口',
+    !!doc.querySelector('[data-act="reload"]') && !!doc.querySelector('[data-act="diag"]'));
+  ok('清單冇外洩 API Key', !text().includes('troop_81_secret_should_never_reach_browser'));
+
+  /* 就算清單因為任何原因見唔到（未 redeploy／環境變數打錯名），
+     管理員都可以直接輸入編號入去 —— 唔會再完全冇路走 */
+  const input = doc.getElementById('gateCode');
+  ok('有「直接輸入旅團編號」欄位', !!input);
+  input.value = '0082';
+  doc.querySelector('[data-act="goto-code"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await wait(50);
+  ok('★ 直接輸入編號一樣入得去（?u=0082 冇 mock=1）',
+    /[?&]u=0082/.test(nav.href) && !/mock=1/.test(nav.href), nav.href || '（冇捕捉到轉頁）');
+  ok('入真實旅團時一齊清走 mock 記錄',
+    window.localStorage.getItem('venture82.mode.v2') === 'real',
+    String(window.localStorage.getItem('venture82.mode.v2')));
+}
+
+/* ============================================================
+   ② 示範模式唔會自動記住（唔會困死）
+   ============================================================ */
+section('示範模式唔會自動記住（重新開網站一定見到旅團閘）');
+{
+  const { window } = makeBrowser('http://localhost:8080/', {
+    'venture82.unitChosen.v2': 'MOCK',
+    'venture82.mode.v2': 'mock',
+    'venture82.currentUnit.v2': 'MOCK'
+  });
+  await import('../assets/js/main.js?gateenv2=1');
+  await wait(600);
+  const doc = window.document;
+  const text = () => (doc.getElementById('app')?.textContent || '').replace(/\s+/g, ' ');
+  ok('★ 之前撳過 MOCK，今次開首頁都要回到旅團選擇閘', /揀你嘅旅團/.test(text()), text().slice(0, 80));
+  ok('唔會自動入返示範', !/示範模式（MOCK）中/.test(text()));
+  ok('MOCK 選項仍然喺度（想再試就撳）', !!doc.querySelector('[data-pick="MOCK"]'));
+}
+
+/* ============================================================
+   ③ 由 MOCK 揀返真旅團 → 真實模式（核心 regression）
+   ============================================================ */
+section('去過 MOCK 之後，揀返 Vercel 登記嘅旅團');
+{
+  const { window } = makeBrowser('http://localhost:8080/?mock=1&u=MOCK');
+  const store = await import('../assets/js/lib/store.js');
+  const units = await import('../assets/js/lib/units.js');
+  await units.loadRegistry(true);
+
+  await store.init();
+  ok('第一步：真係入咗示範模式', store.isMock() === true && store.currentUnit() === 'MOCK',
+    `${store.currentMode()}/${store.currentUnit()}`);
+
+  /* 用家返旅團閘，揀 0081（＝URL ?u=0081、冇 mock=1） */
+  window.history.replaceState({}, '', '/?u=0081');
+  window.localStorage.setItem('venture82.unitChosen.v2', '0081');
+  await store.init();
+  ok('★ 揀真旅團之後 ＝ 真實模式（唔再被 localStorage 嘅 mode=mock 蓋住）',
+    store.isMock() === false, `實際：${store.currentMode()}`);
+  ok('★ 旅團編號正確', String(store.currentUnit()) === '0081', String(store.currentUnit()));
+  ok('真實模式記錄寫返正確', window.localStorage.getItem('venture82.mode.v2') === 'real',
+    String(window.localStorage.getItem('venture82.mode.v2')));
+  ok('記住咗最後一個真實旅團（離開示範時用）', store.lastRealUnit() === '0081', store.lastRealUnit());
+
+  /* 之後開普通網址（冇 u=）都應該仍然係真實 0081，唔會彈返示範 */
+  window.history.replaceState({}, '', '/');
+  await store.init();
+  ok('之後開首頁仍然係真實 0081', store.isMock() === false && String(store.currentUnit()) === '0081',
+    `${store.currentMode()}/${store.currentUnit()}`);
+}
+
+/* ============================================================
+   ④ ?u=MOCK／?mock=1 嘅寫法都唔會整出「空殼旅團」
+   ============================================================ */
+section('示範模式網址嘅各種寫法');
+{
+  const { window } = makeBrowser('http://localhost:8080/?u=MOCK');
+  const store = await import('../assets/js/lib/store.js');
+
+  await store.init();
+  ok('★ ?u=MOCK（冇 mock=1）＝ 示範模式（唔會變成「真旅團 MOCK」空殼）',
+    store.isMock() === true, `${store.currentMode()}/${store.currentUnit()}`);
+  ok('唔會報「讀唔到資料檔」', store.seedInfo().failed === false, JSON.stringify(store.seedInfo()));
+
+  window.history.replaceState({}, '', '/?mock=1&u=0081');
+  await store.init();
+  ok('?mock=1 就算夾住 ?u=0081 都係入示範（唔會攪亂真旅團資料）',
+    store.isMock() === true && String(store.currentUnit()) === 'MOCK',
+    `${store.currentMode()}/${store.currentUnit()}`);
+}
+
+/* ============================================================
+   ⑤ 離開示範：清得乾淨 ＋ 一撳返真實旅團
+   ============================================================ */
+section('離開示範唔可以困死用家');
+{
+  const { window, nav } = makeBrowser('http://localhost:8080/?mock=1&u=MOCK');
+  const store = await import('../assets/js/lib/store.js');
+  const auth = await import('../assets/js/lib/auth.js');
+  await store.init();
+  auth.loginAsMock('leader');
+  window.localStorage.setItem('venture82.unitChosen.v2', 'MOCK');
+  window.history.replaceState({}, '', '/?u=0081');
+  await store.init();                       /* 建立 lastReal=0081 之後再返示範 */
+  window.history.replaceState({}, '', '/?mock=1&u=MOCK');
+  await store.init();
+
+  ok('離開之前：示範 session', auth.current()?.mock === true);
+  store.exitMock();
+  ok('★ 清走 mode 記錄', window.localStorage.getItem('venture82.mode.v2') === null);
+  ok('★ 清走旅團記錄', window.localStorage.getItem('venture82.currentUnit.v2') === null);
+  ok('★ 清走「已揀旅團」記錄', window.localStorage.getItem('venture82.unitChosen.v2') === null);
+  ok('★ 清走示範 session（唔會用示範身份碰真資料）', auth.current() === null);
+  ok('重載網址冇 mock=1 亦冇 u=', !/mock=1/.test(nav.href) && !/[?&]u=/.test(nav.href), nav.href);
+
+  /* 「返真實旅團」 */
+  const b2 = makeBrowser('http://localhost:8080/?mock=1&u=MOCK', {
+    'venture82.lastRealUnit.v2': '0081'
+  });
+  const store2 = await import('../assets/js/lib/store.js');
+  await store2.init();
+  ok('示範模式記得住最後一個真實旅團', store2.lastRealUnit() === '0081', store2.lastRealUnit());
+  store2.exitMockToUnit();
+  ok('★「返真實旅團」會帶 ?u=0081 而冇 mock=1',
+    /[?&]u=0081/.test(b2.nav.href) && !/mock=1/.test(b2.nav.href), b2.nav.href);
+  ok('示範痕跡一樣清晒', b2.window.localStorage.getItem('venture82.mode.v2') === null
+    && b2.window.localStorage.getItem('venture82.unitChosen.v2') === null);
+}
+
+/* ============================================================
+   ⑥ 示範模式裡面：離開示範嘅掣要周圍都有（唔會搵唔到）
+   ============================================================ */
+section('示範模式裡面嘅逃生門');
+{
+  const { window, nav } = makeBrowser('http://localhost:8080/?mock=1&u=MOCK', {
+    'venture82.lastRealUnit.v2': '0082'
+  });
+  await import('../assets/js/main.js?gateenv3=1');
+  await wait(700);
+  const doc = window.document;
+  const store = await import('../assets/js/lib/store.js');
+  ok('示範模式已經啟動', store.isMock() === true);
+  ok('★ 黃色橫額有「離開示範」', !!doc.getElementById('mockExit'));
+  ok('★ 橫額仲有「返 0082（真實）」', !!doc.getElementById('mockBackReal'));
+  ok('★ 頂部 bar 亦有「離開示範」（唔使搵橫額都撳到）', !!doc.getElementById('topMockExit'));
+  ok('側邊欄有「切換旅團」入口', !!doc.getElementById('unitSwitch'));
+
+  /* 手機「更多」選單：示範模式應該係「離開示範」，唔係淨係「登出」 */
+  doc.querySelector('[data-nav="more"]')?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await wait(150);
+  const moreText = [...doc.querySelectorAll('[data-more]')].map(b => b.textContent.trim()).join('|');
+  ok('★ 「更多」選單寫住「離開示範」（唔係登出之後困喺登入畫面）',
+    /離開示範/.test(moreText), moreText || '（搵唔到選單）');
+
+  /* 撳頂部嗰粒：一定要清晒示範痕跡再轉頁 */
+  doc.getElementById('topMockExit')?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await wait(80);
+  ok('★ 撳頂部「離開示範」即刻清走示範記錄',
+    window.localStorage.getItem('venture82.mode.v2') === null
+    && window.localStorage.getItem('venture82.unitChosen.v2') === null);
+  ok('轉頁之後唔會再帶 mock=1／u=', !/mock=1/.test(nav.href) && !/[?&]u=/.test(nav.href), nav.href);
+}
+
+/* ============================================================
+   ⑦ 伺服器端 Registry：變數名寫法同診斷
+   ============================================================ */
+section('Vercel 環境變數登記（彈性寫法）');
+{
+  ok('TROOP_<編號>_BACKEND 認得', !!getRegistry()['0081']);
+  ok('TROOP_<編號>_APIKEY 唔會出現在公開清單',
+    listPublicUnits()['0081'].apiKey === undefined && listPublicUnits()['0081'].gasUrl === undefined);
+  ok('公開清單講清楚後端已驗證', listPublicUnits()['0081'].backendReady === true);
+  ok('getTrustedUnit 拎到後端＋伺服器端 Key', getTrustedUnit('0081')?.apiKey === 'troop_81_secret_should_never_reach_browser');
+
+  /* 常見打錯／另一種寫法 */
+  process.env.TROOP_82_URL = GAS_82;                     // 用 URL 代替 BACKEND
+  process.env.TROOP_0099_BACKEND_URL = GAS_82;           // 用 BACKEND_URL
+  process.env.TROOP_0100_GASURL = GAS_82;                // 用 GASURL（舊名）
+  process.env.TROOP_0101_KEY = 'k101';                   // 用 KEY 代替 APIKEY
+  process.env.TROOP0082_BACKEND = GAS_82;                // 打錯名（少一個 _）
+  process.env.TROOP_82_BACKENDXD = 'oops';               // 打錯名（多咗字）
+
+  const reg = getRegistry();
+  ok('TROOP_82_URL 都認得（唔一定要叫 BACKEND）', !!reg['82'] && reg['82'].backendTrusted);
+  ok('TROOP_0099_BACKEND_URL 都認得', !!reg['0099'] && reg['0099'].backendTrusted);
+  ok('TROOP_0100_GASURL 都認得', !!reg['0100'] && reg['0100'].backendTrusted);
+  ok('TROOP_0101_KEY 當 API Key 用', reg['0101']?.backend?.apiKey === 'k101');
+
+  /* 前導零：TROOP_82_* 同 TROOP_0082_* 要互通 */
+  ok('TROOP_82_URL 亦可以當 0082 用', !!reg['0082'] || !!reg['82']);
+
+  const d = registryDiagnostics();
+  ok('診斷列出認到嘅旅團', d.ids.includes('0081') && d.count >= 1, JSON.stringify(d.ids));
+  ok('★ 診斷會指出打錯名嘅變數（可能就係旅團唔出現嘅原因）',
+    d.suspicious.includes('TROOP0082_BACKEND') && d.suspicious.includes('TROOP_82_BACKENDXD'),
+    JSON.stringify(d.suspicious));
+  ok('診斷列出有 Key 嘅旅團（只有名）', d.withKey.includes('0081'));
+  ok('★ 診斷永遠唔會洩漏 Key 值',
+    !JSON.stringify(d).includes('troop_81_secret_should_never_reach_browser'));
+  ok('診斷會講明 /exec 白名單要求', /script\.google\.com/.test(d.notice));
+
+  /* 簡寫：TROOP_0095 = <exec URL> */
+  process.env.TROOP_0095 = GAS_82;
+  ok('簡寫 TROOP_0095 = /exec 都認得', getRegistry()['0095']?.backendTrusted === true);
+  ok('簡寫都唔會被當成打錯名', registryDiagnostics().recognizedNames.includes('TROOP_0095'));
+  process.env.TROOP_0094 = 'https://evil.example.com/exec';
+  ok('簡寫但唔係 GAS /exec → 唔會當後端（安全）', !getRegistry()['0094']?.backendTrusted);
+
+  /* 唔合法嘅後端 URL 要當「未設定」（唔可以變成攻擊入口） */
+  process.env.TROOP_0097_BACKEND = 'http://evil.example.com/exec';
+  const reg2 = getRegistry();
+  ok('非 GAS /exec 嘅 URL 唔會被信任', reg2['0097']?.backendTrusted === false);
+  ok('唔信任嘅旅團攞唔到後端', getTrustedUnit('0097') === null);
+  ok('但公開清單會照列出嚟（畀管理員見到未設定好）',
+    listPublicUnits()['0097']?.backendReady === false);
+
+  /* /api/units?diag=1 */
+  const res = callUnitsApi('api/units?diag=1');
+  ok('★ /api/units?diag=1 回傳診斷', res.statusCode === 200 && !!res.body?.diag);
+  ok('診斷唔會帶任何值落 public units', !JSON.stringify(res.body.units).includes('troop_81_secret'));
+  const resNoDiag = callUnitsApi('api/units');
+  ok('冇 diag 就唔會多送診斷資料', resNoDiag.body.diag === undefined);
+  ok('清單回 count', resNoDiag.body.count === Object.keys(resNoDiag.body.units).length);
+
+  /* TROOPS_JSON：一次過登記（應急用） */
+  process.env.TROOPS_JSON = JSON.stringify({ '0096': { backend: GAS_82, name: '第九十六旅' } });
+  ok('TROOPS_JSON 都開得旅團', !!getRegistry()['0096']);
+  ok('TROOPS_JSON 唔會被列做「打錯名」', !registryDiagnostics().suspicious.includes('TROOPS_JSON'));
+  process.env.TROOPS_JSON = '唔係 JSON';
+  ok('TROOPS_JSON 壞咗唔會拖冧 Registry', typeof getRegistry() === 'object');
+  delete process.env.TROOPS_JSON;
+
+  for (const k of ['TROOP_82_URL', 'TROOP_0099_BACKEND_URL', 'TROOP_0100_GASURL', 'TROOP_0101_KEY',
+    'TROOP0082_BACKEND', 'TROOP_82_BACKENDXD', 'TROOP_0097_BACKEND', 'TROOP_0095', 'TROOP_0094']) delete process.env[k];
+}
+
+if (errors.length) {
+  console.log(`\n捕捉到 ${errors.length} 個 console.error：`);
+  errors.slice(0, 6).forEach(e => console.log('  • ' + e.slice(0, 200)));
+}
+const ms = Date.now() - t0;
+console.log(`\n──────── 旅團登記／示範模式測試結果：${pass} 通過 / ${fail} 失敗（${ms} ms）────────`);
+process.exit(fail ? 1 : 0);

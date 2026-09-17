@@ -3,10 +3,13 @@
    ============================================================ */
 
 import {
-  init, load, isMock, currentUnit, seedInfo, enterMock, exitMock,
-  switchUnit, clearMockData, resetToGate, CHOSEN_UNIT_KEY
+  init, load, isMock, currentUnit, seedInfo, enterMock, exitMock, exitMockToUnit,
+  switchUnit, clearMockData, resetToGate, setMode, setUnitCode, lastRealUnit, CHOSEN_UNIT_KEY
 } from './lib/store.js';
-import { loadRegistry, unitList, unitEntry, defaultUnitCode, registryReachable } from './lib/units.js';
+import {
+  loadRegistry, unitList, unitEntry, defaultUnitCode, registryReachable,
+  serverUnitsStatus, fetchRegistryDiag
+} from './lib/units.js';
 import {
   adminInbox, validateApplication, submitApplication, adminChecklist,
   applicationText, downloadCodeGs, copyCodeGs
@@ -81,6 +84,8 @@ async function boot() {
      再開啟「改完自動存去後端」。失敗都唔會阻住開 app（照用本機資料）。 */
   syncBoot();
 
+  /* 示範 session 唔可以帶入真實旅團（否則會用「示範領袖」身份改真資料） */
+  if (!isMock() && current()?.mock) logout();
   if (isMock() && !current()) loginAsMock('leader');
   if (!current()) renderLogin();
   else render();
@@ -196,8 +201,24 @@ function normAt(v) {
    ============================================================ */
 function unitChosen() {
   const url = new URLSearchParams(location.search);
-  if (url.get('u') || url.get('mock') === '1') return true;
-  try { return !!localStorage.getItem(CHOSEN_UNIT_KEY); } catch { return false; }
+  const urlUnit = (url.get('u') || '').trim();
+  if (urlUnit || url.get('mock') === '1') return true;
+  let saved = '';
+  try { saved = localStorage.getItem(CHOSEN_UNIT_KEY) || ''; } catch { return false; }
+  if (!saved) return false;
+  /* 示範模式**唔會**自動記住：下次由普通網址開（例如書籤、首頁連結）一律返旅團選擇閘。
+     以前記住咗 MOCK，之後每次開網站都靜靜雞入返示範，用家就覺得「入咗 MOCK 走唔出」。
+     想入示範，撳閘嘅 MOCK 或者用 ?mock=1 連結就得。 */
+  if (saved.toUpperCase() === 'MOCK') return false;
+  /* 例外：記住咗一個 Registry 已經冇嘅旅團（例如之前係 Git entry、而家改咗用
+     環境變數開、或者打錯編號）→ 唔好靜靜雞入一個空殼旅團，返去選擇閘再揀。
+     只喺「Registry 真係讀到」嘅時候至咁做，否則網絡一斷就會被踢返出嚟。 */
+  if (registryReachable() && saved.toUpperCase() !== 'MOCK') {
+    const known = unitList().some(u => String(u.code) === String(saved)
+      || String(u.code).replace(/^0+/, '') === String(saved).replace(/^0+/, ''));
+    if (!known) return false;
+  }
+  return true;
 }
 function markChosen(code) {
   try { localStorage.setItem(CHOSEN_UNIT_KEY, code); } catch { /* ignore */ }
@@ -205,9 +226,38 @@ function markChosen(code) {
 /* 清選擇記錄＋模擬狀態，返去旅團選擇閘（同「離開示範」共用，見 store.resetToGate） */
 function forgetChoice() { resetToGate(); }
 
+/** 伺服器端 Registry（Vercel 環境變數）而家點？ */
+function serverRegistryLine() {
+  const s = serverUnitsStatus();
+  if (s.ok) {
+    return `${icon('check', 13)} 伺服器登記（Vercel 環境變數）：<b>${s.count}</b> 個旅團`;
+  }
+  if (!s.at) return `${icon('clock', 13)} 伺服器登記：未檢查`;
+  return `${icon('alert', 13)} 讀唔到伺服器登記清單（<code>${esc(s.error || '網絡錯誤')}</code>）`;
+}
+
 function renderUnitGate() {
   document.body.classList.add('login-body');
   const units = unitList();
+  const serverUnits = units.filter(x => x.fromApi || x.server);
+  const st = serverUnitsStatus();
+  /* 清單空咗，係「伺服器讀唔到」定「真係一個都未登記」？兩個講法完全唔同。 */
+  const emptyBox = !units.length ? `
+    <div class="note-box ${st.at && !st.ok ? 'warn' : ''}">${icon(st.at && !st.ok ? 'alert' : 'info', 15)}
+      <div>
+        <b>${st.at && !st.ok ? '讀唔到伺服器嘅旅團登記清單。' : '暫時未有旅團登記。'}</b>
+        ${st.at && !st.ok
+          ? `（<code>${esc(st.error || '')}</code>）呢個通常係以下其中一樣：
+             <ul style="margin:6px 0 0;padding-left:18px;line-height:1.8">
+               <li>環境變數加咗但未 <b>Redeploy</b>（加／改完一定要重新部署先生效）</li>
+               <li>變數名唔啱：要 <code>TROOP_&lt;編號&gt;_BACKEND</code>（＋<code>_APIKEY</code>、<code>_NAME</code>）</li>
+               <li>部署未完成／網絡問題 —— 可以撳下面「重新載入清單」再試</li>
+             </ul>
+             你亦可以撳「<b>診斷伺服器登記</b>」睇實際讀到啲咩，或直接<b>輸入旅團編號</b>入去。`
+          : `你可以揀下面嘅「試用示範（MOCK）」即刻試玩，或者撳「新旅團申請接入」登記自己旅團 —— 登記好之後，你嘅旅團就會喺呢度出現，由空白資料庫開始。`}
+      </div>
+    </div>` : '';
+
   app.innerHTML = `
   <div class="gate-wrap">
     <div class="gate-card">
@@ -219,26 +269,34 @@ function renderUnitGate() {
         </div>
       </div>
 
+      <div class="gate-status xs ${st.ok ? 'faint' : ''}" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:0 2px 10px">
+        <span>${serverRegistryLine()}</span>
+        <span class="grow"></span>
+        <button class="btn btn-xs" data-act="reload">${icon('refresh', 13)} 重新載入清單</button>
+        <button class="btn btn-xs" data-act="diag">${icon('target', 13)} 診斷伺服器登記</button>
+      </div>
+
       <div class="gate-list">
         ${units.map(x => `
           <button class="gate-unit" data-pick="${esc(x.code)}">
             <span class="code">${esc(x.code)}</span>
             <span class="grow">
               <span class="semibold" style="display:block">${esc(x.name || '')}</span>
-              <span class="xs faint">${esc(x.nameEn || x.section || '')}${x.local ? ' · 本地旅團' : ''}</span>
+              <span class="xs faint">${esc(x.nameEn || x.section || '')}${x.local ? ' · 本地旅團' : ((x.fromApi || x.server) ? ' · Vercel 登記' : '')}</span>
+              ${(x.fromApi || x.server) && x.backendReady === false
+                ? `<span class="xs" style="display:block;color:var(--warn,#B8892B)">${'⚠'} 後端未設定／URL 未通過驗證 —— 要加 <code>TROOP_${esc(x.code)}_BACKEND</code>（https://script.google.com/macros/s/…/exec）</span>`
+                : ''}
             </span>
             ${icon('chevronR', 17)}
-          </button>`).join('') || `
-          ${registryReachable()
-            ? `<div class="note-box">${icon('info', 15)}<div><b>暫時未有旅團登記。</b>你可以揀下面嘅「試用示範（MOCK）」即刻試玩，
-                 或者撳「新旅團申請接入」登記自己旅團 —— 登記好之後，你嘅旅團就會喺呢度出現，由空白資料庫開始。</div></div>`
-            : `<div class="note-box warn">${icon('alert', 15)}<div>讀唔到 <code>data/units.json</code> —— 請用 HTTP 伺服器開啟呢個網站（唔好直接雙擊 HTML）。</div></div>`}`}
+          </button>`).join('')}
+
+        ${emptyBox}
 
         <button class="gate-unit mock" data-pick="MOCK">
           <span class="code">MOCK</span>
           <span class="grow">
             <span class="semibold" style="display:block">試用示範（MOCK）</span>
-            <span class="xs faint">假資料，同真實資料完全隔離，隨便試都唔會影響真數據</span>
+            <span class="xs faint">假資料，同真實資料完全隔離，隨便試都唔會影響真數據（隨時可以「離開示範」）</span>
           </span>
           ${icon('chevronR', 17)}
         </button>
@@ -246,6 +304,17 @@ function renderUnitGate() {
 
       <div class="gate-apply" style="display:flex;flex-direction:column;gap:12px">
         <div class="row-between wrap gap-8">
+          <div class="grow" style="min-width:240px">
+            <div class="semibold">已經喺 Vercel 登記咗，但清單見唔到？</div>
+            <div class="xs faint">直接輸入旅團編號一樣入得（例如 <code>0082</code>）；入到去先撳「診斷伺服器登記」查原因。</div>
+          </div>
+          <div class="row gap-8 wrap" style="align-items:center">
+            <input class="input" id="gateCode" placeholder="旅團編號，例：0082" style="width:170px" inputmode="numeric">
+            <button class="btn btn-sm btn-primary" data-act="goto-code">${icon('chevronR', 15)} 直接進入</button>
+          </div>
+        </div>
+
+        <div class="row-between wrap gap-8" style="border-top:1px solid var(--line-2);padding-top:12px">
           <div class="grow" style="min-width:240px">
             <div class="semibold">你嘅旅團未喺清單入面？（新旅團部署）</div>
             <div class="xs faint">每個旅團用自己嘅 Google Sheet 做後端。毋須登入，先下載 <code>Code.gs</code> → 建立 Google Sheet → 執行 <code>initializeSheets</code> → 部署做網頁應用程式 → 把 URL 及 API Key 提交登記。</div>
@@ -270,16 +339,110 @@ function renderUnitGate() {
   app.querySelectorAll('[data-pick]').forEach(b => b.addEventListener('click', () => {
     const code = b.dataset.pick;
     markChosen(code);
-    const u = new URL(location.href);
-    if (code === 'MOCK') { u.searchParams.set('mock', '1'); u.searchParams.set('u', 'MOCK'); }
-    else { u.searchParams.set('u', code); u.searchParams.delete('mock'); }
-    u.hash = '';
-    location.href = u.toString();
+    gotoUnit(code, { remember: false });
   }));
 
   app.querySelector('[data-act="dl-gs"]')?.addEventListener('click', () => downloadCodeGs());
   app.querySelector('[data-act="guide"]')?.addEventListener('click', openDeployGuideModal);
   app.querySelector('[data-act="apply"]')?.addEventListener('click', openApplication);
+  app.querySelector('[data-act="reload"]')?.addEventListener('click', async () => {
+    app.innerHTML = loadingScreen();
+    await loadRegistry(true);
+    renderUnitGate();
+    const s = serverUnitsStatus();
+    toast(s.ok ? `已重新載入：伺服器登記 ${s.count} 個旅團` : `仲係讀唔到伺服器清單：${s.error}`, s.ok ? 'ok' : 'err');
+  });
+  app.querySelector('[data-act="diag"]')?.addEventListener('click', openRegistryDiag);
+  const goCode = () => {
+    const raw = app.querySelector('#gateCode')?.value.trim() || '';
+    if (!raw) { toast('請輸入旅團編號', 'err'); return; }
+    gotoUnit(raw);
+  };
+  app.querySelector('[data-act="goto-code"]')?.addEventListener('click', goCode);
+  app.querySelector('#gateCode')?.addEventListener('keydown', e => { if (e.key === 'Enter') goCode(); });
+}
+
+/* ============================================================
+   去某個旅團（真實／示範都由呢度行）
+   真實旅團一定要帶 ?u=<編號> 而**冇** mock=1 —— store.init() 見到 ?u= 就會用返真實模式，
+   唔會再被 localStorage 入面嘅 mode=mock 蓋住（2026-09「揀極都係 MOCK」嘅根本原因）。
+   ============================================================ */
+function gotoUnit(code, { remember = true } = {}) {
+  const isMockCode = String(code).toUpperCase() === 'MOCK';
+  if (remember) markChosen(isMockCode ? 'MOCK' : code);
+  if (isMockCode) { enterMock(); return; }
+  setMode('real');
+  setUnitCode(code);
+  const u = new URL(location.href);
+  u.searchParams.set('u', code);
+  u.searchParams.delete('mock');
+  u.hash = '';
+  location.href = u.toString();
+}
+
+/* ============================================================
+   診斷：伺服器端到底讀到啲咩？（唔會顯示 API Key）
+   ============================================================ */
+async function openRegistryDiag() {
+  const local = serverUnitsStatus();
+  const d = await fetchRegistryDiag();
+  const rows = [];
+  rows.push(['瀏覽器讀 <code>/api/units</code>', local.ok
+    ? `<span class="badge b-ok">OK</span>&nbsp; ${local.count} 個旅團`
+    : `<span class="badge b-warn">失敗</span> <code>${esc(local.error || '')}</code>`]);
+  rows.push(['伺服器端回應', d.ok
+    ? `<span class="badge b-ok">OK</span>`
+    : `<span class="badge b-warn">有問題</span> <code>${esc(d.error || '')}</code>`]);
+  rows.push(['伺服器認到嘅旅團', (d.ids || []).length
+    ? (d.ids || []).map(i => `<code>${esc(i)}</code>`).join('、')
+    : '（一個都認唔到）']);
+  rows.push(['後端 /exec 已通過白名單', (d.trusted || []).length
+    ? (d.trusted || []).map(i => `<code>${esc(i)}</code>`).join('、')
+    : '<span class="muted">冇 —— 旅團一定要有 <code>TROOP_&lt;編號&gt;_BACKEND</code>（要 <code>https://script.google.com/macros/s/…/exec</code>）先生效</span>']);
+  rows.push(['有 API Key', (d.withKey || []).length
+    ? (d.withKey || []).map(i => `<code>${esc(i)}</code>`).join('、')
+    : '<span class="muted">冇（未設定 _APIKEY）</span>']);
+  rows.push(['執行環境', d.onVercel
+    ? '<span class="badge b-ok">Vercel</span>'
+    : `<span class="badge b-warn">唔似 Vercel</span> <span class="xs muted">${esc(d.env || '')}</span>`]);
+
+  const suspicious = d.suspicious || [];
+  const recognized = d.recognizedNames || [];
+
+  await modal({
+    title: '伺服器登記診斷',
+    sub: '睇睇 Vercel 環境變數有冇被讀到（唔會顯示任何 API Key）',
+    wide: true,
+    body: `
+      <div class="card" style="padding:14px">
+        <table class="table" style="font-size:13px"><tbody>
+          ${rows.map(([k, v]) => `<tr><td style="width:190px" class="sm semibold">${k}</td><td class="sm">${v}</td></tr>`).join('')}
+        </tbody></table>
+      </div>
+
+      ${recognized.length ? `
+      <div class="note-box info mt-12">${icon('check', 15)}<div>
+        <b>已識別嘅變數（名）</b><div class="xs mono" style="word-break:break-all">${recognized.map(esc).join('<br>')}</div>
+      </div></div>` : ''}
+
+      ${suspicious.length ? `
+      <div class="note-box warn mt-12">${icon('alert', 15)}<div>
+        <b>見到疑似旅團變數但認唔到（可能就係佢令旅團唔出現）</b>
+        <div class="xs mono" style="word-break:break-all">${suspicious.map(esc).join('<br>')}</div>
+        <div class="xs" style="margin-top:6px">正確格式：<code>TROOP_&lt;編號&gt;_BACKEND</code>、<code>TROOP_&lt;編號&gt;_APIKEY</code>、<code>TROOP_&lt;編號&gt;_NAME</code>（<code>GASURL</code>、<code>URL</code>、<code>KEY</code> 等都認得）。</div>
+      </div></div>` : ''}
+
+      <div class="note-box info mt-12">${icon('refresh', 15)}<div>
+        加／改完環境變數一定要喺 Vercel 撳 <b>Redeploy</b>；只係重新整理瀏覽器係唔會生效㗎。
+      </div></div>`,
+    actions: [{ label: '重新載入旅團清單', class: 'btn', value: 'reload' }, { label: '關閉', class: 'btn-primary', value: null }]
+  }).then(async v => {
+    if (v === 'reload') {
+      app.innerHTML = loadingScreen();
+      await loadRegistry(true);
+      renderUnitGate();
+    }
+  });
 }
 
 /* ============================================================
@@ -517,6 +680,24 @@ function renderLogin() {
   const u = unitEntry(code) || {};
   const showDefaultHint = accounts().some(a => a.defaultPw);
 
+  /* 示範模式嘅登入畫面都要有「離開示範」——
+     以前只有 app 入面嗰條黃色橫額有，一旦登出／未登入（例如喺「更多」撳登出）
+     就完全冇掣返出去，用家感覺就係「入咗 MOCK 出唔返嚟」。 */
+  const mockBanner = isMock() ? `
+    <div class="gate-mock-banner" style="margin-bottom:14px;padding:12px 14px;border-radius:12px;
+      background:repeating-linear-gradient(45deg,#B8892B,#B8892B 12px,#A2761F 12px,#A2761F 24px);color:#fff">
+      <div class="semibold" style="font-size:13.5px">示範模式（MOCK）中 —— 而家睇嘅係假資料</div>
+      <div class="xs" style="opacity:.92;margin:4px 0 10px">示範資料同真實旅團完全分開，唔會寫入任何 Google Sheet。</div>
+      <div class="row gap-8 wrap">
+        ${lastRealUnit() ? `<button class="btn btn-sm" id="btnBackReal">${icon('chevronL', 14)} 返 ${esc(lastRealUnit())}（真實旅團）</button>` : ''}
+        <button class="btn btn-sm" id="btnExitMock">${icon('logout', 14)} 離開示範（返旅團選擇）</button>
+        <button class="btn btn-sm" id="btnGate2">${icon('refresh', 14)} 揀其他旅團</button>
+      </div>
+    </div>` : `
+    <div style="margin-bottom:14px" class="xs faint">
+      <button class="btn btn-xs" id="btnGate2">${icon('refresh', 13)} 旅團選擇畫面</button>
+    </div>`;
+
   app.innerHTML = `
   <div class="login-wrap">
     <aside class="login-hero">
@@ -543,6 +724,7 @@ function renderLogin() {
 
     <main class="login-panel">
       <div class="login-card">
+        ${mockBanner}
         ${units.length > 1 ? `
         <div class="field mb-16">
           <label class="label">旅團</label>
@@ -629,6 +811,10 @@ function renderLogin() {
   app.querySelector('#loginDlGs')?.addEventListener('click', () => downloadCodeGs());
   app.querySelector('#loginGuide')?.addEventListener('click', openDeployGuideModal);
   app.querySelector('#btnGate')?.addEventListener('click', () => forgetChoice());
+  /* 示範模式登入畫面嘅逃生門（見上面 mockBanner 註釋） */
+  app.querySelector('#btnGate2')?.addEventListener('click', () => forgetChoice());
+  app.querySelector('#btnExitMock')?.addEventListener('click', () => exitMock());
+  app.querySelector('#btnBackReal')?.addEventListener('click', () => exitMockToUnit());
 
   app.querySelector('#loginForm').addEventListener('submit', async e => {
     e.preventDefault();
@@ -719,6 +905,7 @@ function render() {
         </div>
         <div class="row gap-8">
           <span id="syncChip" class="no-print"></span>
+          ${mock ? `<button class="btn btn-sm no-print" id="topMockExit" title="離開示範模式">${icon('logout', 14)} 離開示範</button>` : ''}
           ${notices().length ? `<span class="badge b-warn no-print"><span class="dot"></span>${notices().length} 項提示</span>` : ''}
           <button class="btn btn-ghost btn-sm hide-desktop" id="btnLogout2" title="登出">${icon('logout', 16)}</button>
         </div>
@@ -754,6 +941,7 @@ function render() {
     })) { logout(); document.body.classList.add('login-body'); renderLogin(); }
   }));
   app.querySelector('#unitSwitch')?.addEventListener('click', unitPicker);
+  app.querySelector('#topMockExit')?.addEventListener('click', () => exitMock());
 
   /* 示範橫額「以 XXX 身份預覽」：<select> 撳落去選值係 change 事件（唔係 click），
      以前用 document click 攞 e.target.id 永遠攞唔到 → 下拉框係壞嘅。 */
@@ -791,15 +979,17 @@ function render() {
 
 function mockBar() {
   const role = currentRole();
+  const back = lastRealUnit();
   return `
   <div class="mock-bar">
     <span class="tag">MOCK 示範模式</span>
-    <span>你而家睇嘅係假資料（${esc(currentUnit())}），所有改動只會寫入示範空間，唔會影響真實資料。</span>
+    <span>你而家睇嘅係假資料，所有改動只會寫入示範空間，唔會影響真實資料。</span>
     <div class="btns">
       <select id="mockRole" class="select" style="height:30px;font-size:12.5px;padding:0 8px">
         ${['leader', 'exco', 'super'].map(r => `<option value="${r}" ${role === r ? 'selected' : ''}>以 ${ROLES[r].name} 身份預覽</option>`).join('')}
       </select>
       <button id="mockReset">重設示範</button>
+      ${back ? `<button id="mockBackReal">返 ${esc(back)}（真實）</button>` : ''}
       <button id="mockExit">離開示範</button>
     </div>
   </div>`;
@@ -822,7 +1012,7 @@ function moreSheet() {
       ${items.map(n => `<button class="role-card" data-more="${n.id}" style="flex-direction:column;align-items:flex-start;gap:6px">
         <span class="role-ic">${icon(n.icon, 18)}</span><span class="role-name">${n.label}</span></button>`).join('')}
       <button class="role-card" data-more="logout" style="flex-direction:column;align-items:flex-start;gap:6px">
-        <span class="role-ic">${icon('logout', 18)}</span><span class="role-name">登出</span></button>
+        <span class="role-ic">${icon('logout', 18)}</span><span class="role-name">${isMock() ? '離開示範' : '登出'}</span></button>
     </div>`,
     actions: [],
     onMount: el => {
@@ -830,7 +1020,12 @@ function moreSheet() {
         const id = b.dataset.more;
         const { closeModal } = await import('./lib/util.js');
         closeModal(null);
-        if (id === 'logout') { logout(); renderLogin(); return; }
+        /* 示範模式冇「登出」呢回事 —— 以前呢度 logout() + renderLogin() 會將用家
+           留喺一個示範模式嘅登入畫面，又冇橫額又冇掣，睇落好似走唔到。 */
+        if (id === 'logout') {
+          if (isMock()) { exitMock(); return; }
+          logout(); renderLogin(); return;
+        }
         go('#/' + id);
       }));
     }
@@ -848,18 +1043,31 @@ async function unitPicker() {
       ${units.map(x => `<button class="unit-card" data-unit="${esc(x.code)}" ${x.code === cur ? 'disabled' : ''}>
         <span class="code">${esc(x.code)}</span>
         <span class="grow"><span class="semibold" style="display:block">${esc(x.name || '')}</span>
-          <span class="xs faint">${esc(x.nameEn || '')} ${x.local ? '· 本地旅團' : ''}</span></span>
+          <span class="xs faint">${esc(x.nameEn || '')} ${x.local ? '· 本地旅團' : ((x.fromApi || x.server) ? '· Vercel 登記' : '')}</span></span>
         ${x.code === cur ? '<span class="badge b-brand">目前</span>' : icon('chevronR', 16)}
       </button>`).join('')}
     </div>
-    <div class="hint mt-16">冇你想揀嘅旅團？去「帳號與系統 → 旅團設定」睇新增方法（喺 <code>data/units.json</code> 註冊）。</div>`,
+    ${isMock() ? `<div class="note-box warn mt-16">${icon('alert', 15)}<div>
+        你而家喺<b>示範模式</b> —— 揀上面任何一個旅團都會離開示範，返回真實資料（示範資料唔會受影響）。
+      </div></div>` : ''}
+    <div class="row gap-8 wrap mt-16">
+      <button class="btn btn-sm" data-act="pick-gate">${icon('refresh', 14)} 旅團選擇畫面（重新載入清單／轉示範）</button>
+      <button class="btn btn-sm" data-act="pick-diag">${icon('target', 14)} 診斷伺服器登記</button>
+    </div>
+    <div class="hint mt-8">冇你想揀嘅旅團？新旅團要由管理員喺 Vercel 加 <code>TROOP_&lt;編號&gt;_BACKEND</code> 等環境變數（詳見 <code>docs/ADD_NEW_UNIT.md</code>）。</div>`,
     actions: [{ label: '關閉', class: 'btn', value: null }],
     onMount: el => {
       el.querySelectorAll('[data-unit]').forEach(b => b.addEventListener('click', () => {
         const code = b.dataset.unit;
-        if (code === cur) return;
+        if (code === cur && !isMock()) return;
         switchUnit(code);
       }));
+      el.querySelector('[data-act="pick-gate"]')?.addEventListener('click', () => forgetChoice());
+      el.querySelector('[data-act="pick-diag"]')?.addEventListener('click', async () => {
+        const { closeModal } = await import('./lib/util.js');
+        closeModal(null);
+        openRegistryDiag();
+      });
     }
   });
 }
@@ -869,6 +1077,7 @@ document.addEventListener('click', async e => {
   const t = e.target;
   if (!(t instanceof HTMLElement)) return;
   if (t.id === 'mockExit') { exitMock(); return; }
+  if (t.id === 'mockBackReal') { exitMockToUnit(); return; }
   if (t.id === 'mockReset') {
     if (await confirmDlg({ title: '重設示範資料', okText: '確定重設', message: '會把示範資料還原成 <code>data/mock/</code> 嘅初始內容。' })) {
       clearMockData();

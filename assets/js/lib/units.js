@@ -47,6 +47,65 @@ export function registry() {
 let regReachable = false;
 export function registryReachable() { return regReachable; }
 
+/* ---------------- 伺服器端 Registry（Vercel 環境變數）狀態 ----------------
+   2026-09 團長回報「喺 Vercel 加咗 TROOP_*，但首頁揀唔到旅團」。
+   以前 /api/units 一失敗（未 redeploy、環境變數名打錯、函數 500…）
+   前端就靜靜雞當「冇旅團」，得一句「暫時未有旅團登記」—— 完全查唔到原因。
+   而家每次讀完都留低狀態，旅團閘可以照計出嚟畀管理員睇。 */
+let serverStatus = { ok: false, status: 0, count: 0, error: '', at: '' };
+export function serverUnitsStatus() { return { ...serverStatus }; }
+
+const API_UNITS_URL = 'api/units';
+const API_DIAG_URL = 'api/units?diag=1';
+
+/** 由 /api/units 攞伺服器端（環境變數）定義嘅旅團；靜態部署／未設定就回傳空物件 */
+async function fetchServerUnits() {
+  const url = API_UNITS_URL + '?_=' + Date.now();
+  let lastErr = '';
+  let lastCode = 0;
+  for (let attempt = 0; attempt < 2; attempt++) {          // 一次重試：redeploy 中／冷啟動
+    try {
+      const r = await fetch(url, { cache: 'no-store' });
+      if (r.ok) {
+        const j = await r.json();
+        const units = (j && j.units && typeof j.units === 'object') ? j.units : {};
+        serverStatus = { ok: true, status: r.status, count: Object.keys(units).length, error: '', at: new Date().toISOString() };
+        return units;
+      }
+      lastErr = `HTTP ${r.status}`; lastCode = r.status;
+      /* 404／405 ＝ 呢個部署根本冇呢個 API（純靜態網頁），重試都冇用 */
+      if (r.status === 404 || r.status === 405 || r.status === 501) break;
+    } catch (e) {
+      lastErr = e?.message || String(e); lastCode = 0;
+    }
+    if (attempt === 0) await sleep(200);
+  }
+  /* 記住係「讀唔到」，畀旅團閘顯示（連 HTTP code）—— 好過靜靜雞當冇旅團 */
+  serverStatus = { ok: false, status: lastCode, count: 0, error: lastErr, at: new Date().toISOString() };
+  return {};
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+/**
+ * 伺服器端 Registry 診斷（只喺旅團閘撳「診斷」時叫）。
+ * 回傳嘅係**變數名同布林值**，永遠唔會回傳 API Key／完整 /exec 網址。
+ */
+export async function fetchRegistryDiag() {
+  try {
+    const r = await fetch(API_DIAG_URL + '&_=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) return { ok: false, error: `HTTP ${r.status}`, status: r.status };
+    const j = await r.json();
+    /* /api/units?diag=1 回 { units, diag }；唔支援 diag 嘅舊部署只回 { units } */
+    if (!j || !j.diag) {
+      return { ok: false, server: true, error: '呢個部署嘅 /api/units 未支援診斷（請重新部署最新版本）', count: Object.keys(j?.units || {}).length };
+    }
+    return { ok: true, ...j.diag };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
 export async function loadRegistry(force = false) {
   if (cache && !force) return cache;
   let fromFile = null;
@@ -62,24 +121,21 @@ export async function loadRegistry(force = false) {
   if (fromFile && fromFile.units) {
     const merged = { ...fromFile, units: { ...fromFile.units } };
     Object.entries(fromApi).forEach(([code, u]) => {
-      merged.units[code] = { ...(merged.units[code] || {}), ...u, fromApi: true };
+      merged.units[code] = { ...(merged.units[code] || {}), ...u, fromApi: true, server: true };
     });
     cache = merged;
     try { localStorage.setItem(REG_CACHE, JSON.stringify(merged)); } catch { /* ignore */ }
+  } else if (Object.keys(fromApi).length) {
+    /* 讀唔到 data/units.json（例如 Vercel 唔會 bundle 呢個檔）但伺服器 Registry 有嘢
+       → 直接用伺服器嗰份，唔好白白當冇旅團 */
+    cache = { schema: 2, defaultUnit: '', units: { ...fromApi } };
+    Object.values(cache.units).forEach(u => { u.fromApi = true; u.server = true; });
+    regReachable = true;
+    try { localStorage.setItem(REG_CACHE, JSON.stringify(cache)); } catch { /* ignore */ }
   } else {
     registry(); // 用快取或內建
   }
   return cache;
-}
-
-/** 由 /api/units 攞伺服器端（環境變數）定義嘅旅團；靜態部署／未設定就回傳空物件 */
-async function fetchServerUnits() {
-  try {
-    const r = await fetch('api/units?_=' + Date.now(), { cache: 'no-store' });
-    if (!r.ok) return {};
-    const j = await r.json();
-    return (j && j.units && typeof j.units === 'object') ? j.units : {};
-  } catch (e) { return {}; }
 }
 
 export function localUnits() { return readLocal(); }
