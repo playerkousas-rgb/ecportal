@@ -541,7 +541,7 @@ export function matchMemberByName(text) {
   // 1) 全名包含喺文字入面
   const full = list.find(m => m.name && t.includes(m.name));
   if (full) return full;
-  // 2) 文字本身係花名／名字一部分（例：日彤 → 劉日彤、天蔚 → 方天蔚）
+  // 2) 文字本身係花名／名字一部分（例：大文 → 陳大文、小明 → 李小明）
   const short = list
     .filter(m => m.name && m.name.length >= 3 && t.length >= 2 && m.name.includes(t))
     .sort((a, b) => a.name.length - b.name.length)[0];

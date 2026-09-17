@@ -21,18 +21,29 @@ ok('擋住非 GAS URL', !isTrustedExecUrl('https://evil.com/exec'));
 ok('擋住 GAS /dev URL', !isTrustedExecUrl('https://script.google.com/macros/s/AKfycbySGLBg5KuWzgM9EySiOIppqnzrL0QASIYLlhbCIHocGHcLHKbkMdvmhJvam3baG___/dev'));
 
 // 2. getRegistry & getTrustedUnit
-const reg = getRegistry();
-ok('Registry 讀取到 0082 旅團', !!reg['0082'], Object.keys(reg).join(','));
-ok('0082 旅團包含 code 與名稱', reg['0082']?.code === '0082' && reg['0082']?.name === '第八十二旅深資童軍團');
+/* 注意：data/units.json 而家冇任何旅團（0082 嘅資料已全清，
+   真旅團一律靠 Vercel 環境變數 TROOP_<編號>_* 登記）。
+   所以呢度先用環境變數開一個虛構旅團 TEST9 做 fixture。 */
+const TEST_GAS = 'https://script.google.com/macros/s/AKfycbTESTonlyFixtureNotARealDeploymentId000000000/exec';
+process.env.TROOP_TEST9_BACKEND = TEST_GAS;
+process.env.TROOP_TEST9_APIKEY = 'test9_secret_key';
+process.env.TROOP_TEST9_NAME = '測試旅深資童軍團';
 
-const trusted = getTrustedUnit('0082');
-ok('getTrustedUnit 取得 0082 可信後端', !!trusted && !!trusted.gasUrl);
+const reg = getRegistry();
+ok('Registry 讀取到環境變數登記嘅旅團', !!reg.TEST9, Object.keys(reg).join(','));
+ok('旅團包含 code 與名稱', reg.TEST9?.code === 'TEST9' && reg.TEST9?.name === '測試旅深資童軍團');
+ok('Registry 冇殘留 0082（資料已全清）', !reg['0082'], Object.keys(reg).join(','));
+
+const trusted = getTrustedUnit('TEST9');
+ok('getTrustedUnit 取得可信後端', !!trusted && !!trusted.gasUrl);
+ok('getTrustedUnit 帶埋伺服器端 API Key', trusted?.apiKey === 'test9_secret_key');
 ok('非白名單旅團回傳 null', getTrustedUnit('9999') === null);
+ok('0082 冇登記就攞唔到後端（唔會再借用舊旅團）', getTrustedUnit('0082') === null);
 
 // 3. listPublicUnits
 const pub = listPublicUnits();
-ok('公開清單包含 0082', !!pub['0082']);
-ok('公開清單絕不外洩 gasUrl / apiKey', pub['0082'].gasUrl === undefined && pub['0082'].apiKey === undefined);
+ok('公開清單包含登記咗嘅旅團', !!pub.TEST9);
+ok('公開清單絕不外洩 gasUrl / apiKey', pub.TEST9.gasUrl === undefined && pub.TEST9.apiKey === undefined);
 
 // 4. unitsHandler
 let resStatus = 0;
@@ -45,7 +56,7 @@ const mockRes = {
 };
 unitsHandler({ method: 'GET' }, mockRes);
 ok('unitsHandler 回傳 HTTP 200', resStatus === 200);
-ok('unitsHandler 回傳 units 物件', !!resJson?.units?.['0082']);
+ok('unitsHandler 回傳 units 物件', !!resJson?.units?.TEST9);
 
 // 5. 純環境變數開新旅團（唔改 Git 都開得）
 {

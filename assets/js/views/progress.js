@@ -513,11 +513,7 @@ export function render(params) {
 
 export function mount(root, params) {
   root.querySelectorAll('[data-go]').forEach(el => el.addEventListener('click', () => go(el.dataset.go)));
-  root.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => {
-    tab = b.dataset.tab;
-    go('#/progress/' + tab);
-    refresh();
-  }));
+  /* 分頁掣由 main.js 統一綁（ui.js tabs() → [data-tabnav]），呢度唔使再綁 */
 
   root.querySelectorAll('[data-act="settings"]').forEach(b => b.addEventListener('click', () => {
     tab = 'settings'; go('#/progress/settings'); refresh();

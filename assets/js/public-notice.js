@@ -256,10 +256,12 @@ function bindSignup(n, { closed, full }) {
     };
 
     /* 目的地：① 通告／旅團公開設定嘅網址 ② 同源 /api/proxy（伺服器端解析旅團後端） */
-    /* 只可以用「呢個旅團自己」嘅後端：唔喺 Registry 就唔可以借用其他旅團嘅（免送錯資料） */
+    /* 嚴格隔離：只可以用「呢個旅團自己」登記嘅後端。
+       以前會 fallback 去 registryData.backend（共用 ＝ 82 旅張 Sheet），
+       等於把 A 旅嘅報名寫咗入 B 旅張表 —— 所以唔再借用。 */
     const mine = registryData?.units?.[unitCode] || null;
     const direct = n.submitUrl || meta.notice?.submitUrl
-      || (mine ? (mine.backend?.gasUrl || registryData.backend?.gasUrl || '') : '') || '';
+      || (mine ? (mine.backend?.gasUrl || '') : '') || '';
     const endpoint = direct || (canUseProxy() ? 'api/proxy' : '');
     let delivered = false, serverMsg = '';
     if (endpoint) {

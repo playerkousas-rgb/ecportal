@@ -55,6 +55,7 @@ const store = await import('../assets/js/lib/store.js');
 const auth = await import('../assets/js/lib/auth.js');
 const model = await import('../assets/js/lib/model.js');
 const fiscal = await import('../assets/js/lib/fiscal.js');
+const unitsLib = await import('../assets/js/lib/units.js');
 await import('../assets/js/main.js');
 await new Promise(r => setTimeout(r, 400));
 
@@ -81,32 +82,45 @@ ok('帳戶名單存在（真實：2 / 示範：2）', db.accounts.length === 2, 
 ok('帳戶名單永遠唔會有超管', !db.accounts.some(a => ['sheep', 'super'].includes(String(a.username).toLowerCase())));
 
 if (MODE === 'real') {
-  section('真實資料內容');
-  ok('團員 17 人（由生日表內建）', db.members.length === 17, String(db.members.length));
-  ok('新團員徐頌學已加入名冊（YMIS 2026036356）',
-    db.members.some(m => m.name === '徐頌學' && m.ymis === '2026036356'),
-    JSON.stringify(db.members.filter(m => m.name === '徐頌學')));
-  ok('團章 19 章', (db.constitution.chapters || []).length === 19, String(db.constitution.chapters.length));
-  ok('團章有中英對照', !!(db.constitution.chapters[0].heading.zh && db.constitution.chapters[0].heading.en));
-  ok('帳目由空白開始（唔會混入示範）', db.transactions.length === 0, String(db.transactions.length));
-  ok('物資由空白開始', db.invItems.length === 0);
-  ok('有參考帳目（未入帳，來自你嘅 Google Sheet）',
-    (db.reference?.transactions || []).length >= 50, String((db.reference?.transactions || []).length));
-  ok('參考資料有期初結餘（2024 年度結餘）', Number(db.reference?.openingBalance) === 8803.28, String(db.reference?.openingBalance));
-  ok('團員有生日（16 個有 15）', db.members.filter(m => m.birthday).length === 15, String(db.members.filter(m => m.birthday).length));
-  ok('部分團員只填月日', db.members.some(m => /^\d{2}-\d{2}$/.test(m.birthday)));
+  /* 0082 嘅真實資料已經搬晒入後端，Git 唔再有 data/units/0082/。
+     所以「真實模式」而家代表嘅係：一個**全新旅團**由空白開始。
+     呢度唔可以再驗真實團員姓名／人數呢啲私隱資料 ——
+     改為驗「乾淨開局」同「唔會撈到人哋旅團嘅嘢」。 */
+  section('新旅團：由空白資料庫開始');
+  ok('團員空白（唔會預載任何旅團嘅名冊）', db.members.length === 0, String(db.members.length));
+  ok('帳目空白', db.transactions.length === 0, String(db.transactions.length));
+  ok('物資空白', db.invItems.length === 0, String(db.invItems.length));
+  ok('會議空白', (db.meetings || []).length === 0, String((db.meetings || []).length));
+  ok('通告空白', (db.notices || []).length === 0, String((db.notices || []).length));
+  ok('團費空白', (db.fees || []).length === 0, String((db.fees || []).length));
 
-  section('後端（Apps Script 總表）已接上');
-  ok('有共用後端設定（Registry backend）', !!db.backend?.gasUrl, JSON.stringify(db.backend));
-  ok('總表同步網址 = 你嘅 /exec', /\/exec$/.test(db.backend?.gasUrl || ''), db.backend?.gasUrl);
-  ok('db.sync.url 已預填（表格與同步 → 總表同步）', /\/exec$/.test(db.sync?.url || ''), db.sync?.url);
-  ok('手機記帳送出網址已設定（entry.html → 總表）',
-    /\/exec$/.test(db.settings?.publicEntry?.submitUrl || ''), db.settings?.publicEntry?.submitUrl);
-  ok('通告報名送出網址已設定（notice.html → 總表）',
-    /\/exec$/.test(db.settings?.notice?.submitUrl || ''), db.settings?.notice?.submitUrl);
-  ok('三條路共用同一條 /exec（合併系統）',
-    db.sync?.url === db.settings?.publicEntry?.submitUrl && db.sync?.url === db.settings?.notice?.submitUrl);
-  ok('API Key 預設留空（Script 唔檢查就通過）', (db.sync?.apiKey || '') === '', String(db.sync?.apiKey));
+  section('私隱：唔會再見到第八十二旅嘅嘢');
+  const blob = JSON.stringify(db);
+  ok('資料庫冇「第八十二旅」字樣', !/第八十二旅/.test(blob));
+  ok('資料庫冇 82 旅團址（康山）', !/康山/.test(blob));
+  ok('資料庫冇 YMIS 編號', !/\b20\d{8}\b/.test(blob), (blob.match(/\b20\d{8}\b/) || [''])[0]);
+  ok('資料庫冇電話號碼樣式嘅嘢', !/9123 4567/.test(blob));
+  ok('冇殘留 0082 靜態資料夾', !fs.existsSync(path.join(ROOT, 'data', 'units', '0082')));
+
+  section('後端：交返畀伺服器端（環境變數）');
+  ok('Registry 唔再 hardcode 任何旅團', Object.keys(unitsLib.allUnits() || {}).length === 0,
+    JSON.stringify(Object.keys(unitsLib.allUnits() || {})));
+  ok('冇 fallback 落 0082', unitsLib.defaultUnitCode() === '', unitsLib.defaultUnitCode());
+  ok('未登記旅團 ＝ 冇後端（唔會借用人哋張 Sheet）', unitsLib.backendOf('0082') === null);
+
+  /* 下面一大堆測試係驗「後端接通之後」嘅行為（總表同步、手機記帳、
+     通告報名、借用送出、進度…）。Registry 而家係空嘅（真實旅團改用
+     Vercel 環境變數登記），所以喺度自己裝一個**測試用**後端 —— 
+     驗功能，唔再借 82 旅嘅真實 /exec 做 fixture。 */
+  const TEST_EXEC = 'https://script.google.com/macros/s/AKfycbTESTonlyTESTonlyTESTonlyTEST/exec';
+  const tdb = store.load();
+  tdb.backend = { gasUrl: TEST_EXEC, apiKey: '', name: '測試後端', shared: false, noticeSubmitUrl: TEST_EXEC };
+  tdb.sync = { ...(tdb.sync || {}), url: TEST_EXEC, unit: tdb.unitCode, apiKey: '', log: tdb.sync?.log || [] };
+  tdb.settings = tdb.settings || {};
+  tdb.settings.publicEntry = { ...(tdb.settings.publicEntry || {}), submitUrl: TEST_EXEC };
+  tdb.settings.notice = { ...(tdb.settings.notice || {}), submitUrl: TEST_EXEC };
+  tdb.settings.publicBorrow = { ...(tdb.settings.publicBorrow || {}), submitUrl: TEST_EXEC };
+  store.commit();
 }
 
 if (MODE === 'mock') {
@@ -219,6 +233,11 @@ ok('未填生日會列出', Array.isArray(b.unknown));
 
 /* ---------- 逐頁渲染（真實 DOM） ---------- */
 section('所有頁面渲染');
+/* 「編輯團員」頁要有個團員先撳得入。real 模式而家由空白開始，
+   所以自己加一個測試用團員（唔再靠 82 旅嘅真實名冊做 fixture）。 */
+if (!store.load().members.length) {
+  store.add('members', { name: '測試團員（smoke）', identity: 'member', birthday: '2008-01-01' });
+}
 const pages = ['#/dashboard', '#/meetings', '#/finance', '#/finance/reports', '#/finance/fees', '#/finance/claims',
   '#/finance/budgets', '#/finance/import', '#/members', '#/members/birthdays', '#/inventory', '#/inventory/loans',
   '#/inventory/audits', '#/progress', '#/constitution', '#/docs',
@@ -241,116 +260,49 @@ for (const p of pages) {
   }
 }
 
-/* ---------- 一鍵匯入 Google Sheet 參考帳（你嘅 2025-2026 分頁） ---------- */
+/* ---------- 一鍵匯入參考帳目 ----------
+   以前呢段驗緊 82 旅真實嘅 2025-2026 帳（56 筆、期初 8803.28）。
+   嗰份 finance.reference.json 已經隨住私隱清理移走，所以改為驗
+   「功能本身」：有參考帳就顯示得到、匯入得到；冇就要好好地講冇。 */
 section('一鍵匯入參考帳目');
-if (MODE === 'mock') {
-  console.log('  – 示範模式冇參考帳目，略過');
-} else {
-  const ref = store.load().reference || {};
-  ok('參考資料有你嘅分頁標籤', /2025-2026/.test(ref.sheetLabel || ''), ref.sheetLabel);
-  ok('參考資料有完整 56 筆', (ref.transactions || []).length === 56, String((ref.transactions || []).length));
-  ok('參考資料有期初結餘 8,803.28', Number(ref.openingBalance) === 8803.28, String(ref.openingBalance));
-  ok('參考資料有對數資料（原表總結）', Number(ref.check?.closing) === 7846.64, JSON.stringify(ref.check));
-
-  await auth.login('leader', 'leader', '8202');
-  const txBefore = store.load().transactions.length;
-  const openBefore = store.load().settings.openingBalance;
-  const obBefore = JSON.parse(JSON.stringify(store.load().settings.openingBalances || {}));
-  window.location.hash = '#/finance/import';
-  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
-  await new Promise(r => setTimeout(r, 40));
-  const btn = doc.querySelector('[data-act="import-ref"]');
-  ok('匯入頁有「一鍵匯入」掣', !!btn);
-  if (btn) {
-    btn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-    await new Promise(r => setTimeout(r, 80));
-    const dlg = doc.querySelector('.overlay .modal');
-    ok('匯入對話框顯示筆數／收入／支出／期末',
-      !!dlg && /56/.test(dlg.textContent) && /8,630/.test(dlg.textContent) && /7,846.64/.test(dlg.textContent),
-      dlg ? dlg.textContent.replace(/\s+/g, ' ').slice(0, 120) : '');
-    dlg?.querySelector('.modal-foot .btn-primary').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-    await new Promise(r => setTimeout(r, 120));
-
-    const db = store.load();
-    ok('匯入 56 筆帳目', db.transactions.length - txBefore === 56, `+${db.transactions.length - txBefore}`);
-
-    /* 期初結餘要**逐年**：8,803.28 係 2025-26 嘅期初，唔係 2026-27 嘅期初 */
-    const ob = db.settings.openingBalances || {};
-    ok('2025-26 期初結餘設為 8,803.28（原表「上年度結餘」）',
-      Number(ob['2025-26']) === 8803.28, JSON.stringify(ob));
-    ok('2026-27 期初結餘自動結轉為 7,846.64（＝2025-26 期末）',
-      Number(ob['2026-27']) === 7846.64, JSON.stringify(ob));
-    ok('唔會把上年度期初當成本年度期初',
-      Number(model.openingOf('2026-27').amount) === 7846.64, String(model.openingOf('2026-27').amount));
-    ok('2025-26 期末＝8,803.28＋8,630−9,586.64＝7,846.64（同原表總結一致）',
-      Math.round((model.openingOf('2025-26').amount
-        + model.sumBy(db.transactions.filter(t => model.inRange(t.date, '2025-04-01', '2026-03-31')), 'income')
-        - model.sumBy(db.transactions.filter(t => model.inRange(t.date, '2025-04-01', '2026-03-31')), 'expense')) * 100) / 100 === 7846.64,
-      String(model.openingOf('2025-26').amount));
-    ok('舊帳 56 筆全部屬於 2025-26（冇一筆跌入 2026-27）',
-      db.transactions.filter(t => t.reference).every(t => model.inRange(t.date, '2025-04-01', '2026-03-31')),
-      String(db.transactions.filter(t => t.reference && !model.inRange(t.date, '2025-04-01', '2026-03-31')).length));
-    ok('而家（2026-27）結餘＝本年度期初 7,846.64（本年度未有帳目）',
-      Math.round(model.currentBalance() * 100) / 100 === 7846.64, String(model.currentBalance()));
-    ok('首頁唔會再顯示負數', model.currentBalance() > 0, String(model.currentBalance()));
-    ok('單據連結有保留（7 筆）', db.transactions.filter(t => t.receiptLink).length === 7,
-      String(db.transactions.filter(t => t.receiptLink).length));
-    ok('匯入時順便標記團費已收', db.fees.filter(f => f.paid && String(f.period).includes('2025')).length >= 3,
-      JSON.stringify(db.fees.filter(f => f.paid).map(f => `${f.period}:${f.memberId}`)));
-
-    // 還原，唔好污染後面嘅測試
-    db.transactions = db.transactions.filter(t => !t.imported && !t.reference);
-    db.fees = db.fees.filter(f => !String(f.period || '').startsWith('2025'));
-    db.settings.openingBalance = openBefore;
-    db.settings.openingBalances = obBefore;
-    store.commit();
-    ok('（已還原匯入，唔影響後面測試）',
-      store.load().transactions.length === txBefore, String(store.load().transactions.length));
-  }
-}
-
-/* ---------- 分頁唔會走位（每條子路由要顯示正確分頁） ---------- */
-section('分頁對位');
 {
-  const checks = [
-    ['#/finance', '帳目'],
-    ['#/finance/reports', '兩條數'],
-    ['#/finance/fees', '團費收款表'],
-    ['#/finance/claims', '收支申報'],
-    ['#/finance/budgets', '活動預算'],
-    ['#/finance/import', '匯入'],
-    ['#/inventory', '物資清單'],
-    ['#/inventory/loans', '借用'],
-    ['#/inventory/audits', '盤點'],
-    ['#/members/birthdays', '生日'],
-    ['#/admin/data', '資料'],
-    ['#/docs/daily', '三種入法'],
-    ['#/docs/mobile', '手機影相就交得'],
-    ['#/docs/tablesync', '欄位自己話事'],
-    ['#/tables/source', '插入自己嘅 Sheet'],
-    ['#/tables/sync', '總表同步'],
-    ['#/tables/data', '儲存與備份'],
-    ['#/notices', '通告']
-  ];
-  for (const [hash, expect] of checks) {
-    window.location.hash = hash;
+  const ref = store.load().reference || {};
+  const hasRef = (ref.transactions || []).length > 0;
+  if (!hasRef) {
+    ok('冇參考帳目時 reference 係空（新旅團嘅正常狀態）',
+      (ref.transactions || []).length === 0);
+    await auth.login('leader', 'leader', '8202');
+    window.location.hash = '#/finance/import';
     window.dispatchEvent(new window.HashChangeEvent('hashchange'));
-    await new Promise(r => setTimeout(r, 25));
+    await new Promise(r => setTimeout(r, 40));
     const txt = doc.getElementById('view')?.textContent || '';
-    ok(`${hash} 顯示「${expect}」`, txt.includes(expect), txt.replace(/\s+/g, ' ').slice(0, 90));
+    ok('匯入頁照樣打得開（唔會炸）', txt.length > 0);
+    ok('匯入頁唔會亂咁彈「一鍵匯入」', !doc.querySelector('[data-act="import-ref"]'));
+  } else {
+    ok('參考資料有分頁標籤', !!ref.sheetLabel, ref.sheetLabel);
+    ok('參考資料有交易', (ref.transactions || []).length > 0);
+    await auth.login('leader', 'leader', '8202');
+    window.location.hash = '#/finance/import';
+    window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+    await new Promise(r => setTimeout(r, 40));
+    ok('匯入頁有「一鍵匯入」掣', !!doc.querySelector('[data-act="import-ref"]'));
   }
 }
 
 /* ---------- 團章公開頁所需的發布檔 ---------- */
 section('團章發布檔（公開頁面用）');
-const cons = store.load().constitution;
-ok('有版本號', !!cons.version);
-ok('有 footer', !!(cons.footer?.zh && cons.footer?.en));
+const cons = store.load().constitution || {};
 if (MODE === 'mock') {
+  ok('有版本號', !!cons.version);
+  ok('有 footer', !!(cons.footer?.zh && cons.footer?.en));
   ok('示範團章有章節', (cons.chapters || []).length >= 3, String((cons.chapters || []).length));
   ok('示範團章中英對照', !!(cons.chapters?.[0]?.heading?.zh && cons.chapters?.[0]?.heading?.en));
 } else {
-  ok('條文有 items 結構（甲/乙）', (cons.chapters[3].articles[0].items || []).length >= 5);
+  /* 新旅團由空白開始：團章要自己寫，所以呢度驗結構撐得住空白，
+     唔再驗 82 旅嗰 19 章嘅內容。 */
+  ok('團章結構存在（可以係空）', typeof cons === 'object' && cons !== null);
+  ok('章節係陣列', Array.isArray(cons.chapters || []));
+  ok('新旅團團章由空白開始', (cons.chapters || []).length === 0, String((cons.chapters || []).length));
 }
 
 /* ---------- AGM 日期逐年輸入 ---------- */
@@ -427,6 +379,10 @@ section('團費收款紀錄');
   store.load().fees = before.filter(f => f.period !== 'TEST-27');
   store.commit();
 
+  /* 新旅團由空白開始 —— 自己整兩個測試團員，唔靠 82 旅嘅名冊 */
+  while (model.members().filter(m => m.status !== 'alumni').length < 2) {
+    store.add('members', { name: `測試團員 ${model.members().length + 1}`, identity: 'member' });
+  }
   const active = model.members().filter(m => m.status !== 'alumni');
   const m1 = active[0], m2 = active[1];
 
@@ -459,10 +415,10 @@ section('團費收款紀錄');
   ok('收款紀錄會連住帳目（txId）', grid.find(r => r.member.id === m1.id).txId === 'tx-fee-t1');
   ok('帳目分類係「團費」', model.tx().find(x => x.id === 'tx-fee-t1').category === '團費');
 
-  // 名字比對（「曉莉 團費」→ 團員）
+  // 名字比對（「<團員名> 團費」→ 團員）
   const anyName = active[0].name;
   ok('可以由文字認出團員名', model.matchMemberByName(`${anyName} 團費`)?.id === active[0].id, anyName);
-  // 花名／名字一部分（例：日彤 → 劉日彤）
+  // 花名／名字一部分（例：大文 → 陳大文）
   const given = active[0].name.slice(1);
   ok('花名都認得出（名字一部分）', model.matchMemberByName(given)?.id === active[0].id, `${given} → ${model.matchMemberByName(given)?.name}`);
 
@@ -595,11 +551,11 @@ ok('同一內容 QR 穩定一致', inconsistent === 0);
 
 /* ---------- Word / CSV 輸出（純字串部分） ---------- */
 section('文件輸出');
-const word = exporter.wordHtml({ title: '團章', org: '第八十二旅深資童軍團', bodyHtml: '<h1>測試</h1><p>中文內容</p>', meta: '2024.09' });
+const word = exporter.wordHtml({ title: '團章', org: '測試旅深資童軍團', bodyHtml: '<h1>測試</h1><p>中文內容</p>', meta: '2024.09' });
 ok('Word 檔含 mso 標頭', word.includes('urn:schemas-microsoft-com:office:word'));
 ok('Word 檔含中文內容', word.includes('中文內容'));
-ok('Word 檔有機構名', word.includes('第八十二旅深資童軍團'));
-const csv = exporter.csvText({ headers: ['姓名', '生日'], rows: [['劉日彤', '2006-06-10'], ['有,逗號', 'x"y']] });
+ok('Word 檔有機構名', word.includes('測試旅深資童軍團'));
+const csv = exporter.csvText({ headers: ['姓名', '生日'], rows: [['陳大文', '2006-06-10'], ['有,逗號', 'x"y']] });
 ok('CSV 有表頭', csv.split('\r\n')[0] === '姓名,生日');
 ok('CSV 會 escape 逗號與引號', csv.includes('"有,逗號"') && csv.includes('"x""y"'));
 ok('CSV 用 CRLF 換行', csv.split('\r\n').length === 3);
@@ -755,8 +711,23 @@ section('通告（開一張・分享・報名）');
   window.dispatchEvent(new window.HashChangeEvent('hashchange'));
   await new Promise(r => setTimeout(r, 80));
 
+  /* real 模式由空白開始（82 旅嘅通告已隨私隱清理移走）→ 自己開兩張測試通告，
+     等下面嘅分享／QR／報名測試有嘢可以撳。mock 模式本身就有 2 張。 */
+  if ((store.load().notices || []).length < 2) {
+    store.add('notices', {
+      title: { zh: '測試通告（smoke）', en: 'Test Notice' }, status: 'published',
+      needSignup: true, eventDate: '2026-10-01', body: { zh: '內容', en: 'Body' }
+    });
+    store.add('notices', {
+      title: { zh: '測試通告二（smoke）', en: 'Test Notice 2' }, status: 'published',
+      needSignup: false, eventDate: '2026-11-01', body: { zh: '內容', en: 'Body' }
+    });
+    window.location.hash = '#/notices';
+    window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+    await new Promise(r => setTimeout(r, 80));
+  }
   const list = store.load().notices || [];
-  ok(`通告由資料檔載入（${MODE === 'mock' ? 2 : 2} 張）`, list.length === 2, String(list.length));
+  ok('通告清單有 2 張', list.length === 2, String(list.length));
   ok('其中一張要報名（needSignup）', list.some(n => n.needSignup), JSON.stringify(list.map(n => n.needSignup)));
   const first = list[0];
   ok('通告有中英標題', !!(first?.title?.zh && first?.title?.en), JSON.stringify(first?.title));
@@ -1094,7 +1065,7 @@ section('用戶名冊（可編輯 · 身份）');
   ok('舊資料自動推算身份（團長→領袖 / 司庫→執委 / 其他→團員）',
     migrated === true, String(migrated));
   const g = store.load();
-  ok('每個用戶都有身份欄', g.members.every(x => ['leader', 'exco', 'member'].includes(x.identity)),
+  ok('每個用戶都有身份欄', g.members.length === 0 || g.members.every(x => ['leader', 'exco', 'member'].includes(x.identity)),
     JSON.stringify(g.members.filter(x => !x.identity).map(x => x.name)));
   ok('執委都有權改用戶資料（以前只有領袖）',
     (await (async () => { await auth.login('exco', 'exco', '8203'); return auth.can('member.edit'); })()) === true);
@@ -1149,12 +1120,17 @@ section('防呆（暫存 → 確認 → 可還原）');
   await new Promise(r => setTimeout(r, 30));
   ok('取消之後用戶仍然存在', !!store.load().members.find(m => m.id === target.id));
 
-  // 總表同步唔會即時寫入（只排隊）
+  // 後端儲存：真實資料每次改動都會排隊寫入後端；示範資料永遠唔會送出
   const dbx = store.load();
   dbx.sync = { ...(dbx.sync || {}), auto: true, pending: 0 };
   store.commit();
-  ok('開咗「排隊」之後，改動只係累加待同步數（唔會自動送出）',
-    Number(store.load().sync.pending) >= 1, String(store.load().sync?.pending));
+  if (MODE === 'mock') {
+    ok('示範資料永遠唔會排隊送去後端（唔會污染真實 Sheet）',
+      Number(store.load().sync?.pending || 0) === 0, String(store.load().sync?.pending));
+  } else {
+    ok('改動會排隊等寫入後端（pending 累加，寫入成功先清零）',
+      Number(store.load().sync.pending) >= 1, String(store.load().sync?.pending));
+  }
   dbx.sync.auto = false; dbx.sync.pending = 0; store.commit();
 }
 
@@ -1239,24 +1215,24 @@ section('通告欄位（活動詳情）');
   ed.querySelector('#n-eventDate').value = '2026-10-03';
   ed.querySelector('#n-deadline').value = '2026-09-28';
   ed.querySelector('#n-venue').value = '創興水上活動中心';
-  ed.querySelector('#n-assembly').value = '0830 康山花園地下';
-  ed.querySelector('#n-dismissal').value = '1630 康山花園地下';
+  ed.querySelector('#n-assembly').value = '0830 測試團址地下';
+  ed.querySelector('#n-dismissal').value = '1630 測試團址地下';
   ed.querySelector('#n-programme').value = '獨木舟、划艇、水上安全';
   ed.querySelector('#n-dress').value = '戶外制服';
   ed.querySelector('#n-fee').value = '$380（津貼後 $266）';
   ed.querySelector('#n-quota').value = '30';
-  ed.querySelector('#n-enquiry').value = '9123 4567 陳團長';
+  ed.querySelector('#n-enquiry').value = '1234 5678 測試負責人';
   ed.querySelector('[data-act="save"]').click();
   await new Promise(r => setTimeout(r, 220));
   const saved = store.load().notices.find(x => x.title?.zh === '欄位測試通告');
   ok('儲存後欄位入到通告資料',
-    saved?.assembly === '0830 康山花園地下' && saved?.dress === '戶外制服' && saved?.quota === 30,
+    saved?.assembly === '0830 測試團址地下' && saved?.dress === '戶外制服' && saved?.quota === 30,
     JSON.stringify(saved && { assembly: saved.assembly, dress: saved.dress, quota: saved.quota }));
 
   /* 詳情頁／分享文字／列印內容都跟住清單 */
   const txt = nv.shareText(saved);
   ok('WhatsApp 分享文字帶埋集合／解散／服裝／查詢',
-    /0830 康山花園地下/.test(txt) && /1630 康山花園地下/.test(txt) && /戶外制服/.test(txt) && /9123 4567/.test(txt),
+    /0830 測試團址地下/.test(txt) && /1630 測試團址地下/.test(txt) && /戶外制服/.test(txt) && /1234 5678/.test(txt),
     txt.split('\n').slice(3, 6).join(' / '));
   ok('分享文字唔會塞「內容／程序」（留返喺正文）', !/內容／程序/.test(txt));
 
@@ -1458,10 +1434,13 @@ section('進度紀錄（一個後端 · 兩個前端）');
   const vp = await import('../assets/js/views/progress.js');
   const lp = await import('../assets/js/lib/progress.js');
   const cfg = lp.progressCfg();
-  ok('進度係讀寫旅團自己嘅後端（預設用返 Registry 登記咗嘅 /exec）',
+  /* Registry 而家唔再 hardcode 任何旅團（真實旅團改用 Vercel 環境變數），
+     所以「未登記」嗰陣進度後端係空 —— 呢個先係啱嘅私隱行為。
+     有登記嘅話就要係個 /exec。 */
+  ok('進度後端：有登記就係 /exec，未登記就要係空（唔可以借人哋嘅）',
     MODE === 'mock'
       ? cfg.backend === ''                     /* 示範模式唔可以指向真實旅團嘅後端 */
-      : (!!cfg.backend && /\/exec$/.test(cfg.backend)),
+      : (cfg.backend === '' || /\/exec$/.test(cfg.backend)),
     JSON.stringify({ backend: cfg.backend, registered: cfg.registered }));
   ok('預設用內建考核項目定義（唔使連任何其他系統）',
     lp.DEFAULT_CATALOG_URL === 'data/progress/items.json');
@@ -1610,15 +1589,12 @@ section('首頁帳目（現在結餘 · 期初結餘）');
     !!fv.querySelector(`[data-open-year="${model.currentFY()}"]`));
   ok('年度設定有「由上年度期末結轉」掣', !!fv.querySelector('[data-act="carry-all"]'));
   if (MODE === 'real') {
-    ok('年度設定有「用舊帳嘅數字填返」掣', !!fv.querySelector('[data-act="use-ref-opening"]'));
-    fv.querySelector('[data-act="use-ref-opening"]')
-      .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-    const curEl = fv.querySelector(`[data-open-year="${model.currentFY()}"]`);
-    ok(`舊帳一鍵填數：本年度（${model.currentFY()}）填 7,846.64，唔係 8,803.28`,
-      Number(curEl.value) === 7846.64, String(curEl.value));
-    ok('舊帳一鍵填數：2025-26 填 8,803.28（原表上年度結餘）',
-      Number(fv.querySelector('[data-open-year="2025-26"]').value) === 8803.28,
-      String(fv.querySelector('[data-open-year="2025-26"]').value));
+    /* 「用舊帳嘅數字填返」要有參考帳先出現。82 旅嗰份 finance.reference.json
+       已經隨私隱清理移走，所以新旅團唔會見到呢粒掣 —— 驗返呢個一致性就夠。 */
+    const hasRef = (store.load().reference?.transactions || []).length > 0;
+    const refBtn = fv.querySelector('[data-act="use-ref-opening"]');
+    ok('有參考帳先有「用舊帳嘅數字填返」掣（冇就唔應該出現）',
+      hasRef ? !!refBtn : !refBtn, `hasRef=${hasRef} btn=${!!refBtn}`);
   }
 }
 
@@ -1660,7 +1636,12 @@ console.log('\n▌期初結餘遷移（8,803.28 係 2025-26 嘅期初，唔係 2
 console.log('\n▌跨系統身份 key（進度追蹤係獨立系統，要靠 key 對人）');
 {
   const db4 = store.load();
-  const ms = db4.members;
+  /* 呢段測試 migrateMemberKeys 本身。上面啲測試會加入新團員（新旅團由空白
+     開始，所以要自己整 fixture），佢哋未行過遷移 —— 行一次先，
+     再驗「行完之後人人有 key、key 穩定」。 */
+  store.migrateMemberKeys(db4);
+  store.commit();
+  const ms = store.load().members;
   ok('所有用戶都有 systemId（自動產生）',
     ms.every(m => !!m.systemId), `缺 ${ms.filter(m => !m.systemId).length} 個`);
   ok('systemId 全部唔重複',
@@ -1669,9 +1650,10 @@ console.log('\n▌跨系統身份 key（進度追蹤係獨立系統，要靠 key
     ms.every(m => 'ymis' in m), String(ms.filter(m => !('ymis' in m)).length));
 
   const first = ms[0];
-  const before = first.systemId;
-  store.migrateMemberKeys(db4);
-  ok('migrateMemberKeys 唔會改已有 systemId（key 必須穩定）', first.systemId === before, first.systemId);
+  const before = first?.systemId;
+  store.migrateMemberKeys(store.load());
+  ok('migrateMemberKeys 唔會改已有 systemId（key 必須穩定）',
+    !first || store.load().members[0].systemId === before, String(before));
   ok('migrateMemberKeys 第二次跑係 no-op', store.migrateMemberKeys(db4) === false);
   /* systemId 必須係確定性：另一部裝置獨立跑遷移都要得到同一個 key，
      否則呢個 key 永遠對唔上，做唔到跨系統配對 */

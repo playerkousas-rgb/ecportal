@@ -30,10 +30,15 @@ const SCOUT_ADMIN_API = process.env.SCOUT_ADMIN_API ||
 
 const ALLOWED_ACTIONS = new Set([
   'ping', 'status', 'test', 'sync', 'claim', 'loan', 'noticeSignup',
+  /* 整份資料庫讀／寫 —— app 嘅真正儲存（換機／清 cache 都唔會冇咗） */
+  'saveDb', 'loadDb', 'dbInfo',
   /* 公開通告：免登入讀旅團自己後端嘅「通告全文」（只回已發布） */
   'notices',
   'submitRegistration'
 ]);
+
+/* 呢啲 action 會夾帶成個資料庫上去，body 可以幾 MB —— 唔可以當普通 action 咁限死 */
+const BIG_BODY_ACTIONS = new Set(['saveDb', 'sync']);
 
 function sendJson(res, status, obj) {
   res.setHeader('Cache-Control', 'no-store');

@@ -77,8 +77,8 @@
 
 | 欄位 | 範例 | 說明 |
 |---|---|---|
-| **旅團編號** | `0082` | 4 位數字或自訂編號 |
-| **旅團名稱** | 第八十二旅深資童軍團 | 旅團完整中文名稱 |
+| **旅團編號** | `0123` | 4 位數字或自訂編號 |
+| **旅團名稱** | 第一二三旅深資童軍團 | 旅團完整中文名稱 |
 | **Apps Script URL** | `https://script.google.com/macros/s/…/exec` | 剛部署的 Web App URL |
 | **API Key** | `v82_xxxxxxxxxxxxxxxx` | 執行 initializeSheets 獲得的密鑰 |
 | **聯絡人** | `scouter@example.hk` | 旅團負責領袖聯絡 |
@@ -90,12 +90,11 @@
 ### 方式 A：登記於 Git（`data/units.json`）
 在 `data/units.json` 的 `units` 下加入該旅團：
 ```jsonc
-"0082": {
-  "code": "0082",
-  "name": "第八十二旅深資童軍團",
-  "nameEn": "82nd Hong Kong Group Venture Scout Unit",
+"0123": {
+  "code": "0123",
+  "name": "第一二三旅深資童軍團",
+  "nameEn": "123rd Hong Kong Group Venture Scout Unit",
   "short": "執委管理系統",
-  "dataPath": "data/units/0082/",
   "backend": {
     "gasUrl": "https://script.google.com/macros/s/AKfyc.../exec",
     "apiKey": "v82_xxxxxxxxxxxxxxxx"
@@ -104,7 +103,7 @@
     "name": "進度紀錄（同一個後端）",
     "mode": "portal",
     "portal": {
-      "unitParam": "0082",
+      "unitParam": "0123",
       "role": "exec_committee",
       "ymis": "",
       "extraParams": """
@@ -116,9 +115,9 @@
 
 ### 方式 B：使用 Vercel 環境變數（免改 Git 即可熱更新後端）
 在 Vercel 專案 Settings → Environment Variables 加入：
-- `TROOP_0082_BACKEND` = `https://script.google.com/macros/s/…/exec`
-- `TROOP_0082_APIKEY` = `v82_xxxxxxxxxxxxxxxx`
-- （進度紀錄）**唔使設** —— 要埋讀進度就去「進度 → 設定」填 `/exec` ＋ API Key；想收埋條 Key 先自己用 env 覆蓋（`TROOP_0082_PROGRESSBACKEND` / `_PROGRESSAPIKEY` / `_PROGRESSCATALOG`）
+- `TROOP_0123_BACKEND` = `https://script.google.com/macros/s/…/exec`
+- `TROOP_0123_APIKEY` = `v82_xxxxxxxxxxxxxxxx`
+- （進度紀錄）**唔使設** —— 要埋讀進度就去「進度 → 設定」填 `/exec` ＋ API Key；想收埋條 Key 先自己用 env 覆蓋（`TROOP_0123_PROGRESSBACKEND` / `_PROGRESSAPIKEY` / `_PROGRESSCATALOG`）
 
 ---
 
@@ -153,9 +152,9 @@
 
 喺 Vercel 專案 Settings → Environment Variables 加：
 
-- `TROOP_0082_PROGRESSBACKEND` = `https://script.google.com/macros/s/…/exec`
-- `TROOP_0082_PROGRESSAPIKEY` = `v82_xxxxxxxxxxxxxxxx`
-- `TROOP_0082_PROGRESSCATALOG` = `https://…/items.json`（自訂考核項目定義，可選）
+- `TROOP_0123_PROGRESSBACKEND` = `https://script.google.com/macros/s/…/exec`
+- `TROOP_0123_PROGRESSAPIKEY` = `v82_xxxxxxxxxxxxxxxx`
+- `TROOP_0123_PROGRESSCATALOG` = `https://…/items.json`（自訂考核項目定義，可選）
 
 設定咗之後，前端「進度 → 設定」可以留空，API Key 完全唔會落前端。
 
@@ -207,11 +206,11 @@
 
 | 網址 | 功能說明 |
 |---|---|
-| `/?u=0082` | 執委會管理後台（領袖／執委登入） |
-| `/entry.html?u=0082` | 成員手機拍照快速記帳與報銷申報 |
-| `/borrow.html?u=0082` | 成員物資借用線上申請 |
-| `/notice.html?u=0082&n=<通告編號>` | 活動通告查閱與 RSVP 出席回覆 |
-| `/constitution.html?u=0082` | 旅團團章中英對照公開查閱頁面 |
+| `/?u=0123` | 執委會管理後台（領袖／執委登入） |
+| `/entry.html?u=0123` | 成員手機拍照快速記帳與報銷申報 |
+| `/borrow.html?u=0123` | 成員物資借用線上申請 |
+| `/notice.html?u=0123&n=<通告編號>` | 活動通告查閱與 RSVP 出席回覆 |
+| `/constitution.html?u=0123` | 旅團團章中英對照公開查閱頁面 |
 
 ---
 COPYRIGHT 2026 執委管理系統 & Scout System

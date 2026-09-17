@@ -4,16 +4,21 @@
    （一張 Sheet 統管整個 Venture，支援多旅團獨立 Sheet 或合併 Sheet）。
    ============================================================ */
 
-export const SHEET_TABS = ['帳目', '物資', '團員', '收支申報', '通告', '通告全文', '報名', '物資借用', '會議', '設定', '同步紀錄',
+export const SHEET_TABS = ['資料庫', '帳目', '物資', '團員', '收支申報', '通告', '通告全文', '報名', '物資借用', '會議', '設定', '同步紀錄',
   '進度追蹤', '其他獎章', '待批完成', '活動履歷', '待批履歷', '成員名單'];   // 後 6 個 = 同進度前端共用嘅分頁
 
 export function gasTemplate() {
   return `/**
  * ============================================================
  *  82venture · 總表同步與多旅團後端 Apps Script（Code.gs）
- *  版本：v2.0.0
+ *  版本：v2.1.0
+ *
+ *  ★ v2.1.0 新增：「資料庫」分頁 —— app 嘅資料真正存喺後端，
+ *    換手機／換瀏覽器／清 cache 都唔會冇咗（action: saveDb / loadDb / dbInfo）。
+ *    舊版只係把資料攤平寫入報表分頁（讀唔返），所以一定要更新部署先生效。
  *
  *  功能：
+ *   0. 整份資料庫讀／寫（「資料庫」分頁，app 真正嘅儲存）
  *   1. 帳目／財務雙年度資料同步
  *   2. 成員名單與 YMIS 跨系統身份管理
  *   3. 物資清單與公開借用申請（borrow.html）
@@ -36,7 +41,7 @@ export function gasTemplate() {
  */
 
 /** 呢份 Script 會用到嘅分頁名稱（同步／查詢時用） */
-var SHEET_TABS = ['帳目', '物資', '團員', '收支申報', '通告', '通告全文', '報名', '物資借用', '會議', '設定', '同步紀錄',
+var SHEET_TABS = ['資料庫', '帳目', '物資', '團員', '收支申報', '通告', '通告全文', '報名', '物資借用', '會議', '設定', '同步紀錄',
   '進度追蹤', '其他獎章', '待批完成', '活動履歷', '待批履歷', '成員名單'];
 
 /** 每個旅團分開一個 Sheet（工作表）定用同一個 Sheet 加「旅團」欄？ */
@@ -82,6 +87,10 @@ function initializeSheets() {
   var headerColor = '#FFFFFF';
 
   var sheetConfigs = [
+    /* 「資料庫」＝ 真正嘅資料主體（app 嘅完整資料庫，分段存 JSON）。
+       其他分頁係由佢攤平出嚟畀人睇／畀你自己用公式嘅「報表」。
+       唔好人手改呢個分頁 —— 改咗會令 app 讀唔返。 */
+    { name: '資料庫', headers: ['旅團', '段號', '內容(JSON)', '更新時間', '版本'] },
     { name: '帳目', headers: ['旅團', 'id', '日期', '類型', '項目', '金額', '分類', '方式', '負責人', '單據編號', '期別', '備註', '同步時間'] },
     { name: '收支申報', headers: ['旅團', '時間', '日期', '類型', '欄目', '項目', '金額', '付款人', '備註', '相片張數', '相片連結', '紀錄編號'] },
     { name: '物資', headers: ['旅團', 'id', '物資編號', '物資名稱', '分類', '總數量', '單位', '存放位置', '狀態', '備註', '同步時間'] },
@@ -153,6 +162,26 @@ function doPost(e) {
       return json({ ok: false, success: false, error: 'API key 唔正確' });
     }
 
+    /* ---- 整份資料庫讀／寫（app 嘅真正儲存；要 API Key）---- */
+    if (body.action === 'saveDb' || body.action === 'loadDb' || body.action === 'dbInfo') {
+      if (expectedKey && key !== expectedKey) {
+        return json({ ok: false, success: false, error: '未授權：API Key 唔正確' });
+      }
+      if (body.action === 'saveDb') {
+        var sv = withLock(function () { return saveDb(body); });
+        return json({ ok: sv.success === true, success: sv.success === true,
+          chunks: sv.chunks || 0, bytes: sv.bytes || 0, at: sv.at || '', version: sv.version || '', error: sv.error || '' });
+      }
+      if (body.action === 'dbInfo') {
+        var nfo = dbInfo(textOf(body.unit));
+        return json({ ok: nfo.success === true, success: nfo.success === true, found: !!nfo.found,
+          at: nfo.at || '', version: nfo.version || '', bytes: nfo.bytes || 0, counts: nfo.counts || null, error: nfo.error || '' });
+      }
+      var ld = loadDb(textOf(body.unit));
+      return json({ ok: ld.success === true, success: ld.success === true, found: !!ld.found,
+        db: ld.db || null, at: ld.at || '', version: ld.version || '', bytes: ld.bytes || 0, error: ld.error || '' });
+    }
+
     /* ---- 進度追蹤（同進度前端共用同一個後端；API Key＝執委身份）---- */
     if (body.action === 'save' || body.action === 'saveOtherBadge') {
       if (!expectedKey || key !== expectedKey) {
@@ -205,8 +234,17 @@ function doPost(e) {
       return json({ ok: true, msg: '已記錄借用申請，等批核', photos: photos });
     }
     if (body.action === 'sync') {
-      var counts = syncAll(body);
-      return json({ ok: true, msg: '已寫入總表', counts: counts, unit: body.unit, at: body.at });
+      var counts = withLock(function () { return syncAll(body); });
+      /* 有帶整份資料庫就順便存埋（一次過搞掂「睇得到嘅報表」＋「讀得返嘅資料庫」） */
+      var dbSaved = null;
+      if (body.db && typeof body.db === 'object') {
+        if (expectedKey && key !== expectedKey) {
+          return json({ ok: false, success: false, error: '未授權：API Key 唔正確（寫入資料庫需要 API Key）' });
+        }
+        dbSaved = withLock(function () { return saveDb(body); });
+      }
+      return json({ ok: true, msg: '已寫入總表', counts: counts, unit: body.unit, at: body.at,
+        db: dbSaved ? { saved: dbSaved.success === true, chunks: dbSaved.chunks || 0, bytes: dbSaved.bytes || 0, error: dbSaved.error || '' } : null });
     }
     if (body.action === 'status' || body.action === 'test') {
       return json({ ok: true, msg: '82venture 後端正常', spreadsheet: SpreadsheetApp.getActiveSpreadsheet().getName(), tabs: SHEET_TABS, at: new Date() });
@@ -216,7 +254,7 @@ function doPost(e) {
       var c2 = syncAll(body);
       return json({ ok: true, msg: '已寫入總表（無 action，當 sync）', counts: c2, unit: body.unit });
     }
-    return json({ ok: false, error: '未知 action：' + body.action, got: Object.keys(body || {}), hint: '支援 action: ping / sync / status / claim / noticeSignup / loan / save / saveOtherBadge / reviewRequest / reviewLogRequest' });
+    return json({ ok: false, error: '未知 action：' + body.action, got: Object.keys(body || {}), hint: '支援 action: ping / sync / status / saveDb / loadDb / dbInfo / claim / noticeSignup / loan / save / saveOtherBadge / reviewRequest / reviewLogRequest' });
   } catch (err) {
     return json({ ok: false, error: String(err) });
   }
@@ -238,14 +276,127 @@ function doGet(e) {
     data.success = true; data.ok = true;
     return json(data);
   }
+  if (action === 'loadDb' || action === 'dbInfo') {
+    var expectedDb = PropertiesService.getScriptProperties().getProperty('API_KEY');
+    if (expectedDb && supplied !== expectedDb) return json({ success: false, ok: false, error: '未授權：API Key 唔正確' });
+    var unitParam = textOf((e.parameter && e.parameter.unit) || '');
+    if (action === 'dbInfo') {
+      var gi = dbInfo(unitParam);
+      return json({ ok: gi.success === true, success: gi.success === true, found: !!gi.found,
+        at: gi.at || '', version: gi.version || '', bytes: gi.bytes || 0, counts: gi.counts || null, error: gi.error || '' });
+    }
+    var gd = loadDb(unitParam);
+    return json({ ok: gd.success === true, success: gd.success === true, found: !!gd.found,
+      db: gd.db || null, at: gd.at || '', version: gd.version || '', bytes: gd.bytes || 0, error: gd.error || '' });
+  }
   return json({
     ok: true,
     msg: '執委管理系統 後端已啟動',
     spreadsheet: (function () { try { return SpreadsheetApp.getActiveSpreadsheet().getName(); } catch (err) { return '(未綁定試算表)'; } })(),
     tabs: SHEET_TABS,
-    api: ['ping', 'status', 'sync', 'claim', 'noticeSignup', 'loan', 'load', 'save', 'saveOtherBadge'],
+    api: ['ping', 'status', 'sync', 'saveDb', 'loadDb', 'dbInfo', 'claim', 'noticeSignup', 'loan', 'load', 'save', 'saveOtherBadge'],
     usage: 'APP 內「帳號與系統 → 資料管理 → 總表同步」填呢個 /exec 網址即可'
   });
+}
+
+/* ============================================================
+   資料庫（整份資料）讀／寫 —— 真正嘅「後端儲存」
+   ------------------------------------------------------------
+   點解要呢個：其他分頁（帳目／團員…）係「攤平咗畀人睇」嘅報表，
+   相片變咗數量、巢狀欄位變咗文字，讀返上去砌唔返原本嘅資料庫。
+   所以整份 app 資料庫會原原本本序列化成 JSON，分段寫入「資料庫」分頁
+   （每格上限 50000 字元，所以要分段）。
+     寫：POST { action:'saveDb', unit, apiKey, db:{…} }
+     讀：POST { action:'loadDb', unit, apiKey }   或 GET ?action=loadDb&unit=…&apikey=…
+     睇：POST { action:'dbInfo', unit, apiKey }   → 只回 meta（幾時更新、幾大）
+   ============================================================ */
+
+var DB_CHUNK = 45000;          // 每格字元數（Sheet 單格上限 50000）
+var DB_TAB = '資料庫';
+
+function dbSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(DB_TAB);
+  if (!sh) {
+    sh = ss.insertSheet(DB_TAB);
+    sh.appendRow(['旅團', '段號', '內容(JSON)', '更新時間', '版本']);
+    sh.getRange(1, 1, 1, 5).setFontWeight('bold').setBackground('#7B2233').setFontColor('#FFFFFF');
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+/** 寫入整份資料庫（原子：先刪舊段，再寫新段） */
+function saveDb(body) {
+  var unit = textOf(body.unit) || 'UNKNOWN';
+  var db = body.db;
+  if (!db || typeof db !== 'object') return { success: false, error: '冇收到資料庫內容（db）' };
+
+  var text = JSON.stringify(db);
+  if (text.length > 9000000) return { success: false, error: '資料太大（超過 9MB），請先喺 app 內清理相片' };
+
+  var sh = dbSheet();
+  var rows = sh.getDataRange().getValues();
+
+  /* 由下而上刪走呢個旅團嘅舊段（由下而上先唔會搞亂行號） */
+  for (var i = rows.length - 1; i >= 1; i--) {
+    if (textOf(rows[i][0]) === unit) sh.deleteRow(i + 1);
+  }
+
+  var now = new Date();
+  var version = textOf(db.meta && db.meta.updatedAt) || now.toISOString();
+  var chunks = [];
+  for (var p = 0; p < text.length; p += DB_CHUNK) chunks.push(text.substring(p, p + DB_CHUNK));
+  if (!chunks.length) chunks = ['{}'];
+
+  var out = chunks.map(function (c, idx) { return [unit, idx + 1, c, now, version]; });
+  sh.getRange(sh.getLastRow() + 1, 1, out.length, 5).setValues(out);
+
+  return { success: true, chunks: chunks.length, bytes: text.length, at: now, version: version };
+}
+
+/** 讀返整份資料庫（把所有段拼返） */
+function loadDb(unit) {
+  unit = textOf(unit);
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(DB_TAB);
+  if (!sh) return { success: true, found: false, db: null, error: '' };
+  var rows = sh.getDataRange().getValues();
+  var parts = [];
+  var at = '', version = '';
+  for (var i = 1; i < rows.length; i++) {
+    var u = textOf(rows[i][0]);
+    if (unit && u && u !== unit) continue;
+    if (!unit && !u) continue;
+    parts.push({ seq: Number(rows[i][1]) || 0, text: String(rows[i][2] == null ? '' : rows[i][2]) });
+    if (rows[i][3]) at = rows[i][3];
+    if (rows[i][4]) version = textOf(rows[i][4]);
+  }
+  if (!parts.length) return { success: true, found: false, db: null, error: '' };
+  parts.sort(function (a, b) { return a.seq - b.seq; });
+  var text = parts.map(function (p) { return p.text; }).join('');
+  try {
+    return { success: true, found: true, db: JSON.parse(text), at: at, version: version, bytes: text.length };
+  } catch (e) {
+    return { success: false, found: true, db: null, error: '資料庫內容壞咗（JSON 解析失敗），請用 app 嘅 JSON 備份還原' };
+  }
+}
+
+/** 只睇 meta：後端有冇資料、幾時更新（唔會傳成份資料庫落嚟） */
+function dbInfo(unit) {
+  var r = loadDb(unit);
+  if (!r.success) return { success: false, error: r.error };
+  var db = r.db || {};
+  return {
+    success: true, found: !!r.found, at: r.at || '', version: r.version || '', bytes: r.bytes || 0,
+    counts: r.found ? {
+      members: (db.members || []).length,
+      transactions: (db.transactions || []).length,
+      meetings: (db.meetings || []).length,
+      notices: (db.notices || []).length,
+      invItems: (db.invItems || []).length,
+      accounts: (db.accounts || []).length
+    } : null
+  };
 }
 
 /* ============================================================

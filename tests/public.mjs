@@ -20,10 +20,31 @@ function ok(name, cond, extra = '') {
 const errors = [];
 console.error = (...a) => { errors.push(a.map(String).join(' ')); };
 
-/* ---------- fetch shim：直接由 repo 讀檔 ---------- */
+/* ---------- fetch shim：直接由 repo 讀檔 ----------
+   注意：0082 嘅真實資料（團員／團章／通告）已經搬入後端並喺 Git 移除，
+   所以呢度用 tests/fixtures/units/TEST9/ 做替身 —— 內容全部係虛構測試資料。
+   公開頁測試驗嘅係「渲染／語言切換／報名」呢啲功能，唔需要真旅團資料。 */
+const FIXTURE_UNIT = path.join(ROOT, 'tests', 'fixtures', 'units', 'TEST9');
+const FIXTURE_REG = {
+  schema: 2, defaultUnit: '0082',
+  units: {
+    '0082': {
+      code: '0082', name: '測試旅深資童軍團', nameEn: 'Test Group Venture Scout Unit',
+      short: 'test9', section: '深資童軍', sponsor: '測試主辦機構', address: '測試地址 123 號',
+      dataPath: 'tests/fixtures/units/TEST9/'
+    }
+  }
+};
 globalThis.fetch = async (url) => {
   const clean = String(url).split('?')[0].replace(/^\.?\//, '');
-  const file = path.join(ROOT, clean);
+  /* Registry：唔好讀真 data/units.json（而家係空嘅）→ 用測試 registry */
+  if (/(^|\/)units\.json$/.test(clean) || /api\/units/.test(clean)) {
+    return { ok: true, status: 200, json: async () => FIXTURE_REG, text: async () => JSON.stringify(FIXTURE_REG) };
+  }
+  /* 0082 嘅資料檔 → 指去 fixture */
+  let file = clean.startsWith('data/units/0082/')
+    ? path.join(FIXTURE_UNIT, clean.replace('data/units/0082/', ''))
+    : path.join(ROOT, clean);
   if (!file.startsWith(ROOT) || !fs.existsSync(file)) {
     return { ok: false, status: 404, json: async () => { throw new Error('404 ' + clean); } };
   }
@@ -56,8 +77,8 @@ await wait(400);
 
 ok('頁面有渲染', paper().length > 500, String(paper().length));
 ok('標題是團章', /團章/.test(doc.title), doc.title);
-ok('顯示旅團名', paper().includes('第八十二旅深資童軍團'));
-ok('顯示主辦機構', paper().includes('康山') || paper().includes('香港小童群益會'));
+ok('顯示旅團名', paper().includes('測試旅深資童軍團'));
+ok('顯示主辦機構', paper().includes('測試主辦機構') || paper().includes('Test Sponsor'));
 ok('有 19 章 + 附件（section 數目）', doc.querySelectorAll('#paper section').length >= 20,
   String(doc.querySelectorAll('#paper section').length));
 ok('預設中英對照（同頁見到中文條文）', paper().includes('本團名稱為'));
@@ -135,7 +156,7 @@ function bootNotice(search) {
   const txt = () => d.getElementById('app')?.textContent || '';
   ok('通告公開頁有渲染（免登入）', txt().length > 200, String(txt().length));
   ok('顯示通告標題', txt().includes('團費'), txt().slice(0, 60));
-  ok('顯示旅團名', txt().includes('第八十二') || txt().includes('82'), txt().slice(0, 80));
+  ok('顯示旅團名', txt().includes('測試旅') || txt().includes('TEST'), txt().slice(0, 80));
   ok('顯示通告內容（團費 $360）', txt().includes('360'));
   ok('有截止日期標示', txt().includes('截止') || txt().includes('2026-09-30'));
   ok('唔需要報名時冇報名表', !d.getElementById('signup-form'));
@@ -158,7 +179,7 @@ function bootNotice(search) {
   ok('必填欄有 required', d.querySelector('[data-fk="name"]')?.hasAttribute('required') === true);
   ok('有剔選欄（飲食禁忌）', d.querySelectorAll('[data-fk="diet"]').length >= 3);
   ok('活動詳情欄位都有顯示（地點／集合／解散／服裝／費用／名額／查詢）',
-    ['香港仔郊野公園', '0830 香港仔郊野公園入口集合', '1630 香港仔郊野公園入口解散', '戶外制服', '$120', '24', '9123 4567 陳團長']
+    ['測試郊野公園', '0830 測試郊野公園入口集合', '1630 測試郊野公園入口解散', '戶外制服', '$120', '24', '1234 5678 測試負責人']
       .every(k => txt().includes(k)), txt().slice(0, 200));
 
   // 未填必填 → 有錯誤提示
@@ -340,7 +361,7 @@ function bootEntry(search) {
   const d = w.document;
   const txt = () => d.getElementById('app')?.textContent || '';
   ok('手機記一筆頁有渲染（免登入）', txt().length > 200, String(txt().length));
-  ok('顯示旅團名', txt().includes('第八十二') || txt().includes('82'), txt().slice(0, 60));
+  ok('顯示旅團名', txt().includes('測試旅') || txt().includes('TEST'), txt().slice(0, 60));
   ok('有相機輸入（直接影相）', !!d.querySelector('[data-photo-field="pe-photos"] input[type="file"][capture]'));
   ok('有揀相片（相簿）', !!d.querySelector('[data-photo-field="pe-photos"] input[type="file"]:not([capture])'));
   ok('有欄目下拉（支出分類）', !!d.querySelector('#pe-cat') && d.querySelector('#pe-cat').options.length > 5,

@@ -6,7 +6,7 @@ import {
   init, load, isMock, currentUnit, seedInfo, enterMock, exitMock,
   switchUnit, clearMockData
 } from './lib/store.js';
-import { loadRegistry, unitList, unitEntry, defaultUnitCode } from './lib/units.js';
+import { loadRegistry, unitList, unitEntry, defaultUnitCode, registryReachable } from './lib/units.js';
 import {
   adminInbox, validateApplication, submitApplication, adminChecklist,
   applicationText, downloadCodeGs, copyCodeGs
@@ -75,10 +75,119 @@ async function boot() {
   }
   window.addEventListener('hashchange', render);
   window.addEventListener('v82:refresh', render);
+  window.addEventListener('v82:sync', paintSyncChip);
+
+  /* 資料真正嘅家係旅團自己嘅 Google Sheet：開機同後端對一對，
+     再開啟「改完自動存去後端」。失敗都唔會阻住開 app（照用本機資料）。 */
+  syncBoot();
 
   if (isMock() && !current()) loginAsMock('leader');
   if (!current()) renderLogin();
   else render();
+}
+
+/* ============================================================
+   後端儲存：開機對資料 ＋ 自動儲存
+   ------------------------------------------------------------
+   以前 app 嘅資料淨係喺瀏覽器，換機就冇晒。而家：
+     開機 → 問後端有冇資料（dbInfo）→ 比本機新就拉落嚟
+     之後 → 任何改動 debounce 幾秒自動寫返後端
+   ============================================================ */
+let remoteApi = null;
+export function remoteMod() { return remoteApi; }
+
+async function syncBoot() {
+  if (isMock()) return;
+  try {
+    remoteApi = await import('./lib/remote.js');
+  } catch (e) {
+    console.warn('[sync] 載入唔到 remote 模組', e);
+    return;
+  }
+  const store = await import('./lib/store.js');
+  store.setSaveHook(() => remoteApi.scheduleSave());
+
+  if (!remoteApi.remoteConfigured()) {
+    /* 未設定後端：照用本機，但要話畀團長知資料未有備份 */
+    paintSyncChip();
+    return;
+  }
+
+  try {
+    const info = await remoteApi.remoteInfo();
+    if (info?.ok && info.found) {
+      const localAt = store.localUpdatedAt();
+      const remoteAt = String(info.version || info.at || '');
+      const localHas = store.hasLocalContent();
+      /* 後端比本機新（或者本機根本係新裝置／空白）→ 拉後端落嚟 */
+      const remoteNewer = !localHas || (remoteAt && localAt && normAt(remoteAt) > normAt(localAt));
+      if (remoteNewer) {
+        const got = await remoteApi.pullDb();
+        if (got?.ok && got.found && got.db) {
+          try {
+            store.adoptRemote(got.db);
+            applyTheme(load()?.unit?.theme);
+            render();
+            toast('已由後端載入最新資料', 'ok');
+          } catch (e) { console.warn('[sync] 採用後端資料失敗', e); }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[sync] 開機對資料失敗（照用本機資料）', e);
+  }
+
+  /* 開機流程完成先至開始自動儲存（避免種子資料一載入就寫返上去） */
+  remoteApi.arm();
+  paintSyncChip();
+
+  /* 離開頁面前，仲有嘢未存就即刻試多次 */
+  window.addEventListener('beforeunload', (e) => {
+    if (remoteApi?.hasPending?.()) {
+      remoteApi.flush();
+      e.preventDefault();
+      e.returnValue = '仲有改動未儲存到後端，真係要離開？';
+      return e.returnValue;
+    }
+  });
+}
+
+/** 頂部「儲存狀態」提示 —— 一眼睇到資料有冇真係入咗後端 */
+function paintSyncChip() {
+  const el = document.getElementById('syncChip');
+  if (!el) return;
+  if (isMock()) { el.innerHTML = ''; return; }
+
+  if (!remoteApi || !remoteApi.remoteConfigured()) {
+    el.innerHTML = `<span class="badge b-warn" title="資料淨係存喺呢部機嘅瀏覽器，換機／清 cache 就會冇咗。去「帳號與系統 → 資料管理 → 總表同步」設定後端。">
+      ${icon('alert', 12)} 只存喺本機</span>`;
+    el.onclick = () => go('#/tables/sync');
+    el.style.cursor = 'pointer';
+    return;
+  }
+
+  const s = remoteApi.syncState();
+  const map = {
+    saving:  ['b-warn', 'cloud', '儲存緊…'],
+    saved:   ['b-ok', 'check', '已存到後端'],
+    pending: ['b-warn', 'clock', '未儲存'],
+    offline: ['b-warn', 'alert', '離線'],
+    loading: ['b-warn', 'cloud', '讀取緊…'],
+    error:   ['b-danger', 'alert', '儲存失敗'],
+    idle:    ['b-ok', 'cloud', '已連後端']
+  };
+  const [cls, ic, label] = map[s.state] || map.idle;
+  el.innerHTML = `<span class="badge ${cls}" title="${esc(s.msg || label)}">${icon(ic, 12)} ${esc(label)}</span>`;
+  el.onclick = () => go('#/tables/sync');
+  el.style.cursor = 'pointer';
+}
+
+/** 把 GAS 回嘅時間（可能係 ISO 或者 'YYYY-MM-DD HH:mm:ss'）正規化做可比較字串 */
+function normAt(v) {
+  const s = String(v || '').trim();
+  if (!s) return '';
+  const d = new Date(s.includes('T') ? s : s.replace(' ', 'T'));
+  return isNaN(d.getTime()) ? s : d.toISOString();
 }
 
 /* ============================================================
@@ -126,7 +235,10 @@ function renderUnitGate() {
             </span>
             ${icon('chevronR', 17)}
           </button>`).join('') || `
-          <div class="note-box warn">${icon('alert', 15)}<div>讀唔到 <code>data/units.json</code> —— 請用 HTTP 伺服器開啟呢個網站（唔好直接雙擊 HTML）。</div></div>`}
+          ${registryReachable()
+            ? `<div class="note-box">${icon('info', 15)}<div><b>暫時未有旅團登記。</b>你可以揀下面嘅「試用示範（MOCK）」即刻試玩，
+                 或者撳「新旅團申請接入」登記自己旅團 —— 登記好之後，你嘅旅團就會喺呢度出現，由空白資料庫開始。</div></div>`
+            : `<div class="note-box warn">${icon('alert', 15)}<div>讀唔到 <code>data/units.json</code> —— 請用 HTTP 伺服器開啟呢個網站（唔好直接雙擊 HTML）。</div></div>`}`}
 
         <button class="gate-unit mock" data-pick="MOCK">
           <span class="code">MOCK</span>
@@ -155,7 +267,8 @@ function renderUnitGate() {
 
       <div class="gate-foot">
         揀完之後先會出現<b>登入畫面</b>（領袖 / 執行委員會）。<br>
-        管理員手工加旅團嘅話：喺 <code>data/units.json</code> 註冊，再 copy 一個 <code>data/units/&lt;編號&gt;/</code> 資料夾（詳見 docs/ADD_NEW_UNIT.md）。
+        管理員開新旅團：喺 Vercel 加 <code>TROOP_&lt;編號&gt;_BACKEND</code> / <code>_APIKEY</code> / <code>_NAME</code> 再 Redeploy
+        —— 唔使改 Git，亦唔使起資料夾（詳見 docs/ADD_NEW_UNIT.md）。
       </div>
     </div>
   </div>`;
@@ -545,6 +658,15 @@ function renderLogin() {
   });
 }
 
+/* 撳分頁去邊個 hash。
+   大部分 section 都係 #/<section>/<tab>，但有啲 view 嘅預設分頁係住喺個「淨係 section」
+   嘅 hash（例如 #/inventory 就係「物資清單」），咁就唔好加個 /items 落去，
+   否則會撳完一次之後 render 同 hash 對唔上。 */
+const TAB_AT_ROOT = { inventory: 'items' };
+function tabHash(section, tab) {
+  return TAB_AT_ROOT[section] === tab ? `#/${section}` : `#/${section}/${tab}`;
+}
+
 /* ============================================================
    SHELL
    ============================================================ */
@@ -602,6 +724,7 @@ function render() {
           <div class="tb-sub truncate">${esc(u.name || '')} ${mock ? '· 示範模式' : ''}</div>
         </div>
         <div class="row gap-8">
+          <span id="syncChip" class="no-print"></span>
           ${notices().length ? `<span class="badge b-warn no-print"><span class="dot"></span>${notices().length} 項提示</span>` : ''}
           <button class="btn btn-ghost btn-sm hide-desktop" id="btnLogout2" title="登出">${icon('logout', 16)}</button>
         </div>
@@ -645,8 +768,23 @@ function render() {
     openFieldDesigner(b.dataset.fields, { onSaved: () => window.dispatchEvent(new CustomEvent('v82:refresh')) });
   }));
 
+  /* ---- 分頁掣（ui.js 個 tabs()）：全域統一綁 ----
+     以前每個 view 要自己喺 mount() 綁一次 [data-tab]，漏咗就成頁分頁死晒。
+     「帳號與系統」「通告」「表格與同步」就係咁壞咗 —— 六個分頁一粒都撳唔郁，
+     連帶入面所有掣（改密碼、備份、旅團設定…）都永遠去唔到，
+     用家見到嘅就係「所有掣都壞咗」。
+     而家 tabs() 吐出嚟嘅 <div data-tabnav> 一律喺呢度處理：撳分頁 ＝ 去 #/<section>/<tab>。
+     注意：淨係揀 [data-tabnav] 入面嘅掣。View 自己手砌、唔想改 hash 嘅
+     local 分頁（例如 meetings.js 會議詳情嗰啲）唔會被搶。 */
+  app.querySelectorAll('#view [data-tabnav] [data-tab]').forEach(b => b.addEventListener('click', () => {
+    const t = b.dataset.tab;
+    if (!t) return;
+    go(tabHash(r.section, t));
+  }));
+
   const root = app.querySelector('#view');
   try { view.mount(root, r); } catch (e) { console.error('mount error', e); }
+  paintSyncChip();
   window.scrollTo({ top: 0 });
 }
 

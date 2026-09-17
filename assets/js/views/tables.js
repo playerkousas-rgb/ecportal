@@ -481,12 +481,51 @@ function syncView() {
   const s = load().sync || {};
   const backend = load().backend || null;
   const log = s.log || [];
+  const pending = Number(s.pending || 0);
+  const lastPush = s.lastPushAt ? String(s.lastPushAt).slice(0, 19).replace('T', ' ') : '';
+  const lastPull = s.lastPullAt ? String(s.lastPullAt).slice(0, 19).replace('T', ' ') : '';
   return `
   <div class="note-box mb-16">${icon('cloud', 15)}<div>
-    目標：<b>一張 Sheet 統管整個 Venture</b>。每個旅團嘅 app 將自己嘅資料 POST 去 Apps Script，
-    由 Script 寫入你嘅總 Sheet（每個旅團分開分頁，或者用「旅團」欄分辨）。<br>
-    <span class="xs">同一個後端仲會處理 <b>成員手機記帳</b>（entry.html）同 <b>通告報名</b>（notice.html）—— 三條路都入同一張總表。</span>
+    <b>資料真正嘅家係你自己嘅 Google Sheet。</b>
+    App 每次改動都會自動把<b>整個資料庫</b>寫入 Sheet 嘅「<b>資料庫</b>」分頁；
+    開機會由後端讀返最新版本 —— 所以<b>換手機、換瀏覽器、清 cache 都唔會冇咗資料</b>。<br>
+    <span class="xs">其他分頁（帳目／團員／物資…）係攤平出嚟畀你自己睇同用公式嘅「報表」。
+    同一個後端仲會處理 <b>成員手機記帳</b>（entry.html）同 <b>通告報名</b>（notice.html）。</span>
   </div></div>
+
+  ${backend ? `<div class="card mb-16"><div class="card-head">
+    <div><div class="card-title">${icon('shield', 15)} 儲存狀態</div>
+      <div class="card-sub">資料有冇真係入咗後端</div></div>
+    ${pending ? `<span class="badge b-warn"><span class="dot"></span>${pending} 項改動未儲存</span>`
+      : `<span class="badge b-ok"><span class="dot"></span>全部已儲存</span>`}
+  </div>
+  <div style="padding:12px 16px" class="sm muted">
+    <div class="kv-row"><span>最後寫入後端</span><span>${esc(lastPush || '（未試過）')}</span></div>
+    <div class="kv-row"><span>最後由後端讀取</span><span>${esc(lastPull || '（未試過）')}</span></div>
+    ${s.lastError ? `<div class="kv-row"><span>上次錯誤</span><span style="color:var(--danger)">${esc(String(s.lastError).slice(0, 120))}</span></div>` : ''}
+    ${/API ?Key|未授權/i.test(String(s.lastError || '')) ? `
+    <div class="note-box err mt-8">${icon('alert', 15)}<div>
+      <b>寫唔入係因為 API Key 未入伺服器端。</b>後端行過 <code>initializeSheets</code> 之後會自動生成一條 API Key，
+      但平台伺服器端未有，所以後端拒絕寫入（讀就冇事，所以「測試連線」照樣顯示成功）。<br>
+      <b>正確做法係交畀平台管理員設定，唔係喺呢度打條 key：</b>
+      喺 Apps Script 執行 <code>showApiKey()</code> 攞條 key → 喺 Vercel 加環境變數
+      <code>TROOP_${esc(load().unitCode || '編號')}_APIKEY</code>（同埋確認
+      <code>TROOP_${esc(load().unitCode || '編號')}_BACKEND</code> 係你個 <code>/exec</code>）→ 重新部署。
+      咁條 key 淨係留喺伺服器端，瀏覽器完全唔會見到。
+    </div></div>` : ''}
+    <div class="row gap-8 mt-12 wrap">
+      <button class="btn btn-primary btn-sm" data-act="push-db">${icon('cloud', 15)} 立即儲存到後端</button>
+      <button class="btn btn-sm" data-act="pull-db">${icon('download', 15)} 由後端還原資料</button>
+      <button class="btn btn-sm" data-act="db-info">${icon('search', 15)} 睇後端有咩資料</button>
+      <button class="btn btn-sm" data-act="migrate-check">${icon('shield', 15)} 搬遷檢查</button>
+    </div>
+    <div class="hint mt-8">「由後端還原」會<b>用後端嘅資料覆蓋呢部機</b>（換咗新手機／清咗 cache 就用呢個）。</div>
+  </div></div>` : `
+  <div class="note-box danger mb-16">${icon('alert', 15)}<div>
+    <b>未設定後端 —— 你嘅資料而家淨係存喺呢部機嘅瀏覽器。</b>
+    清 cache、換手機、甚至瀏覽器自動清理都會令資料<b>永久消失</b>。
+    請喺下面填你旅團嘅 Apps Script <code>/exec</code> 網址。
+  </div></div>`}
 
   ${backend ? `<div class="card mb-16"><div class="card-head">
     <div><div class="card-title">${icon('check', 15)} 後端已連接${backend.shared ? '（跟 Registry 共用）' : '（本旅團專用）'}</div>
@@ -508,11 +547,17 @@ function syncView() {
         <div class="grid g-2 mt-12" style="gap:12px">
           <div class="field"><label class="label">旅團編號</label>
             <input class="input" id="y-unit" value="${esc(s.unit || load().unitCode)}"></div>
-          <div class="field"><label class="label">API Key（可留空）</label>
-            <input class="input" id="y-key" value="${esc(s.apiKey || '')}" placeholder="範本預設 v82-demo-key"></div>
+          <div class="field"><label class="label">API Key <span class="faint">（通常唔使填）</span></label>
+            <input class="input" id="y-key" value="${esc(s.apiKey || '')}" placeholder="由伺服器端提供"></div>
         </div>
-        <label class="check mt-12"><input type="checkbox" id="y-auto" ${s.auto ? 'checked' : ''}> 改動後<b>排隊</b>等同步（防呆：唔會即時送出，要撳「立即同步」先寫入總表）</label>
-        ${Number(s.pending) ? `<div class="hint" style="color:var(--warn)">有 <b>${Number(s.pending)}</b> 次改動仲未送去總表。</div>` : ''}
+        <div class="hint mt-6">
+          ${icon('shield', 14)} API Key 同 <code>/exec</code> 正路係由平台管理員入喺
+          <b>Vercel 環境變數</b>（<code>TROOP_${esc(load().unitCode || '編號')}_APIKEY</code> /
+          <code>TROOP_${esc(load().unitCode || '編號')}_BACKEND</code>），由伺服器端注入，
+          瀏覽器唔會見到。上面兩格<b>淨係</b>喺純靜態部署（冇 <code>/api/proxy</code>，例如 GitHub Pages）先需要填。
+        </div>
+        <label class="check mt-12"><input type="checkbox" id="y-auto" ${s.auto !== false ? 'checked' : ''}> <b>改動後自動儲存到後端</b>（強烈建議開；熄咗就要自己撳「立即儲存」，唔記得就會冇咗）</label>
+        ${pending ? `<div class="hint" style="color:var(--warn)">有 <b>${pending}</b> 次改動仲未寫入後端。</div>` : ''}
         <label class="check mt-6"><input type="checkbox" id="y-share" ${(load().settings?.publicEntry?.submitUrl || load().settings?.notice?.submitUrl) === s.url ? 'checked' : ''}> <b>同一條網址共用</b>畀「手機記帳」同「通告報名」</label>
         <div class="row gap-8 mt-12 wrap">
           <button class="btn btn-primary" data-act="save-sync">${icon('save', 16)} 儲存設定</button>
@@ -720,7 +765,7 @@ export function buildPayload({ sample = false } = {}) {
     tables[d.collection] = sample ? rows.slice(0, 3) : rows;
   });
   const s = db.sync || {};
-  return {
+  const payload = {
     action: sample ? 'ping' : 'sync',
     unit: s.unit || db.unitCode,
     unitName: db.profile?.name || db.unit?.name || '',
@@ -730,6 +775,10 @@ export function buildPayload({ sample = false } = {}) {
     counts: Object.fromEntries(Object.entries(tables).map(([k, v]) => [k, v.length])),
     tables
   };
+  /* 真正嘅同步：除咗攤平嘅報表，仲要帶埋**整個資料庫**（原樣 JSON），
+     後端會存入「資料庫」分頁 —— 咁先讀得返、換機先唔會冇咗。 */
+  if (!sample) payload.db = db;
+  return payload;
 }
 
 export async function pushToMaster({ silent = false } = {}) {
@@ -758,7 +807,10 @@ export async function pushToMaster({ silent = false } = {}) {
     });
     const txt = (await res.text()).slice(0, 300);
     const ok = res.ok;
-    if (ok) { const d = load(); d.sync = { ...(d.sync || {}), pending: 0 }; }
+    if (ok) {
+      const d = load();
+      d.sync = { ...(d.sync || {}), pending: 0, lastPushAt: new Date().toISOString(), lastError: '' };
+    }
     log(`${ok ? '✓' : '✗'} HTTP ${res.status} · ${payload.counts ? Object.values(payload.counts).reduce((a, b) => a + b, 0) : 0} 筆 · ${txt.replace(/\s+/g, ' ').slice(0, 80)}`);
     if (!silent) toast(ok ? '已同步到總表' : '同步失敗（' + res.status + '）', ok ? 'ok' : 'err');
     return { ok, msg: txt };
@@ -1040,13 +1092,196 @@ export function mount(root, params) {
         db.sync = { ...(db.sync || {}), url: root.querySelector('#y-url').value.trim(), unit: root.querySelector('#y-unit').value.trim(), apiKey: root.querySelector('#y-key').value.trim() };
         commit();
         const res = await pushToMaster({ silent: true });
-        toast(res.ok ? '連線成功（已送 ping + 少量樣本）' : '連線失敗：' + res.msg, res.ok ? 'ok' : 'err');
+        /* 淨係 ping 得通唔代表寫得入 —— 讀類 action 唔使 API Key，
+           但 saveDb 要。以前淨係 ping，所以 key 錯都會報「連線成功」，
+           用家一路以為接通咗，其實成個資料庫一直寫唔入後端。
+           所以順手用 dbInfo 驗埋「有冇寫入權」。 */
+        const remote = await import('../lib/remote.js');
+        const auth = await remote.remoteInfo();
+        if (res.ok && auth?.ok) {
+          toast('連線成功，而且寫得入後端', 'ok');
+        } else if (res.ok && auth?.hint) {
+          await modal({
+            title: '連得到後端，但寫唔入',
+            body: `<div class="note-box err">${icon('alert', 15)}<div><b>後端回覆：</b>${esc(auth.error || '未知錯誤')}</div></div>
+              <p class="sm mt-12">${esc(auth.hint)}</p>
+              <p class="sm muted mt-8">讀取類嘅請求唔使 API Key，所以淨係「ping」係試唔出呢個問題嘅。</p>`,
+            actions: [{ label: '知道喇', class: 'btn-primary', value: true }]
+          });
+        } else {
+          toast(res.ok ? '連線成功（但讀唔到資料庫狀態）' : '連線失敗：' + res.msg, res.ok ? 'warn' : 'err');
+        }
         refresh();
       }
       if (act === 'push-sync') {
-        if (!(await confirmDlg({ title: '立即同步', okText: '開始同步', message: '會將全部表格資料送去你嘅 Apps Script（寫入總 Sheet）。' }))) return;
+        if (!(await confirmDlg({ title: '立即同步', okText: '開始同步', message: '會將全部表格資料送去你嘅 Apps Script（寫入總 Sheet），同時把整個資料庫存入「資料庫」分頁。' }))) return;
         pushToMaster(); refresh();
       }
+
+      /* ---- 整個資料庫：寫入／還原／檢視（真正嘅後端儲存） ---- */
+      if (act === 'push-db') {
+        const remote = await import('../lib/remote.js');
+        const old = b.innerHTML;
+        b.disabled = true; b.textContent = '儲存中…';
+        const r = await remote.flush();
+        b.disabled = false; b.innerHTML = old;
+        if (r.ok) {
+          toast('已把整個資料庫儲存到後端', 'ok');
+        } else if (r.hint) {
+          /* 有得救嘅死因（API Key 唔啱／未 re-deploy）：用對話框講清楚點解決，
+             唔好淨係彈個 toast —— toast 一閃就冇，用家只會覺得「又係唔得」。 */
+          await modal({
+            title: r.reason === 'bad_key' ? '寫唔入後端：API Key 唔啱' : '寫唔入後端：個 /exec 仲係舊版',
+            body: `<div class="note-box err">${icon('alert', 15)}<div><b>後端回覆：</b>${esc(r.error || '未知錯誤')}</div></div>
+              <p class="sm mt-12">${esc(r.hint)}</p>
+              <p class="sm muted mt-8">你部機啲資料仲喺度，一修好就會即刻寫得入 —— 唔會蝕咗。</p>`,
+            actions: [{ label: '知道喇', class: 'btn-primary', value: true }]
+          });
+        } else {
+          toast('儲存失敗：' + (r.error || '未知錯誤'), 'err');
+        }
+        refresh();
+      }
+      if (act === 'pull-db') {
+        const remote = await import('../lib/remote.js');
+        const info = await remote.remoteInfo();
+        if (!info?.ok) { toast('讀唔到後端：' + (info?.error || '未知錯誤'), 'err'); return; }
+        if (!info.found) { toast('後端仲未有資料庫（請先撳「立即儲存到後端」）', 'warn'); return; }
+        const c = info.counts || {};
+        const okGo = await confirmDlg({
+          title: '由後端還原資料', danger: true, okText: '用後端資料覆蓋本機',
+          message: `後端最後更新：<b>${esc(String(info.at || info.version || '').slice(0, 19).replace('T', ' '))}</b><br>
+            內容：團員 ${c.members ?? '?'} · 帳目 ${c.transactions ?? '?'} · 會議 ${c.meetings ?? '?'} · 通告 ${c.notices ?? '?'} · 物資 ${c.invItems ?? '?'}<br><br>
+            <b>呢部機而家嘅資料會被覆蓋。</b>如果本機有未儲存嘅改動，請先撳「立即儲存到後端」。`
+        });
+        if (!okGo) return;
+        const got = await remote.pullDb();
+        if (!got?.ok || !got.db) { toast('讀取失敗：' + (got?.error || '未知錯誤'), 'err'); return; }
+        const { adoptRemote } = await import('../lib/store.js');
+        try {
+          adoptRemote(got.db);
+          toast('已由後端還原資料', 'ok');
+          refresh();
+        } catch (e) { toast('還原失敗：' + e.message, 'err'); }
+      }
+      if (act === 'db-info') {
+        const remote = await import('../lib/remote.js');
+        const info = await remote.remoteInfo();
+        if (!info?.ok) { toast('讀唔到後端：' + (info?.error || '未知錯誤'), 'err'); return; }
+        const c = info.counts || {};
+        await modal({
+          title: '後端「資料庫」分頁',
+          body: info.found
+            ? `<div class="sm">
+                ${kv([
+                  ['最後更新', String(info.at || info.version || '').slice(0, 19).replace('T', ' ') || '（未知）'],
+                  ['資料大小', remote.fmtBytes(info.bytes || 0)],
+                  ['團員', `${c.members ?? 0} 人`],
+                  ['帳目', `${c.transactions ?? 0} 筆`],
+                  ['會議', `${c.meetings ?? 0} 場`],
+                  ['通告', `${c.notices ?? 0} 張`],
+                  ['物資', `${c.invItems ?? 0} 件`],
+                  ['帳戶', `${c.accounts ?? 0} 個`]
+                ])}
+              </div>`
+            : `<div class="note-box warn">${icon('alert', 15)}<div>後端仲未有資料庫 —— 撳「立即儲存到後端」就會建立。</div></div>`,
+          actions: [{ label: '知道喇', class: 'btn-primary', value: true }]
+        });
+      }
+      /* ---- 搬遷檢查：確認後端真係有齊嘢，先至夠膽清走前端／靜態資料 ----
+         呢個係「搬屋前數吓箱」嘅工具。0082 原本啲資料係靜態檔（data/units/0082/*.json）
+         ＋ 瀏覽器 localStorage，要搬入後端。清嘢之前必須逐項對數，
+         唔可以靠「撳咗儲存應該冇事」。 */
+      if (act === 'migrate-check') {
+        const remote = await import('../lib/remote.js');
+        const old = b.innerHTML;
+        b.disabled = true; b.textContent = '檢查中…';
+
+        const local = load();
+        const pendingCount = () => Number(load().sync?.pending || 0);
+        const localCount = {
+          members: (local.members || []).length,
+          transactions: (local.transactions || []).length,
+          meetings: (local.meetings || []).length,
+          notices: (local.notices || []).length,
+          invItems: (local.invItems || []).length,
+          accounts: (local.accounts || []).length
+        };
+        /* 攞成份後端資料落嚟逐項數（dbInfo 淨係回 6 個 count，唔夠細） */
+        const got = await remote.pullDb();
+        b.disabled = false; b.innerHTML = old;
+
+        if (!got?.ok) {
+          await modal({
+            title: '搬遷檢查：讀唔到後端',
+            body: `<div class="note-box err">${icon('alert', 15)}<div>${esc(got?.error || '未知錯誤')}</div></div>
+              ${got?.hint ? `<p class="sm mt-12">${esc(got.hint)}</p>` : ''}
+              <p class="sm muted mt-8"><b>未搬得。</b>先修好後端連線。</p>`,
+            actions: [{ label: '知道喇', class: 'btn-primary', value: true }]
+          });
+          return;
+        }
+        if (!got.found || !got.db) {
+          await modal({
+            title: '搬遷檢查：後端仲係空',
+            body: `<div class="note-box warn">${icon('alert', 15)}<div>後端未有任何資料庫。</div></div>
+              <p class="sm mt-12">先撳「<b>立即儲存到後端</b>」，再返嚟做呢個檢查。</p>
+              <p class="sm muted mt-8"><b>千祈唔好</b>喺呢個狀態清走前端資料。</p>`,
+            actions: [{ label: '知道喇', class: 'btn-primary', value: true }]
+          });
+          return;
+        }
+
+        const rdb = got.db;
+        const remoteCount = {
+          members: (rdb.members || []).length,
+          transactions: (rdb.transactions || []).length,
+          meetings: (rdb.meetings || []).length,
+          notices: (rdb.notices || []).length,
+          invItems: (rdb.invItems || []).length,
+          accounts: (rdb.accounts || []).length
+        };
+        const LABEL = { members: '團員', transactions: '帳目', meetings: '會議', notices: '通告', invItems: '物資', accounts: '帳戶' };
+        /* 團章同設定唔係陣列，另外驗 */
+        const extra = [
+          ['團章章節', (local.constitution?.chapters || []).length, (rdb.constitution?.chapters || []).length],
+          ['團費紀錄', (local.fees || []).length, (rdb.fees || []).length],
+          ['收支申報', (local.claims || []).length, (rdb.claims || []).length],
+          ['活動預算', (local.budgets || []).length, (rdb.budgets || []).length],
+          ['物資借用', (local.invLoans || []).length, (rdb.invLoans || []).length]
+        ];
+
+        const rows = [
+          ...Object.keys(localCount).map(k => [LABEL[k], localCount[k], remoteCount[k]]),
+          ...extra
+        ];
+        const bad = rows.filter(([, l, r]) => l !== r);
+        const allMatch = bad.length === 0 && !pendingCount();
+
+        await modal({
+          title: allMatch ? '搬遷檢查：✅ 後端有齊嘢' : '搬遷檢查：⚠️ 未夾得掂',
+          body: `
+            <table class="tbl sm"><thead><tr><th>項目</th><th class="r">呢部機</th><th class="r">後端</th><th></th></tr></thead>
+            <tbody>${rows.map(([n, l, r]) => `<tr>
+              <td>${esc(n)}</td><td class="r">${l}</td><td class="r">${r}</td>
+              <td class="r">${l === r ? `<span style="color:var(--ok)">✓</span>` : `<span style="color:var(--danger)">✗ 爭 ${Math.abs(l - r)}</span>`}</td>
+            </tr>`).join('')}</tbody></table>
+            ${pendingCount() ? `<div class="note-box warn mt-12">${icon('alert', 15)}<div>
+              仲有 <b>${pendingCount()}</b> 項改動未寫入後端 —— 撳「立即儲存到後端」先。</div></div>` : ''}
+            ${allMatch ? `<div class="note-box ok mt-12">${icon('check', 15)}<div>
+              <b>後端同呢部機完全一致，可以安全清走前端資料。</b><br>
+              建議次序：① 先撳下面「匯出 JSON 備份」留一份喺電腦（保險）→
+              ② 由 Git 移除 <code>data/units/0082/</code> →
+              ③ 之後新裝置開機會直接由後端讀，唔會再種舊資料。</div></div>`
+            : `<div class="note-box err mt-12">${icon('alert', 15)}<div>
+              <b>未可以清。</b>上面打 ✗ 嗰啲項目兩邊對唔上 —— 先撳「立即儲存到後端」，
+              再做多次檢查；仲係唔夾就唔好清，話我知。</div></div>`}
+            <p class="sm muted mt-8">後端最後更新：${esc(String(got.version || got.at || '').slice(0, 19).replace('T', ' ') || '（未知）')}
+              · 大小 ${esc(remote.fmtBytes(got.bytes || 0))}</p>`,
+          actions: [{ label: '知道喇', class: 'btn-primary', value: true }]
+        });
+      }
+
       if (act === 'dl-gas') {
         const { gasTemplate } = await import('../lib/gastemplate.js');
         download('Code.gs', gasTemplate(), 'text/plain;charset=utf-8');
