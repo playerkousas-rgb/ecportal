@@ -25,9 +25,15 @@
 
 ```bash
 cd ecportal
-python3 -m http.server 8000     # 或用任何靜態伺服器（必須用 http:// 開啟，唔可以雙擊檔案）
+node dev-server.mjs             # 推薦（靜態＋/api，同 Vercel 行為一致）
+# 或用任何靜態伺服器：python3 -m http.server 8000（必須用 http:// 開啟，唔可以雙擊檔案）
 # 瀏覽器打開 http://localhost:8000
 ```
+
+> **本地預覽想見到「環境變數登記嘅旅團」？** 開一份 `.env.local`（`.gitignore` 已排除，
+> 有 API Key，唔好 commit），入面放 `TROOP_<編號>_BACKEND / _APIKEY / _NAME`，
+> `node dev-server.mjs` 開機會自動載入——咁本地嘅旅團選擇閘就同 Vercel 生產一樣。
+> 冇呢份檔嘅本地預覽，選擇閘自然只有 MOCK（環境變數只住喺 Vercel）。
 
 ### 第一步：揀旅團
 
