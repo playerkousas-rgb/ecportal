@@ -28,8 +28,24 @@ function ok(name, cond, extra = '') {
 }
 const wait = (ms) => new Promise(r => setTimeout(r, ms));
 
+/* Registry fixture：真 data/units.json 而家係空嘅（0082 資料已移除，
+   真旅團一律靠 Vercel env TROOP_<編號>_* 登記）。呢個測試要驗「有旅團可揀」
+   嘅閘行為，所以自己餵一個虛構旅團 TEST9。 */
+const FIXTURE_REG = {
+  schema: 2, defaultUnit: '',
+  units: {
+    TEST9: {
+      code: 'TEST9', name: '測試旅深資童軍團', nameEn: 'Test Group Venture Scout Unit',
+      short: 'test9', section: '深資童軍', sponsor: '測試主辦機構',
+      dataPath: 'tests/fixtures/units/TEST9/'
+    }
+  }
+};
 globalThis.fetch = async (url) => {
   const clean = String(url).split('?')[0].replace(/^\.?\//, '');
+  if (/(^|\/)units\.json$/.test(clean) || /api\/units/.test(clean)) {
+    return { ok: true, status: 200, json: async () => FIXTURE_REG, text: async () => JSON.stringify(FIXTURE_REG) };
+  }
   const file = path.join(ROOT, clean);
   if (!file.startsWith(ROOT) || !fs.existsSync(file)) {
     return { ok: false, status: 404, json: async () => { throw new Error('404 ' + clean); } };
@@ -63,15 +79,35 @@ const appText = () => doc.getElementById('app')?.textContent || '';
 ok('第一步係旅團選擇畫面（唔係登入畫面）',
   /揀你嘅旅團/.test(appText()) && !/請揀你嘅身份/.test(appText()),
   appText().replace(/\s+/g, ' ').slice(0, 120));
-ok('列出註冊咗嘅旅團 0082', !!doc.querySelector('[data-pick="0082"]'),
+ok('列出註冊咗嘅旅團 TEST9', !!doc.querySelector('[data-pick="TEST9"]'),
   Array.from(doc.querySelectorAll('[data-pick]')).map(b => b.dataset.pick).join(','));
 ok('有 MOCK（試用示範）選項', !!doc.querySelector('[data-pick="MOCK"]'));
-ok('旅團卡顯示旅團名', /第八十二旅深資童軍團/.test(appText()));
+ok('旅團卡顯示旅團名', /測試旅深資童軍團/.test(appText()));
 ok('未揀旅團之前唔會初始化資料庫',
-  !window.localStorage.getItem('venture82.unit.0082.db.v2'), '（應該要揀完先種入資料）');
+  !window.localStorage.getItem('venture82.unit.TEST9.db.v2'), '（應該要揀完先種入資料）');
 ok('登入表單未出現', !doc.getElementById('loginForm'));
 
 /* 新旅團申請接入：真正 render 出嚟，唔係 grep 原始碼 */
+/* registry 讀到、但一個旅團都未登記（＝清空 0082 之後嘅全新部署）：
+   要叫人去申請接入，唔可以報「讀唔到 data/units.json」呢個假錯誤。 */
+{
+  const units = await import('../assets/js/lib/units.js?empty=1');
+  const emptyReg = { schema: 2, defaultUnit: '', units: {} };
+  const prevFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (/api\/units/.test(u)) return { ok: true, status: 200, json: async () => ({ units: {} }) };
+    if (/units\.json/.test(u)) return { ok: true, status: 200, json: async () => emptyReg, text: async () => JSON.stringify(emptyReg) };
+    return { ok: false, status: 404 };
+  };
+  await units.loadRegistry(true);
+  ok('registry 讀到就算冇旅團都當「連得到」', units.registryReachable() === true);
+  ok('冇旅團登記時 unitList() 係空', units.unitList().length === 0);
+  ok('預設旅團係空（唔會靜靜雞當你係某個旅團）', units.defaultUnitCode() === '');
+  ok('冇登記旅團就攞唔到任何後端', units.backendOf('0082') === null && units.backendOf('0123') === null);
+  globalThis.fetch = prevFetch;
+}
+
 ok('旅團閘有「新旅團申請接入」入口', !!doc.querySelector('[data-act="apply"]'));
 ok('閘面講明每旅團用自己嘅後端', /每個旅團用自己嘅 Google Sheet 做後端/.test(appText()));
 const applyBtn = doc.querySelector('[data-act="apply"]');
@@ -137,7 +173,7 @@ ok('申請表講清楚進度系統由旅團自己填 Script ＋ API Key（唔使
 
 /* ---------- ② 揀咗旅團 ---------- */
 console.log('\n▌揀旅團之後');
-const btn = doc.querySelector('[data-pick="0082"]');
+const btn = doc.querySelector('[data-pick="TEST9"]');
 let navigated = '';
 try {
   // jsdom 唔會真係轉頁；用 setter 攞佢想去邊
@@ -152,14 +188,14 @@ try {
 btn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
 await wait(80);
 ok('揀完會記住選擇（下次唔使再揀）',
-  window.localStorage.getItem('venture82.unitChosen.v2') === '0082',
+  window.localStorage.getItem('venture82.unitChosen.v2') === 'TEST9',
   String(window.localStorage.getItem('venture82.unitChosen.v2')));
-ok('揀完會帶 ?u=0082 重新載入', /u=0082/.test(navigated) || !navigated, navigated || '（jsdom 唔會真係轉頁）');
+ok('揀完會帶 ?u=TEST9 重新載入', /u=TEST9/.test(navigated) || !navigated, navigated || '（jsdom 唔會真係轉頁）');
 
 /* ---------- ③ 已經揀過：直接入登入畫面 ---------- */
 console.log('\n▌已揀過旅團（第二次開）');
 ok('記住咗選擇之後 unitChosen 條件成立',
-  window.localStorage.getItem('venture82.unitChosen.v2') === '0082');
+  window.localStorage.getItem('venture82.unitChosen.v2') === 'TEST9');
 
 if (errors.length) {
   console.log(`\n捕捉到 ${errors.length} 個 console.error：`);

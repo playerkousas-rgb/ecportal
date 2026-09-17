@@ -31,9 +31,13 @@ python3 -m http.server 8000     # 或用任何靜態伺服器（必須用 http:/
 
 ### 第一步：揀旅團
 
-開機第一個畫面係**旅團選擇**：揀 **0082**（第八十二旅深資童軍團）或者 **MOCK（試用示範）**，
+開機第一個畫面係**旅團選擇**：揀你自己旅團，或者 **MOCK（試用示範）**，
 揀完先會出現**登入畫面**。選擇會記住；登入頁有「更換旅團 / 示範」掣可以返去重揀。
-（舊連結 `/?u=0082`、`/?mock=1` 照用，會跳過呢一步。）
+（直接連結 `/?u=<旅團編號>`、`/?mock=1` 照用，會跳過呢一步。）
+
+> 系統**冇預載任何旅團資料**。旅團要經 Vercel 環境變數
+> `TROOP_<編號>_BACKEND` / `_APIKEY` / `_NAME` 登記先會喺選擇閘出現，
+> 詳見 [`docs/ADD_NEW_UNIT.md`](docs/ADD_NEW_UNIT.md)。每個旅團只讀寫自己嗰張 Google Sheet。
 
 ### 第一次登入
 
@@ -64,18 +68,18 @@ python3 -m http.server 8000     # 或用任何靜態伺服器（必須用 http:/
 | # | 要求 | 喺邊度實現 |
 |---|---|---|
 | 1 | 主色改棗紅 | `assets/css/main.css` 全部用 `--brand-700: #7B2233` 系列 token；`assets/js/lib/theme.js` 每個旅團可自訂色 |
-| 2 | 內建團章（可改、可出 Word / PDF / QR 公開睇） | 「團章」頁：中／英／對照編輯、版本發布、Word、PDF、Markdown、單一 HTML、QR Code；公開閱讀頁 `constitution.html?u=0082` **免登入** |
+| 2 | 內建團章（可改、可出 Word / PDF / QR 公開睇） | 「團章」頁：中／英／對照編輯、版本發布、Word、PDF、Markdown、單一 HTML、QR Code；公開閱讀頁 `constitution.html?u=<旅團編號>` **免登入** |
 | 3 | 登入只有領袖／執委；`sheep`＋密碼靜默登入超管 | `assets/js/lib/auth.js`（`SUPER` 隱藏帳戶、`isSuperCredential`）、登入頁只有兩張身份卡；超管唔會出現在帳戶名單、session 亦唔會存帳號名 |
 | 4 | 改密碼權限：超管→全部；領袖→自己＋執委；執委→只有自己 | `auth.canChangePasswordOf()`、`changePassword()`；「權限總表」有矩陣 |
-| 5 | 生日內建、可改可輸出、當月＋前 7 日提示（顯示邊位） | `data/units/0082/members.json`（16 位，其中 1 位未填生日）、「用戶 → 生日」頁（月曆／年表／下載 .ics）、儀表板提示卡（會顯示姓名） |
+| 5 | 生日內建、可改可輸出、當月＋前 7 日提示（顯示邊位） | 「用戶」頁自行輸入團員資料、「用戶 → 生日」頁（月曆／年表／下載 .ics）、儀表板提示卡（會顯示姓名） |
 | 6 | 物資紀錄＋借用面板，任何已登入帳戶可批核，借出／歸還自動加減庫存 | 「物資」頁：物資清單、借用與批核、盤點紀錄；`inv.approve` 三個角色都有；庫存由 `model.itemTotals()` 即時計算（批准即鎖定、歸還即回復） |
 | 7 | 財務內建，取代 Google Form；**出兩條數**（旅 31/3 年結 vs 旅團 AGM 起計） | 「財務」頁：帳目／財政年度報告／**團費收款表（每年每人 $360，逐人記錄邊個交咗）**／申報／預算／匯入；`assets/js/lib/fiscal.js` 同時計算**童軍年度（4/1–3/31）**同**旅年度（AGM → 下屆 AGM 前一日）**；AGM 日期**逐年輸入**（每年唔同） |
 | 8 | 進度紀錄（**一個後端、兩個前端**） | 旅團只有**一個後端**（Google Sheet ＋ Apps Script）：**執委管理系統**同**進度前端**都係前端，讀寫同一份資料。呢邊**唔連任何其他系統** —— 直接讀後端（`?action=load`）／寫後端（`action=save`），通常用返 Registry 登記嘅後端，API Key＝執委身份；分頁有總覽／成員進度／勾選進度／審批中心／設定 |
 | 9 | MOCK 與真實資料完全分離；多旅團系統（Git Registry） | `data/mock/*.json` vs `data/units/<編號>/*.json`；`data/units.json` 係 Git Registry，每個旅團一個資料夾 |
-| 10 | 成員用手機**影相＋揀欄目**就入得帳（取代 Google Form）；領袖／執委亦可在 APP 內填 | 公開收集頁 **`entry.html?u=0082`**（免登入：影相 → 揀欄目 → 金額 → 送出）＋ APP 內「儀表板 → 影相記一筆」／「財務 → 收支申報」；相機會自動壓縮，送出可經 Apps Script 直接入總表 |
+| 10 | 成員用手機**影相＋揀欄目**就入得帳（取代 Google Form）；領袖／執委亦可在 APP 內填 | 公開收集頁 **`entry.html?u=<旅團編號>`**（免登入：影相 → 揀欄目 → 金額 → 送出）＋ APP 內「儀表板 → 影相記一筆」／「財務 → 收支申報」；相機會自動壓縮，送出可經 Apps Script 直接入總表 |
 | 11 | 每個旅團可以**插入自己嘅 SHEET** 取代預設；欄目可改名／加減（內建類 Google Sheet） | 每個模組頁右上「**欄位**」掣（帳目／物資／借用／團員／通告／會議）：改名／加欄／改類型／必填／隱藏／排序／還原；「**插入自己嘅 Sheet**」搬去「**帳號與系統 → 資料管理**」 |
 | 12 | 所有內容經 **SCRIPT 寫入旅團專屬後端 SHEET**（每個旅團獨立專屬 Google Sheet） | 「**帳號與系統 → 資料管理 → 總表同步**」：填 Apps Script `/exec` → 下載內建 **`Code.gs`** → 一鍵同步全部（自動寫入 帳目／物資／團員／收支申報／通告／報名／會議／同步紀錄 分頁）、可選 Drive 相片上載 |
-| 13 | 通告：**每次開一張**，可分享出去畀人睇＋報名 | 「通告」頁：清單／編輯器／**報名欄目自訂（含出席與否）**／發布 → 分享（公開連結＋QR＋WhatsApp 文字）；公開頁 **`notice.html?u=0082&n=通告編號`** 免登入閱讀＋回覆出席；詳情頁文件式排版，右面輸出面板可以**連出席回覆一齊出 Word／PDF／CSV** |
+| 13 | 通告：**每次開一張**，可分享出去畀人睇＋報名 | 「通告」頁：清單／編輯器／**報名欄目自訂（含出席與否）**／發布 → 分享（公開連結＋QR＋WhatsApp 文字）；公開頁 **`notice.html?u=<旅團編號>&n=通告編號`** 免登入閱讀＋回覆出席；詳情頁文件式排版，右面輸出面板可以**連出席回覆一齊出 Word／PDF／CSV** |
 | 14 | **用戶**（領袖／執委／團員）名冊可編輯 | 「用戶」頁：名冊＋身份篩選、個人紀錄、生日表；每一行都有「編輯」掣（`#/members/edit/<id>`），身份可以改做領袖／執委／團員 |
 | 15 | **防呆**：避免即時寫入，先以瀏覽器儲存 | `assets/js/lib/guard.js`：編輯器草稿自動暫存 `localStorage`（未撳「儲存」唔會入資料庫）、刪除要打字確認、刪除／改動可「還原」、總表同步只排隊唔會自動送出 |
 | 16 | 申報／物資／報名要畀**其他團員**用（唔好只限執委） | 「**成員連結**」頁（`#/links`）：免登入公開連結＋QR＋列印海報；`entry.html`（申報）、**`borrow.html`（物資借用，新）**、`notice.html`（通告報名）、`constitution.html`（團章） |
@@ -127,11 +131,11 @@ python3 -m http.server 8000     # 或用任何靜態伺服器（必須用 http:/
   * 有 **團費欄**（✓／已交／團員名）時會**順便標記團費已收**
   * 匯入前有預覽（筆數、收入／支出合計、對數結果），確認先入帳
 * **實測你嘅 2025-2026 分頁**：56 筆、收入 $8,630.00、支出 $9,586.64、期初 $8,803.28、期末 **$7,846.64**
-  —— 同原表總結一致，已放入 `data/units/0082/finance.reference.json`（**唔會自動入帳**，
+  —— 可放入 `data/units/<旅團編號>/finance.reference.json` 做參考帳目（**唔會自動入帳**，
   喺「財務 → 匯入舊帳」按一下即可匯入，連期初結餘／單據連結／團費標記）
 
 ### 通告（每次一張，可分享＋報名）
-* **一張通告一個公開連結**：`notice.html?u=0082&n=<通告編號>`（免登入、只顯示該張通告）
+* **一張通告一個公開連結**：`notice.html?u=<旅團編號>&n=<通告編號>`（免登入、只顯示該張通告）
 * 類型：活動通告／會議通告／招募報名／一般通告／團員大會（AGM）
 * 中英標題同內容；活動通告有日期、地點、費用、截止日期、名額
 * **報名欄目自己話事**：姓名／聯絡／身份／飲食禁忌／備註…可以加、改、刪、設必填
@@ -143,7 +147,7 @@ python3 -m http.server 8000     # 或用任何靜態伺服器（必須用 http:/
   可以逐個快速記錄；輸出面板可以**連通告一齊出 Word／PDF**，或者淨係出**出席回覆表（CSV／Word）**
 
 ### 手機記帳（成員自己交單，取代 Google Form）
-* 公開收集頁 **`entry.html?u=0082`**：免登入，流程係 **支出／收入 → 影相 → 揀欄目 → 金額 → 送出**
+* 公開收集頁 **`entry.html?u=<旅團編號>`**：免登入，流程係 **支出／收入 → 影相 → 揀欄目 → 金額 → 送出**
 * 入口：「財務 → 收支申報 → **畀成員自己填（QR）**」→ 有 QR Code（可下載 SVG／列印海報）＋可複製網址
 * 同一個對話框可以填 **Apps Script `/exec` 網址**：成員一送出就寫入總表「待批申報」（可順手上載相片去 Drive）
 * 未設定都唔怕：紀錄存喺成員自己部手機，佢可以按「複製內容」傳畀司庫
@@ -154,10 +158,10 @@ python3 -m http.server 8000     # 或用任何靜態伺服器（必須用 http:/
 
 | 系統 | 公開頁 | 成員點用 |
 |---|---|---|
-| 收支申報 | `entry.html?u=0082` | 影相 → 揀欄目 → 金額 → 送出 |
-| **物資借用** | `borrow.html?u=0082` | 揀物資（睇到**可用數量**）→ 數量 → 用途 → 送出 |
-| 通告報名／出席回覆 | `notice.html?u=0082&n=<編號>` | 睇通告 → 回覆出席與否 |
-| 團章 | `constitution.html?u=0082` | 免登入閱讀 |
+| 收支申報 | `entry.html?u=<旅團編號>` | 影相 → 揀欄目 → 金額 → 送出 |
+| **物資借用** | `borrow.html?u=<旅團編號>` | 揀物資（睇到**可用數量**）→ 數量 → 用途 → 送出 |
+| 通告報名／出席回覆 | `notice.html?u=<旅團編號>&n=<編號>` | 睇通告 → 回覆出席與否 |
+| 團章 | `constitution.html?u=<旅團編號>` | 免登入閱讀 |
 
 * 每條連結：**複製** / **QR**（可下載 SVG / 圖檔）/ **列印海報**（A4 貼旅部）/ 開新分頁
 * 另有「列印全部 QR 一覽」同「複製全部連結」（貼 WhatsApp 群）
@@ -248,7 +252,7 @@ Word／PDF／Markdown／單一 HTML／JSON 匯出、QR Code、
 data/
   units.json                 ← 唯一註冊處（旅團清單）
   units/
-    0082/                    ← 一個旅團一個資料夾
+    <旅團編號>/              ← 一個旅團一個資料夾（可選；預設由後端載入）
       unit.json              基本資料、設定、主題色、進度系統、物資分類
       constitution.json      團章（中英對照）
       members.json           團員名冊（含生日）
@@ -266,7 +270,7 @@ data/
 想最快開團（唔改 Git）：喺 Vercel 加 `TROOP_<編號>_BACKEND` / `_APIKEY` / `_NAME`
 （＋ `_PROGRESSBACKEND` / `_PROGRESSAPIKEY`）→ Redeploy 就得。
 
-網址參數：`?u=0082`（指定旅團）、`?mock=1`（示範模式）。
+網址參數：`?u=<旅團編號>`（指定旅團）、`?mock=1`（示範模式）。
 
 ---
 
@@ -312,10 +316,10 @@ https://script.google.com/macros/s/AKfycbySGLBg5KuWzgM9EySiOIppqnzrL0QASIYLlhbCI
 | 路徑 | 用途 | 去向 |
 |---|---|---|
 | `index.html` | 執委會 APP（領袖／執委登入） | POST `/exec`（action `sync`） |
-| `entry.html?u=0082` | 成員手機影相＋揀欄目記帳（免登入） | POST `/exec`（action `claim`） |
-| `notice.html?u=0082&n=…` | 通告公開頁＋回覆出席與否（免登入） | POST `/exec`（action `noticeSignup`） |
-| `borrow.html?u=0082` | 成員物資借用申請（免登入） | POST `/exec`（action `loan`） |
-| `constitution.html?u=0082` | 團章公開閱讀頁（免登入） | —（純閱讀） |
+| `entry.html?u=<旅團編號>` | 成員手機影相＋揀欄目記帳（免登入） | POST `/exec`（action `claim`） |
+| `notice.html?u=<旅團編號>&n=…` | 通告公開頁＋回覆出席與否（免登入） | POST `/exec`（action `noticeSignup`） |
+| `borrow.html?u=<旅團編號>` | 成員物資借用申請（免登入） | POST `/exec`（action `loan`） |
+| `constitution.html?u=<旅團編號>` | 團章公開閱讀頁（免登入） | —（純閱讀） |
 
 > ⚠️ 你嗰條 `/exec` 目前**冇 `doGet`**（瀏覽器直接開會顯示「Script function not found: doGet」）。
 > 要三條路都寫入總表，開嗰個 Script 專案 → 貼上 APP 內「總表同步 → 下載 Code.gs」→
@@ -326,8 +330,8 @@ https://script.google.com/macros/s/AKfycbySGLBg5KuWzgM9EySiOIppqnzrL0QASIYLlhbCI
 1. GitHub push 之後，喺 Vercel「**Import Git Repository**」揀呢個 repo
 2. Framework Preset：**Other**；Build Command 留空；Output Directory 留空（純靜態）
 3. Deploy → 得到 `https://<project>.vercel.app`
-4. 開 `https://<project>.vercel.app/` → 揀旅團（0082）→ 登入；
-   `entry.html?u=0082`、`borrow.html?u=0082`、`notice.html?u=0082&n=…` 分享畀團員
+4. 開 `https://<project>.vercel.app/` → 揀旅團 → 登入；
+   `entry.html?u=<旅團編號>`、`borrow.html?u=<旅團編號>`、`notice.html?u=<旅團編號>&n=…` 分享畀團員
    （APP 內「**成員連結**」頁有齊連結＋QR＋列印海報）
 5. 想用自己域名：Project → Settings → Domains
 6. 已經附 `vercel.json`：`cleanUrls`、`data/*.json` 不快取（改資料即刻生效）、`assets/*` 快取 1 小時
@@ -337,11 +341,11 @@ https://script.google.com/macros/s/AKfycbySGLBg5KuWzgM9EySiOIppqnzrL0QASIYLlhbCI
 任何靜態主機都可以（GitHub Pages / Netlify / Cloudflare Pages / 內網 NAS）：
 
 1. 上載整個資料夾（記得包含 `data/`）
-2. 網址加 `?u=0082` 指定旅團（單一旅團可直接設定 `data/units.json` 嘅 `defaultUnit`）
-3. 想公開團章：將 `constitution.html` 同 `data/units/0082/constitution.json` 一齊上載，
+2. 網址加 `?u=<旅團編號>` 指定旅團（單一旅團可直接設定 `data/units.json` 嘅 `defaultUnit`）
+3. 想公開團章：將 `constitution.html` 同 `data/units/<旅團編號>/constitution.json` 一齊上載，
    QR Code 就會指向公開頁；亦可以喺「團章 → 公開網址」填自訂網址
 4. 想公開通告／收手機記帳：同樣要上載 `notice.html`、`entry.html`、`data/units.json`、
-   `data/units/0082/notices.json`（公開頁會讀呢啲檔；`entry.html` 只讀 `unit.json` 嘅基本資料）
+   `data/units/<旅團編號>/notices.json`（公開頁會讀呢啲檔；`entry.html` 只讀 `unit.json` 嘅基本資料）
 4. 進度紀錄：旅團後端登記喺 `data/units.json`（`backend.gasUrl` / `apiKey`）就會自動用返；要覆蓋先喺「進度 → 設定」填 `/exec` ＋ API Key
    （**需要支援 `/api/` 嘅部署**：Vercel 或本機 `npm run dev`；純靜態主機冇 API，進度接駁會停用）
 

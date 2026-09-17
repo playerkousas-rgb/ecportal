@@ -42,6 +42,12 @@ function mockRes() {
    ============================================================ */
 section('同源 Proxy 支援「整份資料庫」讀寫');
 {
+  /* 0082 嘅資料已全清、registry 亦冇咗佢，所以用環境變數開一個虛構旅團做 fixture
+     （真旅團登記方式一樣：Vercel env TROOP_<編號>_BACKEND / _APIKEY）。 */
+  process.env.TROOP_TEST9_BACKEND = GAS;
+  process.env.TROOP_TEST9_APIKEY = 'test9_secret_key';
+  process.env.TROOP_TEST9_NAME = '測試旅深資童軍團';
+
   const calls = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (target, init = {}) => {
@@ -59,10 +65,10 @@ section('同源 Proxy 支援「整份資料庫」讀寫');
     return res;
   };
 
-  const rSave = await call({ action: 'saveDb', unit: '0082', db: { schema: 2, members: [{ name: '測試' }] } });
-  const rLoad = await call({ action: 'loadDb', unit: '0082' });
-  const rInfo = await call({ action: 'dbInfo', unit: '0082' });
-  const rBad = await call({ action: 'dropEverything', unit: '0082' });
+  const rSave = await call({ action: 'saveDb', unit: 'TEST9', db: { schema: 2, members: [{ name: '測試' }] } });
+  const rLoad = await call({ action: 'loadDb', unit: 'TEST9' });
+  const rInfo = await call({ action: 'dbInfo', unit: 'TEST9' });
+  const rBad = await call({ action: 'dropEverything', unit: 'TEST9' });
   const rUnknownUnit = await call({ action: 'loadDb', unit: '9999' });
 
   console.log = realLog;
@@ -268,7 +274,12 @@ section('旅團隔離（新旅團唔會見到 82 旅嘅資料）');
   const units = await import('../assets/js/lib/units.js?iso=1');
   const reg = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'units.json'), 'utf8'));
 
-  ok('Registry 頂層仲有共用 backend 欄（舊資料）', !!reg.backend?.gasUrl);
+  /* 以前 registry 有個頂層共用 backend，任何未登記旅團都會 fallback 去到，
+     即係會見到 82 旅張 Sheet。而家已經拆走 —— 呢個測試守住佢唔好返嚟。 */
+  ok('Registry 冇咗頂層共用 backend（舊漏洞已封）', !reg.backend?.gasUrl, JSON.stringify(reg.backend || null));
+  ok('Registry 冇任何旅團（0082 資料已全清）',
+    Object.keys(reg.units || {}).length === 0, Object.keys(reg.units || {}).join(','));
+  ok('Registry 預設旅團係空（唔會靜靜雞當你係 82 旅）', !reg.defaultUnit, String(reg.defaultUnit));
 
   /* 扮一個「已登記但未交後端」嘅新旅團 */
   globalThis.localStorage = {
@@ -281,7 +292,14 @@ section('旅團隔離（新旅團唔會見到 82 旅嘅資料）');
     const u = String(url);
     if (/api\/units/.test(u)) return { ok: false, status: 404 };
     if (/units\.json/.test(u)) {
-      const withNew = { ...reg, units: { ...reg.units, '0077': { code: '0077', name: '第七十七旅深資童軍團' } } };
+      const withNew = {
+        ...reg,
+        units: {
+          ...reg.units,
+          '0077': { code: '0077', name: '第七十七旅深資童軍團' },
+          TEST9: { code: 'TEST9', name: '測試旅深資童軍團', backend: { gasUrl: GAS } }
+        }
+      };
       return { ok: true, status: 200, json: async () => withNew, text: async () => JSON.stringify(withNew) };
     }
     return { ok: false, status: 404 };
@@ -290,10 +308,14 @@ section('旅團隔離（新旅團唔會見到 82 旅嘅資料）');
 
   const newTroop = units.backendOf('0077');
   ok('未交後端嘅新旅團 ＝ 冇後端（唔會借用 82 旅張 Sheet）', newTroop === null, JSON.stringify(newTroop));
-  ok('0082 自己嘅後端照樣讀得到', (units.backendOf('0082') || {}).gasUrl === GAS);
-  ok('0082 唔會被標記做「共用」後端', units.backendOf('0082')?.shared === false);
-  ok('新旅團冇靜態資料夾（唔會讀到 0082 嘅團員檔）',
+  ok('自己有登記後端嘅旅團照樣讀得到', (units.backendOf('TEST9') || {}).gasUrl === GAS);
+  ok('登記咗嘅後端唔會被標記做「共用」', units.backendOf('TEST9')?.shared === false);
+  ok('0082 已經冇登記 → 攞唔到後端（資料清乾淨）', units.backendOf('0082') === null,
+    JSON.stringify(units.backendOf('0082')));
+  ok('新旅團冇靜態資料夾（唔會讀到人哋嘅團員檔）',
     units.dataPathOf('0077') === 'data/units/0077/' && !fs.existsSync(path.join(ROOT, 'data', 'units', '0077')));
+  ok('0082 靜態資料夾已經喺 Git 移除（唔會再種落任何人部機）',
+    !fs.existsSync(path.join(ROOT, 'data', 'units', '0082')));
 }
 
 /* ============================================================

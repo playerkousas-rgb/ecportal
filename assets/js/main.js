@@ -6,7 +6,7 @@ import {
   init, load, isMock, currentUnit, seedInfo, enterMock, exitMock,
   switchUnit, clearMockData
 } from './lib/store.js';
-import { loadRegistry, unitList, unitEntry, defaultUnitCode } from './lib/units.js';
+import { loadRegistry, unitList, unitEntry, defaultUnitCode, registryReachable } from './lib/units.js';
 import {
   adminInbox, validateApplication, submitApplication, adminChecklist,
   applicationText, downloadCodeGs, copyCodeGs
@@ -235,7 +235,10 @@ function renderUnitGate() {
             </span>
             ${icon('chevronR', 17)}
           </button>`).join('') || `
-          <div class="note-box warn">${icon('alert', 15)}<div>讀唔到 <code>data/units.json</code> —— 請用 HTTP 伺服器開啟呢個網站（唔好直接雙擊 HTML）。</div></div>`}
+          ${registryReachable()
+            ? `<div class="note-box">${icon('info', 15)}<div><b>暫時未有旅團登記。</b>你可以揀下面嘅「試用示範（MOCK）」即刻試玩，
+                 或者撳「新旅團申請接入」登記自己旅團 —— 登記好之後，你嘅旅團就會喺呢度出現，由空白資料庫開始。</div></div>`
+            : `<div class="note-box warn">${icon('alert', 15)}<div>讀唔到 <code>data/units.json</code> —— 請用 HTTP 伺服器開啟呢個網站（唔好直接雙擊 HTML）。</div></div>`}`}
 
         <button class="gate-unit mock" data-pick="MOCK">
           <span class="code">MOCK</span>
@@ -264,7 +267,8 @@ function renderUnitGate() {
 
       <div class="gate-foot">
         揀完之後先會出現<b>登入畫面</b>（領袖 / 執行委員會）。<br>
-        管理員手工加旅團嘅話：喺 <code>data/units.json</code> 註冊，再 copy 一個 <code>data/units/&lt;編號&gt;/</code> 資料夾（詳見 docs/ADD_NEW_UNIT.md）。
+        管理員開新旅團：喺 Vercel 加 <code>TROOP_&lt;編號&gt;_BACKEND</code> / <code>_APIKEY</code> / <code>_NAME</code> 再 Redeploy
+        —— 唔使改 Git，亦唔使起資料夾（詳見 docs/ADD_NEW_UNIT.md）。
       </div>
     </div>
   </div>`;

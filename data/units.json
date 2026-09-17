@@ -1,53 +1,14 @@
 {
   "schema": 2,
-  "updated": "2026-09-14",
-  "_comment": "旅團 Registry —— 多旅團平台嘅唯一註冊處。新增旅團：加一個 key（旅團編號）+ 建立 data/units/<編號>/ 資料夾（unit.json / constitution.json / members.json / inventory.json / finance.json）。詳見 docs/ADD_NEW_UNIT.md",
-  "defaultUnit": "0082",
-  "units": {
-    "0082": {
-      "code": "0082",
-      "name": "第八十二旅深資童軍團",
-      "nameEn": "82nd Hong Kong Group Venture Scout Unit",
-      "short": "執委管理系統",
-      "section": "深資童軍",
-      "region": "港島地域",
-      "sponsor": "香港小童群益會康山兒童中心",
-      "address": "香港鰂魚涌康山花園第二至三座地下",
-      "dataPath": "data/units/0082/",
-      "theme": {
-        "brand700": "#7B2233",
-        "brand800": "#5E1826",
-        "brand900": "#4A111C",
-        "brand600": "#93293D",
-        "brand50": "#FBF1F3",
-        "brand100": "#F2DCE1"
-      },
-      "progress": {
-        "name": "進度紀錄（同一個後端）",
-        "_note": "一個後端、兩個前端：進度資料就喺 backend.gasUrl 指向嘅同一支 Apps Script（進度追蹤／其他獎章／待批完成／活動履歷／待批履歷／成員名單 分頁）。留空 ＝ 前端自動用返呢個 entry 嘅 backend.gasUrl / backend.apiKey。"
-      },
-      "backend": {
-        "gasUrl": "https://script.google.com/macros/s/AKfycbySGLBg5KuWzgM9EySiOIppqnzrL0QASIYLlhbCIHocGHcLHKbkMdvmhJvam3baG___/exec",
-        "apiKey": ""
-      },
-      "notice": {
-        "submitUrl": "https://script.google.com/macros/s/AKfycbySGLBg5KuWzgM9EySiOIppqnzrL0QASIYLlhbCIHocGHcLHKbkMdvmhJvam3baG___/exec",
-        "_howto": "公開通告頁（notice.html）收到嘅報名會 POST 去呢個 Apps Script。"
-      }
-    }
-  },
+  "updated": "2026-09-17",
+  "_comment": "旅團 Registry —— 多旅團平台嘅註冊處。呢個檔**唔應該再放任何旅團嘅真實資料**（名、地址、團員、後端網址、API Key）。所有旅團一律用 Vercel 環境變數登記：TROOP_<編號>_BACKEND / TROOP_<編號>_APIKEY / TROOP_<編號>_NAME（詳見 docs/ADD_NEW_UNIT.md 方法 B）。咁樣新旅團開 app 只會見到自己嘅嘢，資料亦唔會 commit 落 Git。",
+  "defaultUnit": "",
+  "units": {},
   "admin": {
     "name": "平台管理員收件匣（Apps Script Web App）",
     "submitUrl": "https://script.google.com/macros/s/AKfycbxj5BDDGgjs559smkK4Z5aYImWYeXbN5af8U1ObON0z9WnsN6QJW4I1XWolhs5kQ_H-UQ/exec",
-    "_howto": "新旅團喺旅團選擇畫面撳「新旅團申請接入」，資料會經同源 /api/proxy（action=submitRegistration）由伺服器端 POST 去呢度（同 VSBADGE 一條路，目的地固定）。管理員收到之後：data/units.json 加該旅團 entry（backend.gasUrl / backend.apiKey），再建 data/units/<編號>/ 資料夾（unit.json / members.json / constitution.json / finance.json / inventory.json）。一個後端、兩個前端：該 backend.gasUrl 就係進度資料所在（進度追蹤／其他獎章／活動履歷等分頁），旅團登入之後喺「進度」直接讀寫 —— 唔需要任何外連或 portal 設定。",
+    "_howto": "新旅團喺旅團選擇畫面撳「新旅團申請接入」，資料會經同源 /api/proxy（action=submitRegistration）由伺服器端 POST 去呢度（同 VSBADGE 一條路，目的地固定）。管理員收到之後喺 Vercel 加 TROOP_<編號>_BACKEND / _APIKEY / _NAME，撳 Redeploy —— 唔使改呢個檔，亦唔使起 data/units/<編號>/ 資料夾（新旅團由空白資料庫開始，資料全部住喺自己嘅 Google Sheet）。一個後端、兩個前端：該 /exec 同時係進度資料所在，旅團登入之後喺「進度」直接讀寫。",
     "_payload": "{ troopId, troopName, scriptUrl, apiKey, appType:'82venture', appName:'執委管理系統', mainSystemUrl, contact, note, at }",
-    "_note": "呢個 URL 係共用嘅中央管理員收件匣（api/proxy.js 嘅 SCOUT_ADMIN_API）。收件匣唔會回執：POST 過得去就當送到（ADMIN 系統收到就 OK）；只有連線／逾時或者明確回 success:false 先當失敗，嗰陣 App 會叫申請人複製內容直接搵管理員。收到之後：轉寄畀負責團長 → 開團 → email 通知旅團。如果你嘅 admin GAS 有按 appType 過濾，記得加 '82venture'。"
-  },
-  "backend": {
-    "name": "82venture 總表（Apps Script Web App）",
-    "gasUrl": "https://script.google.com/macros/s/AKfycbySGLBg5KuWzgM9EySiOIppqnzrL0QASIYLlhbCIHocGHcLHKbkMdvmhJvam3baG___/exec",
-    "apiKey": "",
-    "_howto": "**每個旅團自設後端先係正常做法**：旅團下載 Code.gs → 建自己嘅 Google Sheet → 執行 initializeSheets → 部署做網頁應用程式 → 把 /exec 網址（同 API Key）交返平台管理員 → 管理員加進呢個 registry（該旅團 entry 嘅 backend.gasUrl）→ 完成開戶同連通。下面呢個共用 backend 只係**未有自己後端時嘅臨時 fallback／示範用**，唔係預設歸宿。",
-    "updated": "2026-09-14"
+    "_note": "呢個 URL 係共用嘅中央管理員收件匣（api/proxy.js 嘅 SCOUT_ADMIN_API）。收件匣唔會回執：POST 過得去就當送到；只有連線／逾時或者明確回 success:false 先當失敗。如果你嘅 admin GAS 有按 appType 過濾，記得加 '82venture'。"
   }
 }

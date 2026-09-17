@@ -1,7 +1,7 @@
 {
-  "schema": 3,
-  "unitCode": "0082",
-  "_comment": "通告資料（種子）。你可以喺 app 內「通告」頁直接開新／編輯，改動會存喺瀏覽器；要令公開頁更新，喺 app 內匯出 notices.json 再上載返呢個位置。",
+  "schema": 2,
+  "unitCode": "TEST9",
+  "_comment": "虛構測試資料。0082 真實通告已移除（搬去後端），呢度只為測試公開頁渲染。",
   "notices": [
     {
       "id": "nt-2026-annfee",
@@ -14,19 +14,19 @@
         "zh": "2026–27 年度團費及活動安排通告",
         "en": "2026-27 Annual Fee and Programme Notice"
       },
-      "body": {
-        "zh": "各位團員及家長：\n\n本年度（2026–27）團費為每年 $360，已入團滿一年之團員請於 2026 年 9 月 30 日前繳交；新入團團員則按入團月份比例計算（每月 $30）。海外團員為標準團費之四分之一（$90）。\n\n本年度活動暫定如下：\n・10 月：先鋒工程訓練日\n・12 月：兩日一夜露營\n・3 月：服務計劃\n詳情容後另發通告。\n\n如有查詢，請聯絡團領袖或司庫。",
-        "en": "Dear members and parents,\n\nThe 2026-27 annual membership fee is HK$360 per member, due on 30 September 2026. New joiners pay pro-rata (HK$30 per month). Overseas members pay one quarter (HK$90).\n\nPlease contact the Unit Leader or Treasurer for enquiries."
-      },
       "eventDate": "",
       "deadline": "2026-09-30",
       "venue": "",
-      "fee": "$360 / 年（新入團按月、海外 $90）",
+      "fee": "$360 / 年",
       "quota": 0,
       "needSignup": false,
       "fields": [],
       "attachments": [],
-      "signups": []
+      "signups": [],
+      "body": {
+        "zh": "各位團員及家長：\n\n本年度（2026–27）團費為每年 $360，請於 2026 年 9 月 30 日前繳交。\n\n如有查詢，請聯絡團領袖或司庫。",
+        "en": "Dear members and parents,\n\nThe 2026-27 annual membership fee is HK$360, due before 30 September 2026."
+      }
     },
     {
       "id": "nt-2026-pioneer",
@@ -40,13 +40,13 @@
         "en": "Pioneering Training Day — Sign-up"
       },
       "body": {
-        "zh": "日期：2026-10-11（星期日）\n時間：上午 9:00 – 下午 5:00\n集合：鰂魚涌康山花園第2–3座地下（團址）\n地點：香港仔郊野公園\n費用：$120（津貼活動費 30%，上限 $70，實付 $84）\n名額：24 人\n\n內容：繩結、旗杆紮作、營地工程\n帶備：水（1.5L）、午餐、手套、雨衣、團員證\n衣著：活動制服（附件A）\n\n請於 9 月 28 日前報名。",
-        "en": "Date: 11 Oct 2026 (Sun), 9am-5pm. Meet at the Unit HQ. Venue: Aberdeen Country Park. Fee: HK$120 (30% activity subsidy, capped at HK$70). Quota: 24. Bring water, lunch, gloves, raincoat, membership card. Activity uniform (Annex A)."
+        "zh": "日期：2026-10-11（星期日）\n時間：上午 9:00 – 下午 5:00\n地點：測試郊野公園\n費用：$120\n名額：24 人\n\n內容：繩結、旗杆紮作、營地工程\n帶備：水（1.5L）、午餐",
+        "en": "Date: 2026-10-11 (Sun)\nTime: 9:00am - 5:00pm\nVenue: Test Country Park\nFee: $120\nQuota: 24"
       },
       "eventDate": "2026-10-11",
       "deadline": "2026-09-28",
-      "venue": "香港仔郊野公園",
-      "fee": "$120（津貼後 $84）",
+      "venue": "測試郊野公園",
+      "fee": "$120",
       "quota": 24,
       "needSignup": true,
       "fields": [
@@ -96,11 +96,11 @@
       ],
       "attachments": [],
       "signups": [],
-      "assembly": "0830 香港仔郊野公園入口集合",
-      "dismissal": "1630 香港仔郊野公園入口解散",
+      "assembly": "0830 測試郊野公園入口集合",
+      "dismissal": "1630 測試郊野公園入口解散",
       "programme": "先鋒工程繩結、紮作、團隊遊戲",
       "dress": "戶外制服",
-      "enquiry": "9123 4567 陳團長"
+      "enquiry": "1234 5678 測試負責人"
     }
   ]
 }

@@ -552,7 +552,7 @@ function editor(n) {
           <div class="field" style="grid-column:1/-1"><label class="label">Title (English)</label>
             <input class="input" id="n-title-en" value="${esc(d.title?.en || '')}" placeholder="Optional"></div>
           <div class="field" style="grid-column:1/-1"><label class="label">內容（中文）</label>
-            <textarea class="textarea" id="n-body" style="min-height:190px" placeholder="可以直接打，支援換行。&#10;例：&#10;日期：2026-10-17 至 10-18&#10;集合：上午 8:30 康山花園地下&#10;費用：$380（團費津貼 30%，上限 $70）&#10;帶備：睡袋、雨衣、個人藥物">${esc(d.body?.zh || '')}</textarea></div>
+            <textarea class="textarea" id="n-body" style="min-height:190px" placeholder="可以直接打，支援換行。&#10;例：&#10;日期：2026-10-17 至 10-18&#10;集合：上午 8:30 團址地下&#10;費用：$380（團費津貼 30%，上限 $70）&#10;帶備：睡袋、雨衣、個人藥物">${esc(d.body?.zh || '')}</textarea></div>
           <div class="field" style="grid-column:1/-1"><label class="label">Body (English)</label>
             <textarea class="textarea" id="n-body-en" style="min-height:90px">${esc(d.body?.en || '')}</textarea></div>
         </div>

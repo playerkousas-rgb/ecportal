@@ -12,15 +12,15 @@ const LOCAL_KEY = 'venture82.units.local.v2';
 
 let cache = null;
 
+/* 連線唔到 Registry（/api/units 同 data/units.json 都讀唔到）嗰陣嘅最後備案。
+   **唔可以** hardcode 任何一個真實旅團 —— 以前呢度寫死咗 0082（連名、連
+   dataPath），結果任何人一開 app、Registry 一讀唔到，就會見到第八十二旅，
+   甚至讀到佢個資料夾。而家留空：讀唔到 Registry ＝ 冇旅團可揀，
+   畫面會叫用家申請接入，唔會洩露任何旅團嘅資料。 */
 const BUILTIN = {
   schema: 2,
-  defaultUnit: '0082',
-  units: {
-    '0082': {
-      code: '0082', name: '第八十二旅深資童軍團', short: '82venture',
-      dataPath: 'data/units/0082/'
-    }
-  }
+  defaultUnit: '',
+  units: {}
 };
 
 function readLocal() {
@@ -42,16 +42,22 @@ export function registry() {
   })();
 }
 
+/* Registry 到底讀唔讀到？（分開「讀唔到檔」同「讀到但一個旅團都未登記」）
+   ——  兩種情況個提示要唔同：前者叫人開 HTTP 伺服器，後者叫人申請接入。 */
+let regReachable = false;
+export function registryReachable() { return regReachable; }
+
 export async function loadRegistry(force = false) {
   if (cache && !force) return cache;
   let fromFile = null;
   try {
     const r = await fetch(REG_URL + '?_=' + Date.now(), { cache: 'no-store' });
-    if (r.ok) fromFile = await r.json();
+    if (r.ok) { fromFile = await r.json(); regReachable = true; }
   } catch (e) { /* 可能係 file:// 或者未部署 */ }
 
   /* 伺服器 Registry：Vercel 環境變數定義嘅旅團（冇 /api 就自動略過） */
   const fromApi = await fetchServerUnits();
+  if (Object.keys(fromApi).length) regReachable = true;
 
   if (fromFile && fromFile.units) {
     const merged = { ...fromFile, units: { ...fromFile.units } };
@@ -125,7 +131,9 @@ export function backendOf(code) {
 export function defaultUnitCode() {
   const reg = registry();
   const units = allUnits();
-  return reg.defaultUnit && units[reg.defaultUnit] ? reg.defaultUnit : (Object.keys(units)[0] || '0082');
+  /* 冇旅團就回空字串 —— 唔好 fallback 落任何真實旅團編號。
+     以前呢度寫死 '0082'，即係 Registry 一有冷場就會靜靜雞當你係 82 旅。 */
+  return reg.defaultUnit && units[reg.defaultUnit] ? reg.defaultUnit : (Object.keys(units)[0] || '');
 }
 
 export function dataPathOf(code) {
