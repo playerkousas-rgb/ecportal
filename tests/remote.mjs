@@ -10,12 +10,15 @@
    用法：node tests/remote.mjs
    ============================================================ */
 
+import http from 'node:http';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import proxyHandler from '../api/proxy.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+/* 留低真 fetch：後面有啲測試會用 stub 蓋住佢，但 proxy 要真嘢先連到本機假 GAS */
+const realFetchForProxy = globalThis.fetch;
 const t0 = Date.now();
 let pass = 0, fail = 0;
 function ok(name, cond, extra = '') {
@@ -291,6 +294,83 @@ section('旅團隔離（新旅團唔會見到 82 旅嘅資料）');
   ok('0082 唔會被標記做「共用」後端', units.backendOf('0082')?.shared === false);
   ok('新旅團冇靜態資料夾（唔會讀到 0082 嘅團員檔）',
     units.dataPathOf('0077') === 'data/units/0077/' && !fs.existsSync(path.join(ROOT, 'data', 'units', '0077')));
+}
+
+/* ============================================================
+   ⑥ API Key 由伺服器端注入（唔可以要求用家喺瀏覽器打 key）
+   ------------------------------------------------------------
+   架構：TROOP_<編號>_BACKEND / _APIKEY 入 Vercel 環境變數
+   → /api/proxy 喺伺服器端解析 → 前端只送旅團編號。
+   曾經出過嘅錯：前端無論如何都送 apiKey:''，而 proxy 係寫
+   `if (unit.apiKey && !payload.apiKey)` 先注入 —— 個空字串令
+   注入唔到，後端就回「未授權」，變成要用家自己去打條 key。
+   ============================================================ */
+section('API Key 由伺服器端注入（前端唔應該知）');
+{
+  /* 上面第 ⑤ 段用咗個「乜都 404」嘅 fetch stub 去扮 registry，
+     而且冇還原 —— proxy 要用真 fetch 先去到本機假 GAS，所以喺度還原返。 */
+  globalThis.fetch = realFetchForProxy;
+  const KEY = 'v82_serverside_only';
+  let keySeenByGas = null;
+  const gas = http.createServer((q, s) => {
+    let raw = '';
+    q.on('data', c => { raw += c; });
+    q.on('end', () => {
+      const b = JSON.parse(raw || '{}');
+      keySeenByGas = b.apiKey || b.apikey || '';
+      const needKey = ['saveDb', 'loadDb', 'dbInfo'].includes(b.action);
+      const out = (needKey && keySeenByGas !== KEY)
+        ? { ok: false, success: false, error: '未授權：API Key 唔正確' }
+        : { ok: true, success: true, bytes: 10, chunks: 1, found: true };
+      s.setHeader('Content-Type', 'application/json');
+      s.end(JSON.stringify(out));
+    });
+  });
+  await new Promise(r => gas.listen(0, '127.0.0.1', r));
+  const gasUrl = `http://127.0.0.1:${gas.address().port}/exec`;
+
+  const saved = { b: process.env.TROOP_0082_BACKEND, k: process.env.TROOP_0082_APIKEY, t: process.env.V82_PROXY_TEST };
+  process.env.TROOP_0082_BACKEND = gasUrl;
+  process.env.TROOP_0082_APIKEY = KEY;
+  process.env.V82_PROXY_TEST = '1';
+
+  const callProxy = (body) => new Promise(resolve => {
+    const res = {
+      _s: 200, setHeader() {}, status(c) { this._s = c; return this; },
+      json(o) { resolve({ status: this._s, json: o }); }
+    };
+    proxyHandler({ method: 'POST', body, headers: {} }, res);
+  });
+
+  /* 前端完全唔送 apiKey —— 正路 */
+  keySeenByGas = null;
+  const clean = await callProxy({ action: 'saveDb', unit: '0082', db: { members: [] } });
+  ok('前端唔送 apiKey，proxy 由 env 注入', clean.json?.ok === true, JSON.stringify(clean.json));
+  ok('GAS 真係收到伺服器端條 key', keySeenByGas === KEY, JSON.stringify(keySeenByGas));
+
+  /* 前端送空字串 —— 唔可以令注入失效 */
+  keySeenByGas = null;
+  const empty = await callProxy({ action: 'saveDb', unit: '0082', apiKey: '', apikey: '', db: { members: [] } });
+  ok('前端送空 apiKey 都唔會阻住注入', empty.json?.ok === true, JSON.stringify(empty.json));
+  ok('空字串唔會蓋過伺服器端條 key', keySeenByGas === KEY, JSON.stringify(keySeenByGas));
+
+  /* remote.js 呢邊：唔應該把空 key 放入 proxy payload */
+  const src = fs.readFileSync(path.join(ROOT, 'assets/js/lib/remote.js'), 'utf8');
+  ok('remote.js 只喺有 key 嗰陣先加入 payload（proxy 路線）',
+    /if \(cfg\.apiKey\) \{\s*body\.apiKey/.test(src));
+  ok('remote.js 有 proxy 路線就唔再強制要前端填 /exec',
+    /viaProxy/.test(src) && /viaProxy && !!unit/.test(src));
+
+  /* 提示文字要指向 Vercel 環境變數，唔可以叫用家喺瀏覽器打 key */
+  ok('bad_key 提示叫人設定 TROOP_<編號>_APIKEY（唔係叫用家自己打）',
+    /TROOP_<[^>]*>_APIKEY/.test(src) && /環境變數/.test(src));
+  ok('bad_key 提示冇再叫用家去「同步設定」填 key',
+    !/總表同步 → 同步設定 → API Key/.test(src));
+
+  gas.close();
+  if (saved.b === undefined) delete process.env.TROOP_0082_BACKEND; else process.env.TROOP_0082_BACKEND = saved.b;
+  if (saved.k === undefined) delete process.env.TROOP_0082_APIKEY; else process.env.TROOP_0082_APIKEY = saved.k;
+  if (saved.t === undefined) delete process.env.V82_PROXY_TEST; else process.env.V82_PROXY_TEST = saved.t;
 }
 
 console.log(`\n──────── 後端儲存測試結果：${pass} 通過 / ${fail} 失敗（${Date.now() - t0} ms）────────\n`);

@@ -9,7 +9,8 @@
 > ⚠️ 要生效**必須更新 Apps Script 部署**，步驟見 **[docs/UPDATES_2026-09-17-BACKEND.md](docs/UPDATES_2026-09-17-BACKEND.md)**。
 >
 > 🔑 **寫唔入後端（「未授權：API Key 唔正確」）？** 後端行 `initializeSheets` 會自動生成一條 API Key，
-> app 嗰邊要填返先寫得入 —— 3 分鐘解決，見 **[docs/FIX_API_KEY_2026-09-17.md](docs/FIX_API_KEY_2026-09-17.md)**。
+> 要由平台管理員入 Vercel 環境變數 `TROOP_<編號>_APIKEY`（**唔係**喺 app 度打）——
+> 見 **[docs/FIX_API_KEY_2026-09-17.md](docs/FIX_API_KEY_2026-09-17.md)**。
 >
 > 前次（2026-09-16）：團長 10 項要求已完成 9 項（第 10 項通告等緊附件）
 > （改名做「執委管理系統」· 領袖免收團費 · 報告唔再混上年度結餘 · 帳目／過往紀錄分頁 · 冇紀錄嘅月份都揀得到 ·

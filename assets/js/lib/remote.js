@@ -48,16 +48,22 @@ export function isArmed() { return armed; }
 /* ---------------- 設定 ---------------- */
 export function remoteCfg() {
   const db = tryLoad();
-  if (!db) return { url: '', apiKey: '', unit: '', auto: true, ok: false };
+  if (!db) return { url: '', apiKey: '', unit: '', auto: true, ok: false, viaProxy: false };
   const s = db.sync || {};
   const url = s.url || db.backend?.gasUrl || '';
+  const unit = s.unit || db.unitCode || currentUnit() || '';
+  /* 部署喺 Vercel（有 /api/proxy）嗰陣，後端網址同 API Key 都係伺服器端
+     由 TROOP_<編號>_BACKEND / TROOP_<編號>_APIKEY 解析 —— 前端唔應該、
+     亦都唔需要知道。所以只要有旅團編號就當接得通，唔好再要求用家填 /exec。 */
+  const viaProxy = canUseProxy();
   return {
     url,
     apiKey: s.apiKey !== undefined ? s.apiKey : (db.backend?.apiKey || ''),
-    unit: s.unit || db.unitCode || currentUnit() || '',
+    unit,
     /* 預設「開」：改完自動存去後端。要關就喺「總表同步」熄咗佢。 */
     auto: s.auto !== false,
-    ok: !!url && !isMock()
+    ok: (!!url || (viaProxy && !!unit)) && !isMock(),
+    viaProxy
   };
 }
 
@@ -77,23 +83,35 @@ function canUseProxy() {
  */
 async function callBackend(payload, { timeoutMs = 60000 } = {}) {
   const cfg = remoteCfg();
-  if (!cfg.url) return { ok: false, reason: 'not_configured', error: '未設定後端網址（去「總表同步」填 /exec）' };
+  if (!cfg.unit) return { ok: false, reason: 'not_configured', error: '未知旅團編號' };
+  if (!cfg.url && !cfg.viaProxy) {
+    return { ok: false, reason: 'not_configured', error: '未設定後端網址（去「總表同步」填 /exec）' };
+  }
 
-  const body = { ...payload, unit: cfg.unit, apiKey: cfg.apiKey, apikey: cfg.apiKey };
-
-  /* ① 同源 proxy */
-  if (canUseProxy()) {
+  /* ① 同源 proxy —— 正路。
+     只送旅團編號，由伺服器端 Registry（TROOP_<編號>_BACKEND / _APIKEY）
+     解析真實 /exec 同 API Key。**唔好送空 apiKey**：proxy 見到 payload
+     已經有 apiKey 就唔會再注入（api/proxy.js: `if (unit.apiKey && !payload.apiKey)`），
+     送個空字串上去會令伺服器端條 key 注入唔到，後端就會回「未授權」。 */
+  if (cfg.viaProxy) {
+    const body = { ...payload, unit: cfg.unit };
+    if (cfg.apiKey) { body.apiKey = cfg.apiKey; body.apikey = cfg.apiKey; }
     const r = await postJson('api/proxy', body, timeoutMs);
     if (r.ok && r.json) return normalize(r.json);
-    /* proxy 唔存在／唔支援 → 跌落去直接打 /exec；其他錯誤照報 */
+    /* proxy 唔存在（純靜態部署）→ 跌落去直接打 /exec；其他錯誤照報 */
     if (!r.noApi) {
       if (r.json) return normalize(r.json);
       if (r.error) return { ok: false, reason: r.reason || 'network', error: r.error };
     }
   }
 
-  /* ② 直接打 Apps Script */
-  const d = await postJson(cfg.url, body, timeoutMs, true);
+  /* ② 直接打 Apps Script（純靜態部署，例如 GitHub Pages）。
+     呢條路冇伺服器端，條 key 唯有由前端帶。 */
+  if (!cfg.url) {
+    return { ok: false, reason: 'not_configured', error: '冇同源 /api/proxy，又未設定後端網址' };
+  }
+  const direct = { ...payload, unit: cfg.unit, apiKey: cfg.apiKey, apikey: cfg.apiKey };
+  const d = await postJson(cfg.url, direct, timeoutMs, true);
   if (d.json) return normalize(d.json);
   return { ok: false, reason: d.reason || 'network', error: d.error || '連唔到旅團後端' };
 }
@@ -143,8 +161,12 @@ function reasonOf(err) {
 function hintOf(err) {
   const r = reasonOf(err);
   if (r === 'bad_key') {
-    return '後端有設 API Key，但 app 呢邊冇填（或者填錯）。'
-      + '喺 Apps Script 執行 showApiKey() 攞返條 key，再喺「總表同步 → 同步設定 → API Key」填返，撳「儲存設定」。';
+    /* 正路係伺服器端設定，唔係叫用家喺瀏覽器打 key。
+       前端填 key 只係純靜態部署（冇 /api/proxy）先需要嘅後備做法。 */
+    return '後端有設 API Key，但伺服器端未有。'
+      + '請平台管理員喺 Vercel 加環境變數 TROOP_<旅團編號>_APIKEY（值＝喺 Apps Script 執行 showApiKey() 攞到嗰條），'
+      + '同埋確認 TROOP_<旅團編號>_BACKEND 係你個 /exec 網址，然後重新部署。'
+      + '咁條 key 就淨係留喺伺服器端，瀏覽器完全唔會見到。';
   }
   if (r === 'old_deploy') {
     return '你個 /exec 仲行緊舊版程式碼。喺 Apps Script 撳「部署 → 管理部署作業 → 編輯（鉛筆）→ 版本揀「新版本」→ 部署」，個 /exec 網址唔會變。';

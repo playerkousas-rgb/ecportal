@@ -505,10 +505,13 @@ function syncView() {
     ${s.lastError ? `<div class="kv-row"><span>上次錯誤</span><span style="color:var(--danger)">${esc(String(s.lastError).slice(0, 120))}</span></div>` : ''}
     ${/API ?Key|未授權/i.test(String(s.lastError || '')) ? `
     <div class="note-box err mt-8">${icon('alert', 15)}<div>
-      <b>寫唔入係因為 API Key。</b>你個後端行過 <code>initializeSheets</code> 之後會自動生成一條 API Key，
-      但 app 呢邊未填，所以後端拒絕寫入（讀就冇事，所以「測試連線」照樣顯示成功）。<br>
-      解決：喺 Apps Script 執行 <code>showApiKey()</code> → 複製條 key →
-      喺下面「同步設定 → API Key」貼返 → 撳「儲存設定」→ 再撳「立即儲存到後端」。
+      <b>寫唔入係因為 API Key 未入伺服器端。</b>後端行過 <code>initializeSheets</code> 之後會自動生成一條 API Key，
+      但平台伺服器端未有，所以後端拒絕寫入（讀就冇事，所以「測試連線」照樣顯示成功）。<br>
+      <b>正確做法係交畀平台管理員設定，唔係喺呢度打條 key：</b>
+      喺 Apps Script 執行 <code>showApiKey()</code> 攞條 key → 喺 Vercel 加環境變數
+      <code>TROOP_${esc(load().unitCode || '編號')}_APIKEY</code>（同埋確認
+      <code>TROOP_${esc(load().unitCode || '編號')}_BACKEND</code> 係你個 <code>/exec</code>）→ 重新部署。
+      咁條 key 淨係留喺伺服器端，瀏覽器完全唔會見到。
     </div></div>` : ''}
     <div class="row gap-8 mt-12 wrap">
       <button class="btn btn-primary btn-sm" data-act="push-db">${icon('cloud', 15)} 立即儲存到後端</button>
@@ -543,8 +546,14 @@ function syncView() {
         <div class="grid g-2 mt-12" style="gap:12px">
           <div class="field"><label class="label">旅團編號</label>
             <input class="input" id="y-unit" value="${esc(s.unit || load().unitCode)}"></div>
-          <div class="field"><label class="label">API Key（可留空）</label>
-            <input class="input" id="y-key" value="${esc(s.apiKey || '')}" placeholder="範本預設 v82-demo-key"></div>
+          <div class="field"><label class="label">API Key <span class="faint">（通常唔使填）</span></label>
+            <input class="input" id="y-key" value="${esc(s.apiKey || '')}" placeholder="由伺服器端提供"></div>
+        </div>
+        <div class="hint mt-6">
+          ${icon('shield', 14)} API Key 同 <code>/exec</code> 正路係由平台管理員入喺
+          <b>Vercel 環境變數</b>（<code>TROOP_${esc(load().unitCode || '編號')}_APIKEY</code> /
+          <code>TROOP_${esc(load().unitCode || '編號')}_BACKEND</code>），由伺服器端注入，
+          瀏覽器唔會見到。上面兩格<b>淨係</b>喺純靜態部署（冇 <code>/api/proxy</code>，例如 GitHub Pages）先需要填。
         </div>
         <label class="check mt-12"><input type="checkbox" id="y-auto" ${s.auto !== false ? 'checked' : ''}> <b>改動後自動儲存到後端</b>（強烈建議開；熄咗就要自己撳「立即儲存」，唔記得就會冇咗）</label>
         ${pending ? `<div class="hint" style="color:var(--warn)">有 <b>${pending}</b> 次改動仲未寫入後端。</div>` : ''}

@@ -1,131 +1,115 @@
-# 點解財政／生日匯入唔到後端 —— 係 API Key
+# 點解財政／生日匯入唔到後端 —— API Key 未入 Vercel
 
 > 你回報：「用咗最新嘅 GS，但都係唔可以將現有嘅財政匯入後端，生日果啲都係。」
 >
-> **搵到原因喇，而且唔使改 Code.gs —— 只要喺 app 填返一格嘢。**
+> **正確做法：喺 Vercel 加環境變數。唔使、亦都唔應該喺 app 入面打條 key。**
 
 ---
 
 ## 一句話總結
 
 你個後端行 `initializeSheets` 嗰陣**自動生成咗一條 API Key**，
-但 app 呢邊條 key 係**空白**，所以後端每次都拒絕寫入。
+但平台伺服器端（Vercel）未有呢條 key，所以後端每次都拒絕寫入。
 
 ---
 
-## 點證實
-
-我喺 Node 度整咗個迷你 Apps Script 模擬器，**真係行你份 `apps-script/Code.gs`**
-（唔係假後端），再重播 app 實際送出嘅請求：
+## 架構係點（點解唔應該喺 app 打 key）
 
 ```
-app 而家送出（apiKey 係 ""）
-  → {"ok":false,"error":"未授權：API Key 唔正確"}        ← 你撞到嘅
-
-如果條 key 填啱
-  → {"ok":true,"chunks":1,"bytes":434}                  ← 寫得入
+瀏覽器 ──只送旅團編號──▶ /api/proxy ──伺服器端加 API Key──▶ 你嘅 /exec ──▶ Google Sheet
+                              ▲
+                   TROOP_0082_BACKEND / TROOP_0082_APIKEY
+                        （Vercel 環境變數）
 ```
 
-呢個已經寫咗做恆常測試：`npm run test:gas`（28 項，全部過）。
-
----
-
-## 點解你會覺得「明明接通咗」
-
-睇下 `Code.gs` 入面兩種檢查嘅分別：
+`api/proxy.js` 收到請求之後會自己補條 key：
 
 ```js
-// 一般 action（status / ping / sync…）—— 寬鬆：條 key 空就當冇帶，照放行
-if (expectedKey && key && key !== expectedKey) { ...拒絕... }
-//                 ↑ 注意呢個 key，空字串 = false，成個條件唔成立
-
-// saveDb / loadDb / dbInfo —— 嚴格：唔啱就拒絕，空都唔得
-if (expectedKey && key !== expectedKey) { ...拒絕... }
+const unit = getTrustedUnit(unitCode);              // 由環境變數解析
+if (unit.apiKey && !payload.apiKey) payload.apiKey = unit.apiKey;
 ```
 
-所以：
+所以**瀏覽器由頭到尾都唔需要知道條 key**，亦都唔應該知 —— 一旦放入前端，
+條 key 就會留喺 localStorage，任何開得到 DevTools 嘅人都攞得走。
 
-| 你撳嘅嘢 | 送咩 action | 結果 |
-|---|---|---|
-| **測試連線** | `status` | ✅ 「連線成功」 |
-| 立即同步全部 | `sync` | ✅ 帳目／團員**報表分頁**寫得入 |
-| **立即儲存到後端** | `saveDb` | ❌ **「未授權」** |
-
-即係話：**你張 Sheet 表面見到有嘢**（報表分頁），但真正嘅「資料庫」分頁一直係空。
-換機／還原就攞唔返 —— 同你講嘅「匯入唔到」完全一致。
-
-> 順帶一提：報表分頁（帳目／團員）係**攤平畀人睇**嘅，相片會變成數量、
-> 巢狀欄位會變文字，讀返上去砌唔返個資料庫。所以「資料庫」分頁寫唔入 ＝ 冇後備。
+> 你講得啱：能夠入到旅團就已經代表連通咗，唔應該再叫用家「連」多次。
 
 ---
 
-## 點解決（3 分鐘）
+## 點解決（交畀平台管理員，2 分鐘）
 
-### 第 1 步：攞返條 API Key
+### 第 1 步：攞條 API Key
 
 1. 打開你張 Google Sheet → **擴充功能 → Apps Script**
-2. 上面個函數下拉選單揀 **`showApiKey`**
-3. 撳 **▶ 執行**
-4. 下面「執行記錄」會出一行：
+2. 函數下拉選單揀 **`showApiKey`** → 撳 **▶ 執行**
+3. 下面「執行記錄」會出：
    ```
    執委管理系統 API Key: v82_xxxxxxxxxxxxxxxxxxxxxxxx
    ```
-5. **複製條 key**（`v82_` 開頭嗰串）
 
-### 第 2 步：喺 app 填返
+### 第 2 步：入 Vercel 環境變數
 
-1. 開執委管理系統 → **表格與同步 → 總表同步**
-2. 「同步設定」入面搵到 **API Key** 嗰格 → **貼上**
-3. 撳 **儲存設定**
+Vercel 專案 → **Settings → Environment Variables**，加呢兩個：
 
-### 第 3 步：儲存
+| Name | Value |
+|---|---|
+| `TROOP_0082_APIKEY` | `v82_xxxxxxxxxxxxxxxxxxxxxxxx` |
+| `TROOP_0082_BACKEND` | `https://script.google.com/macros/s/……/exec` |
 
-1. 撳 **立即儲存到後端**
-2. 應該見到「**已把整個資料庫儲存到後端**」
-3. 撳 **睇後端有咩資料** 對數 —— 團員數、帳目數啱唔啱
+> `TROOP_0082_BACKEND` 如果 `data/units.json` 已經有啱嘅 `/exec` 就可以唔加；
+> 但加咗會蓋過檔案，改後端網址唔使再 commit。
 
-搞掂之後，張 Sheet 會多咗個「**資料庫**」分頁（入面係一長串 JSON，唔好人手改佢）。
-財政、生日、通告全部都喺入面。
+### 第 3 步：重新部署
+
+Vercel → **Deployments → ⋯ → Redeploy**（環境變數要重新部署先生效）。
+
+### 第 4 步：入 app 撳一下
+
+**表格與同步 → 總表同步 → 立即儲存到後端** → 應該見「已把整個資料庫儲存到後端」。
+再撳「睇後端有咩資料」對下團員數同帳目數。
 
 ---
 
-## 如果第 3 步仲係唔得
-
-睇個錯誤訊息：
+## 疑難排解
 
 | 訊息 | 即係 | 點做 |
 |---|---|---|
-| `未授權：API Key 唔正確` | 條 key 貼錯／貼漏咗字 | 重做第 1 步，成串複製（連 `v82_`） |
-| `未知 action：saveDb` | 個 `/exec` 仲行緊**舊版**程式碼 | 部署 → 管理部署作業 → ✏️ 編輯 → 版本揀「**新版本**」→ 部署 |
+| `未授權：API Key 唔正確` | Vercel 未有 key／未 redeploy／key 貼錯 | 重做第 2–3 步，確認變數名連 `0082` 都啱 |
+| `未知 action：saveDb` | 個 `/exec` 仲行緊**舊版**程式碼 | Apps Script → 部署 → 管理部署作業 → ✏️ → 版本揀「**新版本**」 |
+| `找不到此旅團或後端網址未設定` | proxy 搵唔到 registry entry | check `TROOP_0082_BACKEND` 或 `data/units.json` |
 | `資料太大（超過 9MB）` | 相片太多 | 「儲存與備份」撳「清理已入帳嘅相片」 |
-
-> ⚠️ 最多人中伏嗰個：貼完新 `Code.gs` 淨係撳「儲存」，**冇重新部署新版本**。
-> 咁個 `/exec` 網址仲係行緊舊碼。一定要揀「新版本」，個網址唔會變。
 
 ---
 
-## 我順手改咗嘅嘢（等呢個問題唔再隱形）
+## 我改咗嘅嘢
+
+我上一版**寫錯咗**，叫你喺 app 入面貼條 key —— 咁做違背咗成個 proxy 架構。
+已經改返：
 
 | 改動 | 之前 | 之後 |
 |---|---|---|
-| **錯誤訊息** | 淨係彈個 toast「儲存失敗：未授權…」 | 彈對話框，直接話你知去 `showApiKey()` 攞 key、喺邊格填 |
-| **測試連線** | 淨係 ping，key 錯都報「連線成功」 | 加驗 `dbInfo`（要 key），寫唔入就明明白白話你知 |
-| **儲存狀態卡** | 淨係顯示紅色錯誤字 | 一偵測到 API Key 問題，即場展開完整解決步驟 |
-| **測試** | 假後端**冇做 key 檢查**，所以 CI 完全捉唔到 | `tests/gas.mjs` 真係行 `Code.gs`；假後端支援 `FAKEGAS_APIKEY` |
+| **`remote.js` 提示** | 叫用家去「同步設定」填 key | 叫管理員設定 `TROOP_<編號>_APIKEY`，講明條 key 唔會入瀏覽器 |
+| **「同步設定」個 key 欄** | `API Key（可留空）`，好似預咗你填 | `通常唔使填`，下面寫明正路係 Vercel 環境變數，呢格淨係純靜態部署先用 |
+| **狀態卡提示** | 教你 `showApiKey()` → 貼入 app | 教你 `showApiKey()` → 入 Vercel 環境變數 |
 
-最尾嗰行係關鍵：**呢個 bug 之前喺 CI 係隱形嘅**，因為測試用嘅假後端根本唔檢查 API Key。
-而家補返，同類問題以後會即刻紅。
+### 順手修好一個真 bug
 
----
+前端本來**無論如何**都會送 `apiKey: ''` 上 proxy。而 proxy 係咁寫嘅：
 
-## 安全提示（另一件事，順帶講）
-
-`data/units.json` 入面 0082 嘅 `apiKey` 係空字串。上面教你填喺 app（存喺瀏覽器）係最快嘅做法，
-但條 key 會留喺 localStorage。如果你想穩陣啲，叫平台管理員喺 **Vercel 環境變數**加：
-
-```
-TROOP_0082_APIKEY = v82_xxxxxxxxxxxxxxxxxxxxxxxx
+```js
+if (unit.apiKey && !payload.apiKey) payload.apiKey = unit.apiKey;
+//                 ↑ payload.apiKey 係 ''，!'' = true，本來注入到
 ```
 
-咁 `/api/proxy` 就會喺**伺服器端**幫你補條 key，瀏覽器完全唔會見到。
-兩種做法揀一種就得；環境變數嗰個優先。
+`''` 雖然過到 `!payload.apiKey`，但個設計好脆弱 —— 一旦前端存過任何非空值
+（例如你試過喺個欄打過嘢再清空、或者 `seedBackend` 由 registry 抄咗個值落嚟），
+就會蓋過伺服器端條 key。而家改成**有 key 先送，冇就唔送**。
+
+### 仲有：唔再強迫前端知道 `/exec`
+
+以前 `remoteCfg().ok` 一定要有 `url` 先肯寫入，即係純靠環境變數開團嘅旅團
+（`data/units.json` 冇 entry）就算 proxy 一切正常都會被前端當成「未設定後端」。
+而家只要有 `/api/proxy` ＋ 旅團編號就當接得通，`/exec` 交返畀伺服器端。
+
+**測試**：`tests/remote.mjs` 加咗 8 項（52 過 / 0 唔過），
+包括「前端唔送 key → GAS 收到伺服器端條 key」同「送空字串唔會整衰注入」。
