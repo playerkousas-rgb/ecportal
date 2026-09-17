@@ -1392,10 +1392,7 @@ function exportLedgerCsv(sel = currentSelection()) {
    ============================================================ */
 export function mount(root, params) {
   root.querySelectorAll('[data-go]').forEach(el => el.addEventListener('click', () => go(el.dataset.go)));
-  root.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => {
-    const t = b.dataset.tab;
-    go('#/finance/' + t);
-  }));
+  /* 分頁掣由 main.js 統一綁（ui.js tabs() → [data-tabnav]），呢度唔使再綁 */
   root.querySelectorAll('[data-cf]').forEach(b => b.addEventListener('click', () => { claimFilter = b.dataset.cf; refresh(); }));
   root.querySelectorAll('[data-act="entry-share"]').forEach(b => b.addEventListener('click', () => entryShareDialog()));
 

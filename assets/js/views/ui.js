@@ -16,8 +16,14 @@ export function pageHead({ title, sub = '', actions = '', badge = '' }) {
   </div>`;
 }
 
+/* 分頁列。
+   個 <div> 有 data-tabnav 做記認 —— main.js 見到就會自動幫粒粒掣綁 click，
+   撳親就去 #/<section>/<tab>，所以 view 唔使自己再綁一次（以前成日漏，
+   一漏就成頁分頁死晒，撳極冇反應）。
+   如果某個 view 想自己控制（例如淨係換 pane、唔想改 hash），
+   唔好用呢個 helper，自己砌 <button data-tab> 就得（見 meetings.js）。 */
 export function tabs(items, active, attr = 'data-tab') {
-  return `<div class="seg mb-16 no-print" role="tablist">
+  return `<div class="seg mb-16 no-print" role="tablist" data-tabnav>
     ${items.map(([id, label, count]) => `<button role="tab" ${attr}="${id}" aria-selected="${active === id}">
       ${esc(label)}${count !== undefined && count !== null ? ` <span class="faint">${count}</span>` : ''}</button>`).join('')}
   </div>`;

@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "node dev-server.mjs",
     "serve": "python3 -m http.server 8000",
-    "test": "node scripts/build-gas.mjs && node tests/smoke.mjs real && node tests/smoke.mjs mock && node tests/public.mjs && node tests/gate.mjs && node tests/api.mjs && node tests/progress.mjs && node tests/remote.mjs",
+    "test": "node scripts/build-gas.mjs && node tests/smoke.mjs real && node tests/smoke.mjs mock && node tests/public.mjs && node tests/gate.mjs && node tests/api.mjs && node tests/progress.mjs && node tests/remote.mjs && node tests/tabs.mjs",
     "test:api": "node tests/api.mjs && node tests/progress.mjs",
     "test:real": "node tests/smoke.mjs real",
     "test:mock": "node tests/smoke.mjs mock",
@@ -15,7 +15,8 @@
     "test:gate": "node tests/gate.mjs",
     "test:progress": "node tests/progress.mjs",
     "build:gas": "node scripts/build-gas.mjs",
-    "test:remote": "node tests/remote.mjs"
+    "test:remote": "node tests/remote.mjs",
+    "test:tabs": "node tests/tabs.mjs"
   },
   "devDependencies": {
     "jsdom": "^26.0.0"

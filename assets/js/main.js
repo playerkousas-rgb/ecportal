@@ -654,6 +654,15 @@ function renderLogin() {
   });
 }
 
+/* 撳分頁去邊個 hash。
+   大部分 section 都係 #/<section>/<tab>，但有啲 view 嘅預設分頁係住喺個「淨係 section」
+   嘅 hash（例如 #/inventory 就係「物資清單」），咁就唔好加個 /items 落去，
+   否則會撳完一次之後 render 同 hash 對唔上。 */
+const TAB_AT_ROOT = { inventory: 'items' };
+function tabHash(section, tab) {
+  return TAB_AT_ROOT[section] === tab ? `#/${section}` : `#/${section}/${tab}`;
+}
+
 /* ============================================================
    SHELL
    ============================================================ */
@@ -753,6 +762,20 @@ function render() {
   app.querySelectorAll('[data-fields]').forEach(b => b.addEventListener('click', e => {
     e.preventDefault();
     openFieldDesigner(b.dataset.fields, { onSaved: () => window.dispatchEvent(new CustomEvent('v82:refresh')) });
+  }));
+
+  /* ---- 分頁掣（ui.js 個 tabs()）：全域統一綁 ----
+     以前每個 view 要自己喺 mount() 綁一次 [data-tab]，漏咗就成頁分頁死晒。
+     「帳號與系統」「通告」「表格與同步」就係咁壞咗 —— 六個分頁一粒都撳唔郁，
+     連帶入面所有掣（改密碼、備份、旅團設定…）都永遠去唔到，
+     用家見到嘅就係「所有掣都壞咗」。
+     而家 tabs() 吐出嚟嘅 <div data-tabnav> 一律喺呢度處理：撳分頁 ＝ 去 #/<section>/<tab>。
+     注意：淨係揀 [data-tabnav] 入面嘅掣。View 自己手砌、唔想改 hash 嘅
+     local 分頁（例如 meetings.js 會議詳情嗰啲）唔會被搶。 */
+  app.querySelectorAll('#view [data-tabnav] [data-tab]').forEach(b => b.addEventListener('click', () => {
+    const t = b.dataset.tab;
+    if (!t) return;
+    go(tabHash(r.section, t));
   }));
 
   const root = app.querySelector('#view');

@@ -387,11 +387,7 @@ function printBlankSlip() {
    ============================================================ */
 export function mount(root, params) {
   root.querySelectorAll('[data-go]').forEach(el => el.addEventListener('click', () => go(el.dataset.go)));
-  root.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => {
-    tab = b.dataset.tab;
-    const hash = tab === 'items' ? '#/inventory' : `#/inventory/${tab}`;
-    go(hash);
-  }));
+  /* 分頁掣由 main.js 統一綁（ui.js tabs() → [data-tabnav]），呢度唔使再綁 */
   root.querySelectorAll('[data-cat]').forEach(b => b.addEventListener('click', () => { catFilter = b.dataset.cat; refresh(); }));
   root.querySelectorAll('[data-lf]').forEach(b => b.addEventListener('click', () => { loanFilter = b.dataset.lf; refresh(); }));
   const s = root.querySelector('#iSearch');
