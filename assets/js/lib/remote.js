@@ -127,7 +127,29 @@ async function postJson(endpoint, body, timeoutMs, plain = false) {
 
 function normalize(j) {
   const ok = j.ok === true || j.success === true;
-  return { ...j, ok, error: j.error || (ok ? '' : (j.msg || '後端拒絕咗呢個請求')) };
+  const raw = j.error || (ok ? '' : (j.msg || '後端拒絕咗呢個請求'));
+  return { ...j, ok, error: raw, reason: ok ? '' : reasonOf(raw), hint: ok ? '' : hintOf(raw) };
+}
+
+/* 後端回嘅錯誤字眼 → 分類，等介面可以講返「去邊度撳邊粒掣」 */
+function reasonOf(err) {
+  const s = String(err || '');
+  if (/API ?Key|未授權|unauthor/i.test(s)) return 'bad_key';
+  if (/未知 action|unknown action/i.test(s)) return 'old_deploy';
+  return 'backend';
+}
+
+/* 呢兩個係最常見、又最難自己估到嘅死因，所以直接寫清楚點解決 */
+function hintOf(err) {
+  const r = reasonOf(err);
+  if (r === 'bad_key') {
+    return '後端有設 API Key，但 app 呢邊冇填（或者填錯）。'
+      + '喺 Apps Script 執行 showApiKey() 攞返條 key，再喺「總表同步 → 同步設定 → API Key」填返，撳「儲存設定」。';
+  }
+  if (r === 'old_deploy') {
+    return '你個 /exec 仲行緊舊版程式碼。喺 Apps Script 撳「部署 → 管理部署作業 → 編輯（鉛筆）→ 版本揀「新版本」→ 部署」，個 /exec 網址唔會變。';
+  }
+  return '';
 }
 
 /* ---------------- 三個主要動作 ---------------- */

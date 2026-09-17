@@ -503,6 +503,13 @@ function syncView() {
     <div class="kv-row"><span>最後寫入後端</span><span>${esc(lastPush || '（未試過）')}</span></div>
     <div class="kv-row"><span>最後由後端讀取</span><span>${esc(lastPull || '（未試過）')}</span></div>
     ${s.lastError ? `<div class="kv-row"><span>上次錯誤</span><span style="color:var(--danger)">${esc(String(s.lastError).slice(0, 120))}</span></div>` : ''}
+    ${/API ?Key|未授權/i.test(String(s.lastError || '')) ? `
+    <div class="note-box err mt-8">${icon('alert', 15)}<div>
+      <b>寫唔入係因為 API Key。</b>你個後端行過 <code>initializeSheets</code> 之後會自動生成一條 API Key，
+      但 app 呢邊未填，所以後端拒絕寫入（讀就冇事，所以「測試連線」照樣顯示成功）。<br>
+      解決：喺 Apps Script 執行 <code>showApiKey()</code> → 複製條 key →
+      喺下面「同步設定 → API Key」貼返 → 撳「儲存設定」→ 再撳「立即儲存到後端」。
+    </div></div>` : ''}
     <div class="row gap-8 mt-12 wrap">
       <button class="btn btn-primary btn-sm" data-act="push-db">${icon('cloud', 15)} 立即儲存到後端</button>
       <button class="btn btn-sm" data-act="pull-db">${icon('download', 15)} 由後端還原資料</button>
@@ -1075,7 +1082,25 @@ export function mount(root, params) {
         db.sync = { ...(db.sync || {}), url: root.querySelector('#y-url').value.trim(), unit: root.querySelector('#y-unit').value.trim(), apiKey: root.querySelector('#y-key').value.trim() };
         commit();
         const res = await pushToMaster({ silent: true });
-        toast(res.ok ? '連線成功（已送 ping + 少量樣本）' : '連線失敗：' + res.msg, res.ok ? 'ok' : 'err');
+        /* 淨係 ping 得通唔代表寫得入 —— 讀類 action 唔使 API Key，
+           但 saveDb 要。以前淨係 ping，所以 key 錯都會報「連線成功」，
+           用家一路以為接通咗，其實成個資料庫一直寫唔入後端。
+           所以順手用 dbInfo 驗埋「有冇寫入權」。 */
+        const remote = await import('../lib/remote.js');
+        const auth = await remote.remoteInfo();
+        if (res.ok && auth?.ok) {
+          toast('連線成功，而且寫得入後端', 'ok');
+        } else if (res.ok && auth?.hint) {
+          await modal({
+            title: '連得到後端，但寫唔入',
+            body: `<div class="note-box err">${icon('alert', 15)}<div><b>後端回覆：</b>${esc(auth.error || '未知錯誤')}</div></div>
+              <p class="sm mt-12">${esc(auth.hint)}</p>
+              <p class="sm muted mt-8">讀取類嘅請求唔使 API Key，所以淨係「ping」係試唔出呢個問題嘅。</p>`,
+            actions: [{ label: '知道喇', class: 'btn-primary', value: true }]
+          });
+        } else {
+          toast(res.ok ? '連線成功（但讀唔到資料庫狀態）' : '連線失敗：' + res.msg, res.ok ? 'warn' : 'err');
+        }
         refresh();
       }
       if (act === 'push-sync') {
@@ -1090,7 +1115,21 @@ export function mount(root, params) {
         b.disabled = true; b.textContent = '儲存中…';
         const r = await remote.flush();
         b.disabled = false; b.innerHTML = old;
-        toast(r.ok ? '已把整個資料庫儲存到後端' : '儲存失敗：' + (r.error || '未知錯誤'), r.ok ? 'ok' : 'err');
+        if (r.ok) {
+          toast('已把整個資料庫儲存到後端', 'ok');
+        } else if (r.hint) {
+          /* 有得救嘅死因（API Key 唔啱／未 re-deploy）：用對話框講清楚點解決，
+             唔好淨係彈個 toast —— toast 一閃就冇，用家只會覺得「又係唔得」。 */
+          await modal({
+            title: r.reason === 'bad_key' ? '寫唔入後端：API Key 唔啱' : '寫唔入後端：個 /exec 仲係舊版',
+            body: `<div class="note-box err">${icon('alert', 15)}<div><b>後端回覆：</b>${esc(r.error || '未知錯誤')}</div></div>
+              <p class="sm mt-12">${esc(r.hint)}</p>
+              <p class="sm muted mt-8">你部機啲資料仲喺度，一修好就會即刻寫得入 —— 唔會蝕咗。</p>`,
+            actions: [{ label: '知道喇', class: 'btn-primary', value: true }]
+          });
+        } else {
+          toast('儲存失敗：' + (r.error || '未知錯誤'), 'err');
+        }
         refresh();
       }
       if (act === 'pull-db') {

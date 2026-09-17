@@ -55,6 +55,12 @@ function dbInfo(unit) {
   };
 }
 
+/* 後端如果設咗 API_KEY（真 Code.gs 行完 initializeSheets 就一定會有），
+   saveDb / loadDb / dbInfo 就要條 key 啱先做得 —— 呢個正正係
+   「app 條 key 留空 → 寫唔入」嗰個真實故障。
+   用法：FAKEGAS_APIKEY=xxx node tests/_fakegas.mjs <port> */
+const EXPECTED_KEY = process.env.FAKEGAS_APIKEY || '';
+
 http.createServer((req, res) => {
   let raw = '';
   req.on('data', c => { raw += c; });
@@ -63,12 +69,20 @@ http.createServer((req, res) => {
     try { body = JSON.parse(raw || '{}'); } catch { /* ignore */ }
     let out;
     const a = body.action || '';
-    if (a === 'saveDb') out = saveDb(body);
+    const key = body.apiKey || body.apikey || '';
+    const needsKey = a === 'saveDb' || a === 'loadDb' || a === 'dbInfo';
+
+    if (EXPECTED_KEY && needsKey && key !== EXPECTED_KEY) {
+      out = { ok: false, success: false, error: '未授權：API Key 唔正確' };
+    } else if (a === 'saveDb') out = saveDb(body);
     else if (a === 'loadDb') out = loadDb(String(body.unit || ''));
     else if (a === 'dbInfo') out = dbInfo(String(body.unit || ''));
     else if (a === 'sync') {
       out = { ok: true, success: true, msg: '已寫入總表', counts: {} };
-      if (body.db) out.db = { saved: saveDb(body).success };
+      if (body.db) {
+        if (EXPECTED_KEY && key !== EXPECTED_KEY) out.db = { saved: false, error: '未授權：API Key 唔正確' };
+        else out.db = { saved: saveDb(body).success };
+      }
     } else if (a === 'status' || a === 'ping') out = { ok: true, success: true, msg: 'pong' };
     else out = { ok: false, success: false, error: '未知 action：' + a };
 

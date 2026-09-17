@@ -1,0 +1,279 @@
+/* ============================================================
+   tests/gas.mjs — 真係行 apps-script/Code.gs（唔係假後端）
+   -----------------------------------------------------------
+   背景（2026-09 真實故障）：
+   用家部署咗新 Code.gs，但撳「立即儲存到後端」財政／生日資料都入唔到。
+   原因：initializeSheets() 會自動生成一條 API Key 入 Script Properties，
+   而 data/units.json 入面 0082 嘅 apiKey 係 ""，
+   doPost 對 saveDb / loadDb / dbInfo 用嚴格檢查（expectedKey && key !== expectedKey）
+   → 後端回「未授權：API Key 唔正確」，資料一直寫唔入。
+   偏偏 status / ping 唔使 key，所以「測試連線」照樣顯示成功 —— 好誤導。
+
+   以前啲測試全部打假後端（tests/_fakegas.mjs），假後端又冇做 API Key 檢查，
+   所以呢個故障喺 CI 係完全隱形嘅。呢個檔用一個迷你 GAS 模擬器
+   真正執行 Code.gs，驗返成個授權 + 存取契約。
+
+   用法：node tests/gas.mjs
+   ============================================================ */
+
+import fs from 'fs';
+import path from 'path';
+import vm from 'vm';
+import { fileURLToPath } from 'url';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const t0 = Date.now();
+let pass = 0, fail = 0;
+
+function ok(name, cond, extra = '') {
+  if (cond) { pass++; console.log('  ✓ ' + name); }
+  else { fail++; console.log('  ✗ ' + name + (extra ? '  → ' + extra : '')); }
+}
+function section(t) { console.log('\n▌' + t); }
+
+/* ============================================================
+   迷你 Google Apps Script 模擬器
+   ============================================================ */
+function makeSheet(name, headers) {
+  const rows = headers ? [headers.slice()] : [];
+  const chain = {};
+  const range = (row, col, nr = 1, nc = 1) => ({
+    setValues: (vals) => {
+      vals.forEach((v, i) => {
+        const ri = row - 1 + i;
+        while (rows.length <= ri) rows.push([]);
+        v.forEach((cell, j) => { rows[ri][col - 1 + j] = cell; });
+      });
+      return chain;
+    },
+    setValue: (v) => { const ri = row - 1; while (rows.length <= ri) rows.push([]); rows[ri][col - 1] = v; return chain; },
+    getValues: () => { const out = []; for (let i = 0; i < nr; i++) { const r = rows[row - 1 + i] || []; out.push(r.slice(col - 1, col - 1 + nc)); } return out; },
+    getValue: () => (rows[row - 1] || [])[col - 1],
+    setFontWeight: () => chain, setBackground: () => chain, setFontColor: () => chain,
+    setNumberFormat: () => chain, setWrap: () => chain, setHorizontalAlignment: () => chain,
+    setFontSize: () => chain, setBorder: () => chain, clearContent: () => chain, setFontFamily: () => chain
+  });
+  Object.assign(chain, range(1, 1));
+  return {
+    _rows: rows,
+    getName: () => name,
+    appendRow: (r) => { rows.push(r.slice()); },
+    getDataRange: () => ({ getValues: () => rows.map(r => r.slice()), clearContent: () => { rows.length = 0; } }),
+    getLastRow: () => rows.length,
+    getLastColumn: () => rows.reduce((m, r) => Math.max(m, r.length), 0),
+    getRange: range,
+    deleteRow: (i) => { rows.splice(i - 1, 1); },
+    deleteRows: (i, n) => { rows.splice(i - 1, n); },
+    setFrozenRows: () => {}, setColumnWidth: () => {}, autoResizeColumn: () => {},
+    clear: () => { rows.length = 0; }, clearContents: () => { rows.length = 0; },
+    getSheetId: () => 1, hideSheet: () => {}, showSheet: () => {}, setTabColor: () => {}, getFilter: () => null
+  };
+}
+
+function makeGas({ apiKey = null } = {}) {
+  const sheets = new Map();
+  const props = new Map();
+  if (apiKey) props.set('API_KEY', apiKey);
+
+  const ss = {
+    getName: () => '測試試算表',
+    getSheetByName: (n) => sheets.get(n) || null,
+    insertSheet: (n) => { const s = makeSheet(n); sheets.set(n, s); return s; },
+    getSheets: () => [...sheets.values()],
+    deleteSheet: (s) => sheets.delete(s.getName()),
+    getId: () => 'fake', setSpreadsheetTimeZone: () => {}, getSpreadsheetTimeZone: () => 'Asia/Hong_Kong'
+  };
+
+  const sandbox = {
+    SpreadsheetApp: {
+      getActiveSpreadsheet: () => ss, openById: () => ss,
+      getUi: () => { throw new Error('headless'); }, flush: () => {}
+    },
+    PropertiesService: {
+      getScriptProperties: () => ({
+        getProperty: (k) => (props.has(k) ? props.get(k) : null),
+        setProperty: (k, v) => { props.set(k, v); },
+        deleteProperty: (k) => { props.delete(k); }
+      })
+    },
+    Utilities: {
+      getUuid: () => 'aaaabbbb-cccc-dddd-eeee-ffff00001111',
+      formatDate: (d) => new Date(d).toISOString(), sleep: () => {},
+      base64Decode: () => [], newBlob: () => ({ setName: () => ({}) })
+    },
+    LockService: { getScriptLock: () => ({ tryLock: () => true, waitLock: () => true, releaseLock: () => {} }) },
+    Logger: { log: () => {} },
+    DriveApp: { getFolderById: () => ({ createFile: () => ({ getUrl: () => 'https://drive/x', setSharing: () => {} }) }) },
+    ContentService: {
+      createTextOutput: (t) => ({ _t: t, setMimeType() { return this; }, getContent() { return this._t; } }),
+      MimeType: { JSON: 'application/json' }
+    },
+    MailApp: { sendEmail: () => {} },
+    Session: { getActiveUser: () => ({ getEmail: () => 't@e.com' }) },
+    console, JSON, Date, Math, String, Number, Object, Array,
+    isNaN, parseInt, parseFloat, RegExp, Error, encodeURIComponent, decodeURIComponent
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'apps-script/Code.gs'), 'utf8'), sandbox, { filename: 'Code.gs' });
+
+  const post = (body) => {
+    const out = sandbox.doPost({ postData: { contents: JSON.stringify(body) } });
+    try { return JSON.parse(out.getContent()); } catch { return { _raw: out.getContent() }; }
+  };
+  return { sandbox, post, props, sheets };
+}
+
+/* 一份似真嘅資料庫（財政 + 生日 —— 正正係用家話入唔到嗰啲） */
+const sampleDb = () => ({
+  meta: { updatedAt: new Date().toISOString() },
+  unitCode: '0082',
+  members: [
+    { id: 'm1', name: '陳大文', birthday: '2008-03-14', identity: 'venture' },
+    { id: 'm2', name: '李小明', birthday: '2009-11-02', identity: 'venture' }
+  ],
+  transactions: [
+    { id: 't1', date: '2026-01-05', item: '團費收入', income: 1200, expense: 0 },
+    { id: 't2', date: '2026-02-11', item: '營具維修', income: 0, expense: 340 }
+  ],
+  notices: [], invItems: [], meetings: [], accounts: []
+});
+
+/* ============================================================
+   ① Code.gs 本身載入得到 + 有齊 action
+   ============================================================ */
+section('Code.gs 載入 / 基本契約');
+{
+  const g = makeGas();
+  ok('Code.gs 行得起（語法冇問題）', typeof g.sandbox.doPost === 'function');
+  ok('有 saveDb / loadDb / dbInfo', ['saveDb', 'loadDb', 'dbInfo'].every(f => typeof g.sandbox[f] === 'function'));
+  ok('有 initializeSheets / showApiKey', typeof g.sandbox.initializeSheets === 'function' && typeof g.sandbox.showApiKey === 'function');
+  const r = g.post({ action: 'status' });
+  ok('status 唔使 API Key 都答到', r.ok === true, JSON.stringify(r).slice(0, 100));
+  ok('「資料庫」分頁喺 SHEET_TABS 入面', (g.sandbox.SHEET_TABS || []).includes('資料庫'));
+}
+
+/* ============================================================
+   ② 後端未設 API Key（Script Properties 空）→ 應該寫得入
+   ============================================================ */
+section('後端冇設 API Key：空 key 應該寫得入');
+{
+  const g = makeGas();
+  const db = sampleDb();
+  const save = g.post({ action: 'saveDb', unit: '0082', apiKey: '', apikey: '', db });
+  ok('saveDb 成功', save.ok === true, JSON.stringify(save).slice(0, 140));
+  const back = g.post({ action: 'loadDb', unit: '0082', apiKey: '', apikey: '' });
+  ok('loadDb 攞得返', back.ok === true && back.found === true);
+  ok('財政資料完整（2 筆帳）', (back.db?.transactions || []).length === 2);
+  ok('生日資料完整（2 個團員、有生日）',
+    (back.db?.members || []).length === 2 && back.db.members[0].birthday === '2008-03-14');
+}
+
+/* ============================================================
+   ③ ★ 真實故障：initializeSheets 生成咗 key，但 app 條 key 係空
+   ============================================================ */
+section('★ 真實故障：後端有 key、app 條 key 空');
+{
+  const g = makeGas();
+  g.sandbox.initializeSheets();
+  const generated = g.props.get('API_KEY');
+  ok('initializeSheets 會自動生成 API Key', !!generated, String(generated));
+
+  const db = sampleDb();
+  const blocked = g.post({ action: 'saveDb', unit: '0082', apiKey: '', apikey: '', db });
+  ok('空 key 寫入會被拒（＝用家撞到嗰個情況）',
+    blocked.ok === false && /API ?Key|未授權/.test(blocked.error || ''), JSON.stringify(blocked).slice(0, 140));
+
+  const okSave = g.post({ action: 'saveDb', unit: '0082', apiKey: generated, apikey: generated, db });
+  ok('填啱 key 就寫得入', okSave.ok === true, JSON.stringify(okSave).slice(0, 140));
+
+  /* 最誤導嗰part：連線測試照樣話 OK */
+  const ping = g.post({ action: 'status', unit: '0082', apiKey: '', apikey: '' });
+  ok('status 空 key 都回 ok（所以「測試連線」會呃人）', ping.ok === true);
+  const info = g.post({ action: 'dbInfo', unit: '0082', apiKey: '', apikey: '' });
+  ok('dbInfo 空 key 會被拒（所以用佢驗寫入權先準）',
+    info.ok === false && /API ?Key|未授權/.test(info.error || ''));
+}
+
+/* ============================================================
+   ④ 讀返嚟嘅資料要同寫出去嗰份一模一樣（唔可以走樣）
+   ============================================================ */
+section('round-trip：資料唔可以走樣');
+{
+  const g = makeGas();
+  const db = sampleDb();
+  db.notices = [{ id: 'n1', title: { zh: '週年大會', en: 'AGM' }, status: 'published', signups: [{ name: '陳大文' }] }];
+  db.settings = { currency: 'HK$', nested: { deep: { value: 42 } } };
+  g.post({ action: 'saveDb', unit: '0082', db });
+  const back = g.post({ action: 'loadDb', unit: '0082' });
+  ok('巢狀物件原樣讀返（通告標題中英）', back.db?.notices?.[0]?.title?.zh === '週年大會');
+  ok('深層巢狀 settings 原樣讀返', back.db?.settings?.nested?.deep?.value === 42);
+  ok('報名名單唔會走樣', back.db?.notices?.[0]?.signups?.[0]?.name === '陳大文');
+  ok('整份 JSON 完全相等', JSON.stringify(back.db) === JSON.stringify(db));
+}
+
+/* ============================================================
+   ⑤ 大份資料要分段寫（Sheet 單格上限 50000 字元）
+   ============================================================ */
+section('大資料分段');
+{
+  const g = makeGas();
+  const db = sampleDb();
+  db.blob = 'x'.repeat(120000);
+  const save = g.post({ action: 'saveDb', unit: '0082', db });
+  ok('120k 字元寫得入', save.ok === true, JSON.stringify(save).slice(0, 120));
+  ok('會分做多段（每段 < 50000）', (save.chunks || 0) >= 3, 'chunks=' + save.chunks);
+  const back = g.post({ action: 'loadDb', unit: '0082' });
+  ok('分段拼返完整無缺', back.db?.blob?.length === 120000);
+}
+
+/* ============================================================
+   ⑥ 旅團隔離：唔可以讀到人哋旅團嘅資料
+   ============================================================ */
+section('旅團隔離');
+{
+  const g = makeGas();
+  const a = sampleDb(); a.unitCode = '0082'; a.members = [{ id: 'a', name: '0082 團員' }];
+  const b = sampleDb(); b.unitCode = '0099'; b.members = [{ id: 'b', name: '0099 團員' }];
+  g.post({ action: 'saveDb', unit: '0082', db: a });
+  g.post({ action: 'saveDb', unit: '0099', db: b });
+  const ra = g.post({ action: 'loadDb', unit: '0082' });
+  const rb = g.post({ action: 'loadDb', unit: '0099' });
+  ok('0082 只讀到自己嘅', ra.db?.members?.[0]?.name === '0082 團員');
+  ok('0099 只讀到自己嘅', rb.db?.members?.[0]?.name === '0099 團員');
+  /* 再存一次 0082，唔可以整爛 0099 */
+  a.members.push({ id: 'a2', name: '新團員' });
+  g.post({ action: 'saveDb', unit: '0082', db: a });
+  const rb2 = g.post({ action: 'loadDb', unit: '0099' });
+  ok('覆寫 0082 唔會影響 0099', rb2.db?.members?.[0]?.name === '0099 團員' && rb2.found === true);
+}
+
+/* ============================================================
+   ⑦ 覆寫唔可以留低舊段（唔係 append 上去）
+   ============================================================ */
+section('覆寫要乾淨');
+{
+  const g = makeGas();
+  const big = sampleDb(); big.blob = 'y'.repeat(100000);
+  g.post({ action: 'saveDb', unit: '0082', db: big });
+  const small = sampleDb();
+  g.post({ action: 'saveDb', unit: '0082', db: small });
+  const back = g.post({ action: 'loadDb', unit: '0082' });
+  ok('大份變細份之後，讀返嘅係細份（冇殘留舊段）', back.db?.blob === undefined && JSON.stringify(back.db) === JSON.stringify(small));
+}
+
+/* ============================================================
+   ⑧ app 同後端嘅 Code.gs 要同步（build 出嚟嗰份）
+   ============================================================ */
+section('gastemplate 同 apps-script/Code.gs 一致');
+{
+  const built = fs.readFileSync(path.join(ROOT, 'apps-script/Code.gs'), 'utf8');
+  const tpl = fs.readFileSync(path.join(ROOT, 'assets/js/lib/gastemplate.js'), 'utf8');
+  ok('gastemplate 有 saveDb / loadDb / dbInfo', /saveDb/.test(tpl) && /loadDb/.test(tpl) && /dbInfo/.test(tpl));
+  ok('兩份都有「資料庫」分頁', /資料庫/.test(built) && /資料庫/.test(tpl));
+  ok('版本號一致',
+    (built.match(/v?2\.1\.\d/) || [''])[0] === (tpl.match(/v?2\.1\.\d/) || [''])[0],
+    `built=${(built.match(/v?2\.1\.\d/) || [''])[0]} tpl=${(tpl.match(/v?2\.1\.\d/) || [''])[0]}`);
+}
+
+console.log(`\n${fail === 0 ? '✅' : '❌'} Code.gs：${pass} 過 / ${fail} 唔過（${Date.now() - t0}ms）`);
+process.exit(fail === 0 ? 0 : 1);
