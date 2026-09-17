@@ -499,5 +499,68 @@ section('總表同步經同源代理（唔填 /exec 都得）');
   globalThis.fetch = memFetch;
 }
 
+/* ============================================================
+   ⑨ 舊系統遷移：指去 82venture 嘅公開網址要搵得出＋一鍵搬
+   ------------------------------------------------------------
+   各旅團資料庫入面嘅公開網址（通告／團章／公開頁）好可能仲係
+   舊站嗰陣填嘅 82venture.vercel.app —— 嗰啲 QR／WhatsApp 連結
+   退役之後會死晒。呢度驗：搵得出、搬得啱、頁面識得警告。
+   （沿用第 ⑧ 節嘅 jsdom 環境：location ＝ http://localhost:8080/）
+   ============================================================ */
+section('舊系統遷移（一鍵搬公開網址）');
+{
+  const store = await import('../assets/js/lib/store.js');
+  const model = await import('../assets/js/lib/model.js');
+
+  ok('認得舊站網址', model.isLegacyUrl('https://82venture.vercel.app/notice.html?u=0082&n=x') === true);
+  ok('唔理大細楷', model.isLegacyUrl('https://82VENTURE.VERCEL.APP/entry.html') === true);
+  ok('相對路徑唔算舊站', model.isLegacyUrl('notice.html?u=0082') === false);
+  ok('新站唔算舊站', model.isLegacyUrl('https://ecportal.vercel.app/notice.html') === false);
+  ok('而家唔係喺舊站', model.onLegacyHost() === false);
+
+  /* 播種：扮 0082 資料庫入面仲有舊網址（單旅團年代填落嘅） */
+  const db = store.load();
+  db.settings.notice = { ...(db.settings.notice || {}), publicBaseUrl: 'https://82venture.vercel.app/notice.html' };
+  db.settings.publicBaseUrl = 'https://82venture.vercel.app/constitution.html?u={u}';
+  db.settings.publicLinks = {
+    ...(db.settings.publicLinks || {}), base: '',
+    'entry.html': 'https://82venture.vercel.app/entry.html', 'borrow.html': ''
+  };
+  store.commit();
+
+  const found = model.findLegacyPublicUrls();
+  ok('★ 搵得出 3 個指去舊站嘅設定', found.length === 3, JSON.stringify(found.map(f => f.key)));
+  ok('搬遷淨係換 host（path＋參數照留）',
+    model.migrateLegacyUrl('https://82venture.vercel.app/notice.html?u=0082&n=5') === 'http://localhost:8080/notice.html?u=0082&n=5',
+    model.migrateLegacyUrl('https://82venture.vercel.app/notice.html?u=0082&n=5'));
+  ok('唔係舊站網址就原樣回傳',
+    model.migrateLegacyUrl('https://ecportal.vercel.app/x') === 'https://ecportal.vercel.app/x');
+
+  const n = model.migrateLegacyPublicUrls();
+  ok('★ 一鍵搬走 3 個', n === 3, String(n));
+  ok('搬完之後搵唔到舊站網址', model.findLegacyPublicUrls().length === 0);
+  ok('通告網址已經係而家呢個站',
+    store.load().settings.notice.publicBaseUrl === 'http://localhost:8080/notice.html',
+    store.load().settings.notice.publicBaseUrl);
+  ok('{u} 參數搬完之後仲喺度',
+    store.load().settings.publicBaseUrl === 'http://localhost:8080/constitution.html?u={u}',
+    store.load().settings.publicBaseUrl);
+
+  /* 成員連結頁會出 banner（播返個舊嘅先） */
+  store.load().settings.publicLinks['borrow.html'] = 'https://82venture.vercel.app/borrow.html';
+  store.commit();
+  const links = await import('../assets/js/views/links.js');
+  const html = links.render();
+  ok('★ 成員連結頁有舊站警告＋一鍵搬掣', /舊系統/.test(html) && /data-act="migrate-urls"/.test(html));
+  ok('受影響嘅連結卡有警告', /退役之後會死/.test(html));
+
+  /* 通告分享連結都係同一個來源（搬完就啱） */
+  const notices = await import('../assets/js/views/notices.js');
+  store.add('notices', { id: 'n_legacy1', title: { zh: '測試通告' }, status: 'published' });
+  const rec = store.find('notices', 'n_legacy1');
+  ok('通告 publicUrl 用搬完之後嘅新網址',
+    notices.publicUrl(rec).startsWith('http://localhost:8080/notice.html?'), notices.publicUrl(rec));
+}
+
 console.log(`\n──────── 後端儲存測試結果：${pass} 通過 / ${fail} 失敗（${Date.now() - t0} ms）────────\n`);
 process.exit(fail ? 1 : 0);

@@ -480,6 +480,34 @@ section('伺服器一時讀唔到：舊清單要頂住（唔可以洗走旅團�
   ok('合併咗舊貨會標 stale', units3.registryStale() === true);
 }
 
+/* ============================================================
+   ⑩ 舊系統退役截停（喺 82venture.vercel.app 開會見到搬遷提示）
+   ------------------------------------------------------------
+   舊站係冇後端嘅空站（/api 全部 404），喺嗰度開工只會
+   「揀唔到旅團、儲存唔到」。如果新 code 喺舊 host 度跑，
+   boot 第一時間就要截停，指去新系統。
+   ============================================================ */
+section('舊系統退役截停');
+{
+  const { window } = makeBrowser('https://82venture.vercel.app/');
+  await import('../assets/js/main.js?legacy1=1');
+  await wait(400);
+  const doc = window.document;
+  const text = () => (doc.getElementById('app')?.textContent || '').replace(/\s+/g, ' ');
+  ok('★ 舊站會截停並顯示搬遷提示', /已經搬遷/.test(text()), text().slice(0, 100));
+  ok('有去新系統嘅連結', !!doc.querySelector('a[href*="ecportal.vercel.app"]'));
+  ok('唔會出現旅團閘（唔畀人喺空站開工）', !/揀你嘅旅團/.test(text()));
+}
+{
+  /* 正常 host 唔受影響 */
+  const { window } = makeBrowser('http://localhost:8080/');
+  await import('../assets/js/main.js?legacy2=1');
+  await wait(600);
+  const text = () => (window.document.getElementById('app')?.textContent || '').replace(/\s+/g, ' ');
+  ok('正常網址唔會被截停（照見旅團閘）', /揀你嘅旅團/.test(text()), text().slice(0, 80));
+  ok('正常網址唔會彈搬遷提示', !/已經搬遷/.test(text()));
+}
+
 if (errors.length) {
   console.log(`\n捕捉到 ${errors.length} 個 console.error：`);
   errors.slice(0, 6).forEach(e => console.log('  • ' + e.slice(0, 200)));

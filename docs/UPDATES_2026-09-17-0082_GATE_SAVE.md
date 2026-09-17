@@ -75,3 +75,61 @@
 3. 入到去嘅話：「總表同步」最尾幾行同步紀錄。
 
 呢三樣加埋，唔使估，一眼就知係伺服器、部署定係 GAS 嗰邊嘅問題。
+
+---
+
+## 6. 補充：舊站 82venture.vercel.app（另一嫌疑犯＋退役安排）
+
+> 用戶補充：舊站係單旅團系統，將會 delete，懷疑當時係連咗去嗰邊。
+
+### 實測結果（已證實舊站係個活陷阱）
+
+| 檢查 | 結果 |
+|---|---|
+| `GET 82venture.vercel.app/api/units?diag=1` | ❌ **Vercel 404 NOT_FOUND**（成個 `/api` 冇咗） |
+| `GET 82venture.vercel.app/` | 舊版閘面：有 0082（凍結咗嘅舊檔案名單）＋ MOCK，冇診斷／重新載入／直接輸入編號 |
+
+即係：任何人開舊站（舊書籤、瀏覽器自動完成、以前印嘅 QR、WhatsApp 舊連結）
+都會見到**紅字 HTTP 404＋儲存唔到**——同今次回報嘅症狀同一個模樣。
+（嚴謹起見：用戶話「清單冇 0082」，舊站而家個名單仲有 0082，
+所以嗰一單亦可能係正站嗰下 transient；兩邊都處理咗，唔使再估。）
+
+### 點解新系統會「連去舊站」
+
+Runtime code **冇任何寫死嘅舊站網址**（全文檢索過，只剩 `docs/archive/` 兩份舊文件提到）。
+真正的通道係**旅團自己資料庫入面儲存咗嘅公開網址**——單旅團年代個個都係填
+`https://82venture.vercel.app/notice.html` 呢類網址，而家仲跟住後端同步去每一部機：
+
+- `settings.notice.publicBaseUrl` → 通告分享文字＋QR（`notices.js publicUrl()`）
+- `settings.publicBaseUrl` → 團章 QR＋公開連結（`constitution.js publicUrl()`）
+- `settings.publicLinks.*` → 成員連結頁全部（`model.js publicPageUrl()`，
+  留空嗰陣先會用返而家呢個站，呢個 fallback 係安全嘅）
+
+### 今次加咗嘅防線（同 branch，第二個 commit）
+
+| # | 改動 |
+|---|---|
+| 1 | `model.js`：`LEGACY_HOSTS`／`isLegacyUrl()`／`findLegacyPublicUrls()`／`migrateLegacyPublicUrls()`（淨換 host，path＋參數照留） |
+| 2 | `links.js`（成員連結）：有舊連結就彈紅色橫額＋「一鍵轉去而家呢個網址」，受影響嘅連結卡逐張警告 |
+| 3 | `notices.js`：分享彈窗＋通告設定頁，舊連結會警告並指去成員連結搬 |
+| 4 | `constitution.js`：團章公開網址係舊站就警告 |
+| 5 | `main.js`：如果新 code 喺舊 host 度跑，boot 第一時間截停，顯示「已經搬遷」＋去新系統掣 |
+
+測試：`gate-env` 第 ⑩ 節（5 項）、`remote` 第 ⑨ 節（15 項），全套 1504 項全過。
+
+### 退役舊站 Checklist（次序唔好調亂）
+
+1. **Vercel 後台先睇唔好刪**：82venture project → Deployments（邊個 commit、
+   auto-deploy 有冇開）＋ Environment Variables（記低有咩，刪 project 之前截圖留底）。
+2. **叫重度用戶喺舊站匯出 JSON 備份**（帳號與系統 → 資料管理 → 匯出）：
+   舊站 origin 下嘅 localStorage 刪站之後就拎唔返。後端（Google Sheet）齊嘅話唔使驚，
+   但有備份先夠膽。
+3. **新站一鍵搬連結**：0082 入新系統 → 成員連結 → 撳「一鍵轉去而家呢個網址」
+   （搬完 banner 消失先算乾淨；通告／團章頁嘅警告都會一齊消失）。
+4. **重印＋重派**：搬完之後重新下載 QR／重印海報，WhatsApp 群重新貼過新連結，
+   廣播話舊網址即將停用。
+5. **刪 project**：Vercel → 82venture project → Settings → General → Delete Project。
+   注意：`*.vercel.app` 刪 project 即死，**冇得 redirect**；想要緩衝就先 deploy
+   一版純跳轉頁上去頂住一排先刪（optional，視乎仲有幾多舊 QR 流出面）。
+6. 刪完之後隨手抽查：開幾條新 QR／連結，確認落喺 `ecportal.vercel.app` 讀得到、
+   報到名。

@@ -19,7 +19,7 @@ import {
   login, logout, current, currentRole, ROLES, displayName, displaySub,
   loginAsMock, accounts, isSuper, can
 } from './lib/auth.js';
-import { pendingMeetings, overdueFees, pendingClaims, pendingLoans, profile, notices } from './lib/model.js';
+import { pendingMeetings, overdueFees, pendingClaims, pendingLoans, profile, notices, onLegacyHost, canonicalUrl } from './lib/model.js';
 import { esc, icon, toast, modal, confirmDlg } from './lib/util.js';
 import { parse, go } from './lib/router.js';
 
@@ -64,6 +64,10 @@ let bootError = null;
    BOOT
    ============================================================ */
 async function boot() {
+  /* 舊系統退役截停（2026-09）：如果新 code 有朝一日喺 82venture.vercel.app 度跑
+     （例如舊 Vercel project 重建咗），即刻截住 —— 嗰個站冇後端，
+     喺嗰度開工只會整出更多混亂（揀唔到旅團、儲存唔到）。 */
+  if (onLegacyHost() && !legacyDismissed()) return renderMoved();
   app.innerHTML = loadingScreen();
   try {
     await loadRegistry();
@@ -675,6 +679,40 @@ async function openApplication() {
 
 function loadingScreen() {
   return `<div style="display:grid;place-items:center;min-height:100vh;color:#9A868C;font-size:14px">載入中…</div>`;
+}
+
+function legacyDismissed() {
+  try { return sessionStorage.getItem('v82.legacy.ok') === '1'; } catch { return false; }
+}
+
+/* 舊站截停畫面：唔畀人喺個冇後端嘅空站度開工 */
+function renderMoved() {
+  document.body.classList.add('login-body');
+  app.innerHTML = `
+  <div class="gate-wrap">
+    <div class="gate-card">
+      <div class="gate-brand">
+        <div class="logo">82</div>
+        <div>
+          <div class="gate-title">執委管理系統已經搬遷</div>
+          <div class="gate-sub">呢個舊網址（82venture.vercel.app）已經退役</div>
+        </div>
+      </div>
+      <div class="note-box warn">${icon('alert', 15)}<div>
+        你而家開緊嘅係<b>舊系統</b>，上面嘅資料唔會再更新，儲存都唔會成功。
+        請轉去新系統，書籤／捷徑都請更新。
+      </div></div>
+      <div class="row gap-8 wrap mt-16">
+        <a class="btn btn-primary" href="${esc(canonicalUrl())}">${icon('chevronR', 15)} 去新系統</a>
+        <button class="btn" id="btnLegacyGo">我知，繼續用舊站</button>
+      </div>
+      <div class="gate-foot">唔肯定新網址？問你嘅領袖／執委攞最新連結。</div>
+    </div>
+  </div>`;
+  app.querySelector('#btnLegacyGo')?.addEventListener('click', () => {
+    try { sessionStorage.setItem('v82.legacy.ok', '1'); } catch { /* ignore */ }
+    location.reload();
+  });
 }
 
 function renderFatal(e) {
