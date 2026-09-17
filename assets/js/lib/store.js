@@ -339,18 +339,35 @@ export function switchUnit(code) {
   u.hash = '#/dashboard';
   location.href = u.toString();
 }
+/* 「已揀咗旅團」記錄（main.js 嘅旅團選擇閘共用同一個 key）。
+   離開示範／重置選擇時要一齊清，否則下一次開機會由呢度直接跳返入去。 */
+export const CHOSEN_UNIT_KEY = 'venture82.unitChosen.v2';
+
 export function enterMock() {
   const u = new URL(location.href);
   u.searchParams.set('mock', '1');
   u.hash = '';
   location.href = u.toString();
 }
-export function exitMock() {
+
+/**
+ * 清晒所有「示範／已揀旅團」嘅痕跡，重載返去旅團選擇閘。
+ *
+ * 以前 exitMock 只係由 URL 刪走 mock=1 —— 但 localStorage 仲留緊
+ * mode=mock、unit=MOCK，URL 又有 u=MOCK，下次 boot 照樣入返示範，
+ * 用家撳「離開示範」永遠出唔到（2026-09 真實 bug：被困喺 MOCK）。
+ */
+export function resetToGate() {
+  lsDel(K.mode);
+  lsDel(K.unit);
+  lsDel(CHOSEN_UNIT_KEY);
   const u = new URL(location.href);
   u.searchParams.delete('mock');
-  u.hash = '#/dashboard';
+  u.searchParams.delete('u');
+  u.hash = '';
   location.href = u.toString();
 }
+export function exitMock() { resetToGate(); }
 
 /* ---------------- 讀寫 ---------------- */
 export function load() {

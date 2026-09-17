@@ -197,6 +197,55 @@ console.log('\n▌已揀過旅團（第二次開）');
 ok('記住咗選擇之後 unitChosen 條件成立',
   window.localStorage.getItem('venture82.unitChosen.v2') === 'TEST9');
 
+/* ---------- ④ 離開 MOCK 唔可以困死用家（2026-09 真實 bug） ----------
+   舊 exitMock 只係由 URL 刪走 mock=1，localStorage 仲留緊 mode=mock／unit=MOCK，
+   下次 boot 照樣入返示範 → 「離開示範」掣永遠出唔到。而家要清晒一切。 */
+console.log('\n▌離開 MOCK（唔會被困返入去）');
+{
+  const dom2 = new JSDOM(html, { url: 'http://localhost:8080/?mock=1&u=MOCK', pretendToBeVisual: true, runScripts: 'dangerously' });
+  const w2 = dom2.window;
+  w2.scrollTo = () => {};
+  try { Object.defineProperty(w2, 'crypto', { value: globalThis.crypto, configurable: true }); } catch { /* ignore */ }
+  for (const k of ['window', 'document', 'navigator', 'localStorage', 'location', 'HTMLElement',
+    'CustomEvent', 'Event', 'Node', 'getComputedStyle', 'URL', 'URLSearchParams', 'Blob', 'FileReader']) {
+    if (w2[k] === undefined) continue;
+    try { Object.defineProperty(globalThis, k, { value: w2[k], configurable: true, writable: true }); }
+    catch { /* 唯讀 → 略過 */ }
+  }
+  globalThis.window = w2;
+  await import('../assets/js/main.js?mockboot=1');  /* cache-bust：main.js 嘅 module-level boot() 只行一次；
+     用 query 令 Node 當佢係另一個 module 重新執行，boot() 就喺新 jsdom 度行 */
+  await wait(500);
+
+  const store2 = await import('../assets/js/lib/store.js');  /* 同一個 module instance（main.js 用緊嗰個） */
+  ok('MOCK 開機：而家係示範模式', store2.isMock() === true);
+  ok('MOCK 開機：示范橫額「離開示範」掣存在', !!w2.document.getElementById('mockExit'));
+
+  let navigated2 = '';
+  try {
+    Object.defineProperty(w2, 'location', {
+      configurable: true,
+      value: new Proxy(w2.location, {
+        set(t, k, v) { if (k === 'href') navigated2 = String(v); return true; },
+        get(t, k) { const v = t[k]; return typeof v === 'function' ? v.bind(t) : v; }
+      })
+    });
+  } catch { /* 用唔到 proxy 就算 */ }
+
+  w2.document.getElementById('mockExit')?.dispatchEvent(new w2.MouseEvent('click', { bubbles: true }));
+  await wait(80);
+
+  ok('離開示範：mode 記錄被清走', w2.localStorage.getItem('venture82.mode.v2') === null,
+    String(w2.localStorage.getItem('venture82.mode.v2')));
+  ok('離開示範：unit 記錄被清走', w2.localStorage.getItem('venture82.currentUnit.v2') === null,
+    String(w2.localStorage.getItem('venture82.currentUnit.v2')));
+  ok('離開示範：「已揀旅團」記錄被清走', w2.localStorage.getItem('venture82.unitChosen.v2') === null,
+    String(w2.localStorage.getItem('venture82.unitChosen.v2')));
+  ok('離開示範：重載嘅網址冇 mock=1 都冇 u=（下次開機會返去旅團選擇閘）',
+    navigated2 ? (!/mock=1/.test(navigated2) && !/[?&]u=/.test(navigated2)) : true,
+    navigated2 || '（jsdom 唔會真係轉頁）');
+}
+
 if (errors.length) {
   console.log(`\n捕捉到 ${errors.length} 個 console.error：`);
   errors.slice(0, 6).forEach(e => console.log('  • ' + e.slice(0, 200)));
