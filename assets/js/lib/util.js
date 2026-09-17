@@ -104,11 +104,17 @@ export async function copyText(text) {
     await navigator.clipboard.writeText(text);
     return true;
   } catch {
-    const ta = document.createElement('textarea');
-    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-    document.body.appendChild(ta); ta.select();
-    const ok = document.execCommand('copy'); ta.remove();
-    return ok;
+    /* execCommand 喺邊度都可能唔存在（舊 fallback）——失敗就乾淨咁回 false，
+       唔好 throw 出去（用家會見到「複製失敗」toast，唔係整頁卡死） */
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      const ok = document.execCommand('copy'); ta.remove();
+      return !!ok;
+    } catch {
+      return false;
+    }
   }
 }
 

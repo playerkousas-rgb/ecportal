@@ -49,7 +49,12 @@ export function refresh() { window.dispatchEvent(new CustomEvent('v82:refresh'))
    讀後端
    ============================================================ */
 async function fetchAll({ silent = false } = {}) {
-  if (!progressConfigured()) return;
+  if (!progressConfigured()) {
+    /* 2026-09 修：未設定時靜默 return → 「重新讀取」撳咗冇任何反應（死掣）。
+       而家俾個提示，話畀用家知要填咗設定先讀得到。 */
+    if (!silent) toast('尚未設定進度後端——請喺「設定」填入 /exec 網址同 API Key', 'info');
+    return;
+  }
   loading = true; errMsg = '';
   if (!silent) refresh();
   const r = await loadRemote();

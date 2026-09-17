@@ -4,7 +4,7 @@
 
 import {
   init, load, isMock, currentUnit, seedInfo, enterMock, exitMock,
-  switchUnit, clearMockData
+  switchUnit, clearMockData, resetToGate, CHOSEN_UNIT_KEY
 } from './lib/store.js';
 import { loadRegistry, unitList, unitEntry, defaultUnitCode, registryReachable } from './lib/units.js';
 import {
@@ -194,22 +194,16 @@ function normAt(v) {
    旅團選擇閘（登入之前）
    網址有 ?u= / ?mock=1，或者之前已經揀過，就直接入登入畫面。
    ============================================================ */
-const CHOSEN_KEY = 'venture82.unitChosen.v2';
 function unitChosen() {
   const url = new URLSearchParams(location.search);
   if (url.get('u') || url.get('mock') === '1') return true;
-  try { return !!localStorage.getItem(CHOSEN_KEY); } catch { return false; }
+  try { return !!localStorage.getItem(CHOSEN_UNIT_KEY); } catch { return false; }
 }
 function markChosen(code) {
-  try { localStorage.setItem(CHOSEN_KEY, code); } catch { /* ignore */ }
+  try { localStorage.setItem(CHOSEN_UNIT_KEY, code); } catch { /* ignore */ }
 }
-function forgetChoice() {
-  try { localStorage.removeItem(CHOSEN_KEY); } catch { /* ignore */ }
-  const u = new URL(location.href);
-  u.searchParams.delete('u');
-  u.searchParams.delete('mock');
-  location.href = u.toString();
-}
+/* 清選擇記錄＋模擬狀態，返去旅團選擇閘（同「離開示範」共用，見 store.resetToGate） */
+function forgetChoice() { resetToGate(); }
 
 function renderUnitGate() {
   document.body.classList.add('login-body');
@@ -761,6 +755,13 @@ function render() {
   }));
   app.querySelector('#unitSwitch')?.addEventListener('click', unitPicker);
 
+  /* 示範橫額「以 XXX 身份預覽」：<select> 撳落去選值係 change 事件（唔係 click），
+     以前用 document click 攞 e.target.id 永遠攞唔到 → 下拉框係壞嘅。 */
+  app.querySelector('#mockRole')?.addEventListener('change', e => {
+    loginAsMock(e.target.value);
+    render();
+  });
+
   /* 任何分頁嘅「欄位」掣（data-fields="transactions" / members / invItems / notices / meetings…）
      都會打開同一個欄位設計器 —— 唔再需要一個獨立「表格」分頁 */
   app.querySelectorAll('[data-fields]').forEach(b => b.addEventListener('click', e => {
@@ -877,10 +878,7 @@ document.addEventListener('click', async e => {
     }
     return;
   }
-  if (t.id === 'mockRole') {
-    loginAsMock(t.value);
-    render();
-  }
+  /* mockRole 已改做 render() 入面綁 change（select 唔係 click 事件） */
 });
 
 boot();

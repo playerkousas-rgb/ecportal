@@ -22,6 +22,21 @@ const ROOT = path.dirname(url.fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8000);
 const HOST = process.env.HOST || '0.0.0.0';
 
+/** 載入 .env.local / .env（如果有）—— 本地預覽都可以同 Vercel 一樣有 TROOP_* 旅團登記。
+    唔會覆蓋已經存在嘅環境變數（真正 env 優先）；值只可一行，自動去引號。
+    呢啲檔有 API Key —— .gitignore 已經排除，唔好 commit。 */
+function loadEnvFile(file) {
+  if (!fs.existsSync(file)) return;
+  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+    if (/^\s*(#|$)/.test(line)) continue;
+    const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
+    if (!m || process.env[m[1]] !== undefined) continue;
+    process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+  }
+}
+loadEnvFile(path.join(ROOT, '.env.local'));
+loadEnvFile(path.join(ROOT, '.env'));
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -104,6 +119,11 @@ http.createServer((req, res) => {
   }
   return serveStatic(req, res);
 }).listen(PORT, HOST, () => {
+  const envTroops = [...new Set(Object.keys(process.env)
+    .filter(k => /^TROOP_[0-9A-Za-z]+_(BACKEND|GASURL|APIKEY)$/i.test(k))
+    .map(k => k.split('_')[1]))];
+  if (envTroops.length) console.log(`環境變數旅團（.env.local／env）：${envTroops.join(', ')}`);
+  else console.log('（未載入任何 TROOP_* 環境變數 → 旅團選擇閘只會有 MOCK；想本地預覽有真實旅團，喺項目加 .env.local，見 docs/ADD_NEW_UNIT.md）');
   console.log(`執委管理系統（本機）→ http://localhost:${PORT}/?u=0082`);
   console.log(`示範資料 → http://localhost:${PORT}/?mock=1`);
   console.log(`API（進度接駁）→ http://localhost:${PORT}/api/progress`);
