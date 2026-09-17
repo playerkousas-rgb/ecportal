@@ -254,7 +254,13 @@ function renderUnitGate() {
                <li>部署未完成／網絡問題 —— 可以撳下面「重新載入清單」再試</li>
              </ul>
              你亦可以撳「<b>診斷伺服器登記</b>」睇實際讀到啲咩，或直接<b>輸入旅團編號</b>入去。`
-          : `你可以揀下面嘅「試用示範（MOCK）」即刻試玩，或者撳「新旅團申請接入」登記自己旅團 —— 登記好之後，你嘅旅團就會喺呢度出現，由空白資料庫開始。`}
+          : `你可以揀下面嘅「試用示範（MOCK）」即刻試玩，或者撳「新旅團申請接入」登記自己旅團 —— 登記好之後，你嘅旅團就會喺呢度出現，由空白資料庫開始。
+             <ul style="margin:6px 0 0;padding-left:18px;line-height:1.8">
+               <li>已經喺 Vercel 加咗 <code>TROOP_&lt;編號&gt;_*</code>？記得撳 <b>Redeploy</b>，
+                   同埋將變數嘅 Environments 勾埋 <b>Preview ＋ Production</b>
+                   （淨係勾 Production，開 Preview 網址就會一個都讀唔到）</li>
+               <li>撳「<b>診斷伺服器登記</b>」可以即刻睇到伺服器認到咩、邊個變數名打錯咗</li>
+             </ul>`}
       </div>
     </div>` : '';
 
@@ -403,11 +409,30 @@ async function openRegistryDiag() {
     ? (d.withKey || []).map(i => `<code>${esc(i)}</code>`).join('、')
     : '<span class="muted">冇（未設定 _APIKEY）</span>']);
   rows.push(['執行環境', d.onVercel
-    ? '<span class="badge b-ok">Vercel</span>'
+    ? `<span class="badge b-ok">Vercel</span> ${d.vercelEnv ? `<code>${esc(d.vercelEnv)}</code>` : ''}`
     : `<span class="badge b-warn">唔似 Vercel</span> <span class="xs muted">${esc(d.env || '')}</span>`]);
+  if (d.host) rows.push(['你而家開緊', `<code>${esc(d.host)}</code>`]);
 
   const suspicious = d.suspicious || [];
   const recognized = d.recognizedNames || [];
+  const none = !(d.ids || []).length;
+
+  /* 一個都認唔到 —— 九成係以下其中一樣，直接列出嚟 */
+  const emptyHelp = none ? `
+    <div class="note-box warn mt-12">${icon('alert', 15)}<div>
+      <b>伺服器讀唔到你嘅 TROOP_* 變數，最常見係呢三個原因：</b>
+      <ul style="margin:8px 0 0;padding-left:18px;line-height:1.9">
+        <li><b>未 Redeploy</b> —— 加／改環境變數之後一定要喺 Vercel 重新部署一次
+            （Deployments → 最新嗰個 → ⋯ → Redeploy）</li>
+        <li><b>變數只勾咗 Production，但你開緊 Preview／Development 網址</b>
+            （網址帶 <code>-git-</code>、隨機字尾，或者唔係你嘅正式網域）。
+            去 Vercel → Settings → Environment Variables，將每個 <code>TROOP_*</code> 嘅 Environments
+            改成 <b>Production ＋ Preview ＋ Development</b>（或者全部），再 Redeploy</li>
+        <li><b>唔係呢個部署</b> —— 環境變數只存在於 Vercel 嗰邊；本機預覽讀唔到，
+            要本機都見到就要喺專案嘅 <code>.env.local</code> 自己填同樣嘅變數</li>
+      </ul>
+      而家嘅環境：<code>${esc(d.vercelEnv || d.env || 'local')}</code>${d.host ? ` · <code>${esc(d.host)}</code>` : ''}
+    </div></div>` : '';
 
   await modal({
     title: '伺服器登記診斷',
@@ -419,6 +444,7 @@ async function openRegistryDiag() {
           ${rows.map(([k, v]) => `<tr><td style="width:190px" class="sm semibold">${k}</td><td class="sm">${v}</td></tr>`).join('')}
         </tbody></table>
       </div>
+      ${emptyHelp}
 
       ${recognized.length ? `
       <div class="note-box info mt-12">${icon('check', 15)}<div>

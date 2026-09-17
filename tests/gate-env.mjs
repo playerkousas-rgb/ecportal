@@ -56,10 +56,13 @@ function mockRes() {
   r.json = (o) => { r.body = o; return r; };
   return r;
 }
-function callUnitsApi(url) {
+function callUnitsApi(url, headers = {}) {
   const q = String(url).split('?')[1] || '';
   const res = mockRes();
-  unitsHandler({ method: 'GET', url: String(url), query: Object.fromEntries(new URLSearchParams(q)) }, res);
+  unitsHandler({
+    method: 'GET', url: String(url), headers,
+    query: Object.fromEntries(new URLSearchParams(q))
+  }, res);
   return res;
 }
 
@@ -360,6 +363,47 @@ section('Vercel 環境變數登記（彈性寫法）');
 
   for (const k of ['TROOP_82_URL', 'TROOP_0099_BACKEND_URL', 'TROOP_0100_GASURL', 'TROOP_0101_KEY',
     'TROOP0082_BACKEND', 'TROOP_82_BACKENDXD', 'TROOP_0097_BACKEND', 'TROOP_0095', 'TROOP_0094']) delete process.env[k];
+}
+
+/* ============================================================
+   ⑧ 「Production 變數 + Preview 網址」情境（真 Vercel 最常見陷阱）
+   ------------------------------------------------------------
+   變數只勾 Production，用家開 Preview／臨時網址 → process.env 一個都冇。
+   呢個時候診斷一定要講得出「而家係咩環境／開緊邊個 host」＋ 點做。
+   ============================================================ */
+section('部署環境對唔上（變數只勾 Production）');
+{
+  /* 模擬 Preview 部署：冇晒 TROOP_*，但有 VERCEL_ENV=preview */
+  const saved = {};
+  for (const k of Object.keys(process.env)) {
+    if (/^TROOP/i.test(k)) { saved[k] = process.env[k]; delete process.env[k]; }
+  }
+  const savedVercel = process.env.VERCEL_ENV;
+  process.env.VERCEL = '1';
+  process.env.VERCEL_ENV = 'preview';
+  process.env.VERCEL_REGION = 'hkg1';
+
+  const res = callUnitsApi('https://ecportal-git-abc123.vercel.app/api/units?diag=1',
+    { host: 'ecportal-git-abc123.vercel.app' });
+  ok('★ Preview 環境讀唔到 Production 變數（0 個旅團）', res.body.count === 0, String(res.body.count));
+  ok('★ 診斷講清楚而家嘅部署環境', res.body.diag.vercelEnv === 'preview', JSON.stringify(res.body.diag.vercelEnv));
+  ok('★ 診斷帶埋用家開緊嘅 host（畀管理員核對係唔係正式網域）',
+    res.body.diag.host === 'ecportal-git-abc123.vercel.app', res.body.diag.host);
+  ok('診斷照樣唔會洩漏任何值', !JSON.stringify(res.body.diag).includes('troop_81_secret'));
+
+  /* 閘面要真係顯示呢個提示（唔止 API 有） */
+  const { window } = makeBrowser('http://localhost:8080/');
+  const units = await import('../assets/js/lib/units.js?preview=1');
+  await units.loadRegistry(true);
+  ok('前端狀態列記得住「讀到，但 0 個旅團」', units.serverUnitsStatus().ok === true
+    && units.serverUnitsStatus().count === 0, JSON.stringify(units.serverUnitsStatus()));
+
+  process.env.VERCEL_ENV = savedVercel;
+  delete process.env.VERCEL;
+  delete process.env.VERCEL_REGION;
+  if (savedVercel === undefined) delete process.env.VERCEL_ENV;
+  Object.assign(process.env, saved);
+  ok('還原之後 0081 返嚟', !!getRegistry()['0081']);
 }
 
 if (errors.length) {

@@ -163,13 +163,23 @@ https://<你嘅網址>/?u=0137&mock=1 ← 用示範資料試玩
 
 1. **有冇 Redeploy？** 加／改環境變數一定要重新部署（Vercel → Deployments → ⋯ → Redeploy）；
    淨係 refresh 瀏覽器係唔會生效嘅。
-2. **變數名啱唔啱？** 至少要 `TROOP_<編號>_BACKEND`（`GET /api/units` 要見到個旅團，
+2. **你開緊邊個網址？** 環境變數係**逐個環境**注入嘅：
+   * 變數通常只勾咗 **Production** → 只有 `https://<你嘅正式網域>` 讀得到；
+   * 開 **Preview** 網址（例如 `xxx-git-分支名-…vercel.app`）／Deployment 預覽，
+     會當係另一個環境，**一個 `TROOP_*` 都讀唔到**。
+   * 想每個環境都有 → Settings → Environment Variables → 編輯每個變數 →
+     Environments 勾齊 **Production ＋ Preview ＋ Development** → Redeploy。
+3. **變數名啱唔啱？** 至少要 `TROOP_<編號>_BACKEND`（`GET /api/units` 要見到個旅團，
    就係靠呢個變數）；`_APIKEY`、`_NAME` 係選填。
-3. **喺旅團閘撳「診斷伺服器登記」** —— 佢會話你知：
+4. **喺旅團閘撳「診斷伺服器登記」** —— 佢會話你知：
    * 伺服器實際認到邊幾個旅團編號
+   * **而家嘅部署環境**（production／preview）同你開緊嘅 host
    * 邊啲變數名認唔到（通常就係少／多一個字）
    * 後端 URL 有冇通過白名單（一定要 `https://script.google.com/macros/s/…/exec`，`/dev` 唔接受）
-4. **仲係見唔到？** 喺閘面「直接輸入旅團編號」照樣入得去（`?u=0081`）；
+5. **想即刻自己查？** 喺瀏覽器直接開 `https://<你嘅網域>/api/units`
+   —— 應該見到 `{"units":{"0082":{…}}}`。見到 = 登記正確（問題喺前端／網址／快取）；
+   見唔到 = 伺服器讀唔到變數（返去第 1、2 點）。
+6. **仍然見唔到旅團？** 喺閘面「直接輸入旅團編號」打 `0082` 撳「直接進入」照樣入得去；
    入到去之後所有後端讀寫都經伺服器端 `/api/proxy`，唔受清單影響。
 
 ---

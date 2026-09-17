@@ -223,6 +223,11 @@ export function registryDiagnostics() {
     server: 'ecportal',
     onVercel: !!(process.env.VERCEL || process.env.VERCEL_ENV || process.env.NOW_BUILDER),
     env: process.env.VERCEL_ENV || (process.env.VERCEL ? 'vercel' : (process.env.NODE_ENV || 'local')),
+    /* 部署環境：production / preview / development —— Vercel 只會注入對應環境嘅變數。
+       如果變數只係勾咗 Production，而用家開嘅係 Preview 網址，就會一個都讀唔到。 */
+    vercelEnv: process.env.VERCEL_ENV || '',
+    vercelUrl: process.env.VERCEL_URL || '',
+    region: process.env.VERCEL_REGION || '',
     ids,
     count: ids.length,
     /* 只有名，冇值 */

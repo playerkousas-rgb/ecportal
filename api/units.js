@@ -28,6 +28,13 @@ export default function handler(req, res) {
     count: Object.keys(units).length,
     _note: '82venture 多旅團 Registry，所有後端同步存取請經同源 /api/proxy'
   };
-  if (diag) body.diag = registryDiagnostics();
+  if (diag) {
+    body.diag = {
+      ...registryDiagnostics(),
+      /* 用家而家開緊邊個網址／邊個環境 —— 「變數只勾咗 Production，但開緊 Preview 網址」係最常見陷阱 */
+      host: String(req.headers?.host || ''),
+      requestEnv: process.env.VERCEL_ENV || (process.env.VERCEL ? 'vercel' : 'local')
+    };
+  }
   res.status(200).json(body);
 }
