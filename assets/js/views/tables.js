@@ -517,6 +517,7 @@ function syncView() {
       <button class="btn btn-primary btn-sm" data-act="push-db">${icon('cloud', 15)} 立即儲存到後端</button>
       <button class="btn btn-sm" data-act="pull-db">${icon('download', 15)} 由後端還原資料</button>
       <button class="btn btn-sm" data-act="db-info">${icon('search', 15)} 睇後端有咩資料</button>
+      <button class="btn btn-sm" data-act="migrate-check">${icon('shield', 15)} 搬遷檢查</button>
     </div>
     <div class="hint mt-8">「由後端還原」會<b>用後端嘅資料覆蓋呢部機</b>（換咗新手機／清咗 cache 就用呢個）。</div>
   </div></div>` : `
@@ -1187,6 +1188,100 @@ export function mount(root, params) {
           actions: [{ label: '知道喇', class: 'btn-primary', value: true }]
         });
       }
+      /* ---- 搬遷檢查：確認後端真係有齊嘢，先至夠膽清走前端／靜態資料 ----
+         呢個係「搬屋前數吓箱」嘅工具。0082 原本啲資料係靜態檔（data/units/0082/*.json）
+         ＋ 瀏覽器 localStorage，要搬入後端。清嘢之前必須逐項對數，
+         唔可以靠「撳咗儲存應該冇事」。 */
+      if (act === 'migrate-check') {
+        const remote = await import('../lib/remote.js');
+        const old = b.innerHTML;
+        b.disabled = true; b.textContent = '檢查中…';
+
+        const local = load();
+        const pendingCount = () => Number(load().sync?.pending || 0);
+        const localCount = {
+          members: (local.members || []).length,
+          transactions: (local.transactions || []).length,
+          meetings: (local.meetings || []).length,
+          notices: (local.notices || []).length,
+          invItems: (local.invItems || []).length,
+          accounts: (local.accounts || []).length
+        };
+        /* 攞成份後端資料落嚟逐項數（dbInfo 淨係回 6 個 count，唔夠細） */
+        const got = await remote.pullDb();
+        b.disabled = false; b.innerHTML = old;
+
+        if (!got?.ok) {
+          await modal({
+            title: '搬遷檢查：讀唔到後端',
+            body: `<div class="note-box err">${icon('alert', 15)}<div>${esc(got?.error || '未知錯誤')}</div></div>
+              ${got?.hint ? `<p class="sm mt-12">${esc(got.hint)}</p>` : ''}
+              <p class="sm muted mt-8"><b>未搬得。</b>先修好後端連線。</p>`,
+            actions: [{ label: '知道喇', class: 'btn-primary', value: true }]
+          });
+          return;
+        }
+        if (!got.found || !got.db) {
+          await modal({
+            title: '搬遷檢查：後端仲係空',
+            body: `<div class="note-box warn">${icon('alert', 15)}<div>後端未有任何資料庫。</div></div>
+              <p class="sm mt-12">先撳「<b>立即儲存到後端</b>」，再返嚟做呢個檢查。</p>
+              <p class="sm muted mt-8"><b>千祈唔好</b>喺呢個狀態清走前端資料。</p>`,
+            actions: [{ label: '知道喇', class: 'btn-primary', value: true }]
+          });
+          return;
+        }
+
+        const rdb = got.db;
+        const remoteCount = {
+          members: (rdb.members || []).length,
+          transactions: (rdb.transactions || []).length,
+          meetings: (rdb.meetings || []).length,
+          notices: (rdb.notices || []).length,
+          invItems: (rdb.invItems || []).length,
+          accounts: (rdb.accounts || []).length
+        };
+        const LABEL = { members: '團員', transactions: '帳目', meetings: '會議', notices: '通告', invItems: '物資', accounts: '帳戶' };
+        /* 團章同設定唔係陣列，另外驗 */
+        const extra = [
+          ['團章章節', (local.constitution?.chapters || []).length, (rdb.constitution?.chapters || []).length],
+          ['團費紀錄', (local.fees || []).length, (rdb.fees || []).length],
+          ['收支申報', (local.claims || []).length, (rdb.claims || []).length],
+          ['活動預算', (local.budgets || []).length, (rdb.budgets || []).length],
+          ['物資借用', (local.invLoans || []).length, (rdb.invLoans || []).length]
+        ];
+
+        const rows = [
+          ...Object.keys(localCount).map(k => [LABEL[k], localCount[k], remoteCount[k]]),
+          ...extra
+        ];
+        const bad = rows.filter(([, l, r]) => l !== r);
+        const allMatch = bad.length === 0 && !pendingCount();
+
+        await modal({
+          title: allMatch ? '搬遷檢查：✅ 後端有齊嘢' : '搬遷檢查：⚠️ 未夾得掂',
+          body: `
+            <table class="tbl sm"><thead><tr><th>項目</th><th class="r">呢部機</th><th class="r">後端</th><th></th></tr></thead>
+            <tbody>${rows.map(([n, l, r]) => `<tr>
+              <td>${esc(n)}</td><td class="r">${l}</td><td class="r">${r}</td>
+              <td class="r">${l === r ? `<span style="color:var(--ok)">✓</span>` : `<span style="color:var(--danger)">✗ 爭 ${Math.abs(l - r)}</span>`}</td>
+            </tr>`).join('')}</tbody></table>
+            ${pendingCount() ? `<div class="note-box warn mt-12">${icon('alert', 15)}<div>
+              仲有 <b>${pendingCount()}</b> 項改動未寫入後端 —— 撳「立即儲存到後端」先。</div></div>` : ''}
+            ${allMatch ? `<div class="note-box ok mt-12">${icon('check', 15)}<div>
+              <b>後端同呢部機完全一致，可以安全清走前端資料。</b><br>
+              建議次序：① 先撳下面「匯出 JSON 備份」留一份喺電腦（保險）→
+              ② 由 Git 移除 <code>data/units/0082/</code> →
+              ③ 之後新裝置開機會直接由後端讀，唔會再種舊資料。</div></div>`
+            : `<div class="note-box err mt-12">${icon('alert', 15)}<div>
+              <b>未可以清。</b>上面打 ✗ 嗰啲項目兩邊對唔上 —— 先撳「立即儲存到後端」，
+              再做多次檢查；仲係唔夾就唔好清，話我知。</div></div>`}
+            <p class="sm muted mt-8">後端最後更新：${esc(String(got.version || got.at || '').slice(0, 19).replace('T', ' ') || '（未知）')}
+              · 大小 ${esc(remote.fmtBytes(got.bytes || 0))}</p>`,
+          actions: [{ label: '知道喇', class: 'btn-primary', value: true }]
+        });
+      }
+
       if (act === 'dl-gas') {
         const { gasTemplate } = await import('../lib/gastemplate.js');
         download('Code.gs', gasTemplate(), 'text/plain;charset=utf-8');

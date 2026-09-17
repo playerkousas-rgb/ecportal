@@ -373,5 +373,30 @@ section('API Key 由伺服器端注入（前端唔應該知）');
   if (saved.t === undefined) delete process.env.V82_PROXY_TEST; else process.env.V82_PROXY_TEST = saved.t;
 }
 
+/* ============================================================
+   ⑦ 搬遷檢查：清走前端資料之前，要證實後端真係有齊嘢
+   ------------------------------------------------------------
+   0082 原本係「靜態檔 + localStorage」嘅系統，要搬入後端。
+   清嘢係不可逆，所以「搬遷檢查」必須喺以下情況擋住：
+     · 後端仲係空（未推過）
+     · 本機有嘢未寫入後端（pending）
+     · 兩邊筆數對唔上
+   ============================================================ */
+section('搬遷檢查（清前端之前要對數）');
+{
+  const src = fs.readFileSync(path.join(ROOT, 'assets/js/views/tables.js'), 'utf8');
+  ok('「總表同步」有「搬遷檢查」掣', /data-act="migrate-check"/.test(src));
+  ok('檢查會 pullDb 攞成份後端資料落嚟逐項數（唔淨係信 dbInfo 個 count）',
+    /act === 'migrate-check'/.test(src) && /remote\.pullDb\(\)/.test(src));
+  ok('後端空 → 明確叫人唔好清', /後端仲係空/.test(src) && /千祈唔好/.test(src));
+  ok('有 pending → 擋住', /pendingCount\(\)/.test(src) && /未寫入後端/.test(src));
+  ok('筆數唔夾 → 唔畀清', /未可以清/.test(src));
+  ok('全部夾 → 先至講可以安全清走', /可以安全清走前端資料/.test(src));
+  ok('對數範圍唔止 6 項（連團章／團費／申報／預算／借用都數）',
+    /團章章節/.test(src) && /團費紀錄/.test(src) && /收支申報/.test(src)
+    && /活動預算/.test(src) && /物資借用/.test(src));
+  ok('建議次序有叫人先做 JSON 備份', /匯出 JSON 備份/.test(src));
+}
+
 console.log(`\n──────── 後端儲存測試結果：${pass} 通過 / ${fail} 失敗（${Date.now() - t0} ms）────────\n`);
 process.exit(fail ? 1 : 0);
