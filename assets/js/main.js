@@ -8,7 +8,7 @@ import {
 } from './lib/store.js';
 import {
   loadRegistry, unitList, unitEntry, defaultUnitCode, registryReachable,
-  serverUnitsStatus, fetchRegistryDiag, registryStale
+  serverUnitsStatus, bakedUnitsStatus, fetchRegistryDiag, registryStale
 } from './lib/units.js';
 import {
   adminInbox, validateApplication, submitApplication, adminChecklist,
@@ -233,8 +233,14 @@ function forgetChoice() { resetToGate(); }
 /** 伺服器端 Registry（Vercel 環境變數）而家點？ */
 function serverRegistryLine() {
   const s = serverUnitsStatus();
+  const b = bakedUnitsStatus();
   if (s.ok) {
     return `${icon('check', 13)} 伺服器登記（Vercel 環境變數）：<b>${s.count}</b> 個旅團`;
+  }
+  /* 即時 API 讀唔到，但部署嗰陣焗好嘅名單有貨 —— 清單照用，唔好嚇親人 */
+  if (b.ok) {
+    return `${icon('check', 13)} 伺服器登記（部署名單）：<b>${b.count}</b> 個旅團` +
+      `<span class="xs faint">（即時狀態讀唔到：${esc(s.error || '網絡錯誤')}）</span>`;
   }
   if (!s.at) return `${icon('clock', 13)} 伺服器登記：未檢查`;
   return `${icon('alert', 13)} 讀唔到伺服器登記清單（<code>${esc(s.error || '網絡錯誤')}</code>）`;
@@ -245,12 +251,15 @@ function renderUnitGate() {
   const units = unitList();
   const serverUnits = units.filter(x => x.fromApi || x.server);
   const st = serverUnitsStatus();
+  const bakedGate = bakedUnitsStatus();
+  /* 即時 API 同部署名單兩邊都冇，先至算「讀唔到」 */
+  const serverFailed = st.at && !st.ok && !bakedGate.ok;
   /* 清單空咗，係「伺服器讀唔到」定「真係一個都未登記」？兩個講法完全唔同。 */
   const emptyBox = !units.length ? `
-    <div class="note-box ${st.at && !st.ok ? 'warn' : ''}">${icon(st.at && !st.ok ? 'alert' : 'info', 15)}
+    <div class="note-box ${serverFailed ? 'warn' : ''}">${icon(serverFailed ? 'alert' : 'info', 15)}
       <div>
-        <b>${st.at && !st.ok ? '讀唔到伺服器嘅旅團登記清單。' : '暫時未有旅團登記。'}</b>
-        ${st.at && !st.ok
+        <b>${serverFailed ? '讀唔到伺服器嘅旅團登記清單。' : '暫時未有旅團登記。'}</b>
+        ${serverFailed
           ? `（<code>${esc(st.error || '')}</code>）呢個通常係以下其中一樣：
              <ul style="margin:6px 0 0;padding-left:18px;line-height:1.8">
                <li>環境變數加咗但未 <b>Redeploy</b>（加／改完一定要重新部署先生效）</li>
@@ -360,7 +369,10 @@ function renderUnitGate() {
     await loadRegistry(true);
     renderUnitGate();
     const s = serverUnitsStatus();
-    toast(s.ok ? `已重新載入：伺服器登記 ${s.count} 個旅團` : `仲係讀唔到伺服器清單：${s.error}`, s.ok ? 'ok' : 'err');
+    const b = bakedUnitsStatus();
+    toast(s.ok ? `已重新載入：伺服器登記 ${s.count} 個旅團`
+      : (b.ok ? `已重新載入：部署名單 ${b.count} 個旅團（即時 API：${s.error || '讀唔到'}）`
+        : `仲係讀唔到伺服器清單：${s.error}`), (s.ok || b.ok) ? 'ok' : 'err');
   });
   app.querySelector('[data-act="diag"]')?.addEventListener('click', openRegistryDiag);
   const goCode = () => {
@@ -395,11 +407,18 @@ function gotoUnit(code, { remember = true } = {}) {
    ============================================================ */
 async function openRegistryDiag() {
   const local = serverUnitsStatus();
+  const baked = bakedUnitsStatus();
   const d = await fetchRegistryDiag();
   const rows = [];
   rows.push(['瀏覽器讀 <code>/api/units</code>', local.ok
     ? `<span class="badge b-ok">OK</span>&nbsp; ${local.count} 個旅團`
     : `<span class="badge b-warn">失敗</span> <code>${esc(local.error || '')}</code>`]);
+  rows.push(['部署時名單（靜態）', !baked.at
+    ? '（未檢查）'
+    : (baked.ok
+      ? `<span class="badge b-ok">OK</span>&nbsp; ${baked.count} 個旅團` +
+        (baked.generatedAt ? ` · <span class="xs muted">${esc(baked.generatedAt)}${baked.vercelEnv ? `（${esc(baked.vercelEnv)}）` : ''}</span>` : '')
+      : `<span class="badge b-warn">冇</span> <span class="xs muted">呢個部署冇焗名單（舊部署／未經正常 build）</span>`)]);
   rows.push(['伺服器端回應', d.ok
     ? `<span class="badge b-ok">OK</span>`
     : `<span class="badge b-warn">有問題</span> <code>${esc(d.error || '')}</code>`]);

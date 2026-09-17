@@ -7,6 +7,10 @@
    ============================================================ */
 
 const REG_URL = 'data/units.json';
+/* 部署時焗好嘅名單（Vercel build 由 TROOP_* 環境變數生成，見 scripts/build-units.mjs）。
+   2026-09-18 起行先：有真實用戶 fetch('api/units') 一律 404（function 證實唔會回 404，
+   兇手喺控制範圍之外），靜態檔反而人人攞到 —— 名單唔可以淨係靠 runtime function。 */
+const GEN_URL = 'data/units.generated.json';
 const REG_CACHE = 'venture82.units.cache.v2';
 const LOCAL_KEY = 'venture82.units.local.v2';
 
@@ -61,8 +65,33 @@ export function registryStale() { return staleCache; }
 let serverStatus = { ok: false, status: 0, count: 0, error: '', at: '' };
 export function serverUnitsStatus() { return { ...serverStatus }; }
 
+/* 部署時焗好嘅名單讀成點？（同 serverStatus 分開記：即時 API 讀唔到，
+   但焗名單有貨，個閘照樣有得揀 —— 唔可以當「讀唔到伺服器清單」。） */
+let bakedStatus = { ok: false, count: 0, generatedAt: '', vercelEnv: '', at: '' };
+export function bakedUnitsStatus() { return { ...bakedStatus }; }
+
 const API_UNITS_URL = 'api/units';
 const API_DIAG_URL = 'api/units?diag=1';
+
+/** 由部署時焗好嘅靜態檔攞名單；舊部署／未經正常 build 就冇呢個檔（回傳空物件） */
+async function fetchBakedUnits() {
+  const fail = () => {
+    bakedStatus = { ok: false, count: 0, generatedAt: '', vercelEnv: '', at: new Date().toISOString() };
+    return {};
+  };
+  try {
+    const r = await fetch(GEN_URL + '?_=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) return fail();
+    const j = await r.json();
+    const units = (j && j.units && typeof j.units === 'object') ? j.units : {};
+    bakedStatus = {
+      ok: true, count: Object.keys(units).length,
+      generatedAt: String(j?.generatedAt || ''), vercelEnv: String(j?.vercelEnv || ''),
+      at: new Date().toISOString()
+    };
+    return units;
+  } catch (e) { return fail(); }
+}
 
 /** 由 /api/units 攞伺服器端（環境變數）定義嘅旅團；靜態部署／未設定就回傳空物件 */
 async function fetchServerUnits() {
@@ -129,6 +158,10 @@ export async function loadRegistry(force = false) {
     return {};
   })();
 
+  /* 部署時焗好嘅名單（靜態檔，行先 —— 同一次部署嘅環境，同 /api 睇到嘅一樣） */
+  const fromBaked = await fetchBakedUnits();
+  if (Object.keys(fromBaked).length) regReachable = true;
+
   let fromFile = null;
   let fileFailed = false;
   try {
@@ -145,14 +178,22 @@ export async function loadRegistry(force = false) {
   let fresh = null;
   if (fromFile && fromFile.units) {
     fresh = { ...fromFile, units: { ...fromFile.units } };
+    Object.entries(fromBaked).forEach(([code, u]) => {
+      fresh.units[code] = { ...(fresh.units[code] || {}), ...u, baked: true, server: true };
+    });
     Object.entries(fromApi).forEach(([code, u]) => {
       fresh.units[code] = { ...(fresh.units[code] || {}), ...u, fromApi: true, server: true };
     });
-  } else if (Object.keys(fromApi).length) {
+  } else if (Object.keys(fromApi).length || Object.keys(fromBaked).length) {
     /* 讀唔到 data/units.json（例如 Vercel 唔會 bundle 呢個檔）但伺服器 Registry 有嘢
        → 直接用伺服器嗰份，唔好白白當冇旅團 */
-    fresh = { schema: 2, defaultUnit: '', units: { ...fromApi } };
-    Object.values(fresh.units).forEach(u => { u.fromApi = true; u.server = true; });
+    fresh = { schema: 2, defaultUnit: '', units: {} };
+    Object.entries(fromBaked).forEach(([code, u]) => {
+      fresh.units[code] = { ...u, baked: true, server: true };
+    });
+    Object.entries(fromApi).forEach(([code, u]) => {
+      fresh.units[code] = { ...(fresh.units[code] || {}), ...u, fromApi: true, server: true };
+    });
     regReachable = true;
   }
 
@@ -161,7 +202,9 @@ export async function loadRegistry(force = false) {
      洗走記住咗嘅旅團。注意：真係「一個都未登記」嗰陣 serverStatus.ok
      係 true、fileFailed 係 false，唔會入呢度 —— 管理員啱啱取消登記嘅
      旅團仍然會即刻消失，唔會陰魂不散。 */
-  const fetchFailed = fileFailed || !serverStatus.ok;
+  /* 2026-09-18：焗好嘅名單都係第一手（同一次部署嘅環境），佢有貨就唔當「讀唔齊」。
+     （舊部署冇焗名單檔 → bakedStatus.ok 係 false → 同以前一模一樣。） */
+  const fetchFailed = fileFailed || (!serverStatus.ok && !bakedStatus.ok);
   if (fetchFailed && Object.keys(prevUnits).length) {
     const base = fresh
       ? { ...fresh, units: { ...fresh.units } }
@@ -247,7 +290,7 @@ export function dataPathOf(code) {
   const u = unitEntry(code);
   if (u?.dataPath) return u.dataPath;
   if (u?.local) return null;                    // 本地旅團冇資料檔案
-  if (u?.fromApi) return null;                  // 伺服器旅團：由空白資料庫開始（資料喺自己後端）
+  if (u?.fromApi || u?.baked) return null;                  // 伺服器旅團：由空白資料庫開始（資料喺自己後端）
   return `data/units/${code}/`;
 }
 
