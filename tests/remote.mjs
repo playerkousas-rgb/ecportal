@@ -420,5 +420,84 @@ section('搬遷檢查（清前端之前要對數）');
   ok('建議次序有叫人先做 JSON 備份', /匯出 JSON 備份/.test(src));
 }
 
+/* ============================================================
+   ⑧ 「總表同步」唔填 /exec 都要經得同源代理（純環境變數開團）
+   ------------------------------------------------------------
+   2026-09-17 0082 事件：純 Vercel env 開團嘅旅團，前端根本唔會填
+   /exec（網址同 key 留喺伺服器端），但 pushToMaster 一見冇 s.url
+   就即刻話「未設定網址」—— 連「測試連線」都撳唔到。
+   而家：冇本地網址就經同源 /api/proxy 照送。
+   ============================================================ */
+section('總表同步經同源代理（唔填 /exec 都得）');
+{
+  const { JSDOM } = await import('jsdom');
+  const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost:8080/', pretendToBeVisual: true });
+  const { window } = dom;
+  for (const k of ['window', 'document', 'navigator', 'localStorage', 'location', 'HTMLElement',
+    'CustomEvent', 'Event', 'Node', 'getComputedStyle', 'URL', 'URLSearchParams']) {
+    try { Object.defineProperty(globalThis, k, { value: window[k], configurable: true, writable: true }); }
+    catch { /* 唯讀 → 略過 */ }
+  }
+  globalThis.window = window;
+
+  const seen = [];
+  const memFetch = globalThis.fetch;
+  /* 假代理：扮 GAS 經 proxy 回嚟嘅 JSON */
+  let proxyReply = { ok: true, msg: '已寫入總表', counts: { members: 1 }, unit: '0082' };
+  globalThis.fetch = async (url, init = {}) => {
+    const clean = String(url).split('?')[0].replace(/^\.?\//, '');
+    if (clean === 'api/proxy') {
+      seen.push(JSON.parse(init.body || '{}'));
+      return { ok: true, status: 200, text: async () => JSON.stringify(proxyReply) };
+    }
+    return { ok: false, status: 404, json: async () => { throw new Error('404'); }, text: async () => '404' };
+  };
+
+  const store = await import('../assets/js/lib/store.js');
+  await store.init({ mode: 'real', unit: '0082' });
+  ok('測試 DB 冇本地後端網址（純 env 開團嘅狀態）',
+    !store.load().sync?.url && !store.load().backend?.gasUrl);
+
+  const tables = await import('../assets/js/views/tables.js');
+  const r1 = await tables.pushToMaster({ silent: true });
+  ok('★ 冇填 /exec 都經得代理送出', r1.ok === true, JSON.stringify(r1).slice(0, 200));
+  ok('送去代理嘅係 sync action＋旅團編號',
+    seen[0]?.action === 'sync' && seen[0]?.unit === '0082',
+    JSON.stringify({ a: seen[0]?.action, u: seen[0]?.unit }));
+  ok('★ 經代理唔會送空 apiKey（等伺服器端注入）',
+    !('apiKey' in (seen[0] || {})), Object.keys(seen[0] || {}).join(','));
+  ok('有帶成份資料庫上去（後端會存入「資料庫」分頁）', seen[0]?.db?.unitCode === '0082');
+
+  /* GAS 拒絕（例如 key 唔啱）嗰陣，HTTP 200 都要當失敗，而且要講得出原因 */
+  proxyReply = { ok: false, success: false, error: '未授權：API Key 唔正確（寫入資料庫需要 API Key）' };
+  const r2 = await tables.pushToMaster({ silent: true });
+  ok('★ 代理回未授權 → 唔可以扮成功', r2.ok === false, JSON.stringify(r2).slice(0, 160));
+  ok('錯誤原因要浮得返上嚟', /未授權/.test(String(r2.msg || '')), String(r2.msg || '').slice(0, 100));
+
+  /* 純靜態部署（冇 /api/proxy）＋ 冇填網址 → 先至係真・未設定 */
+  globalThis.fetch = async (url) => {
+    const clean = String(url).split('?')[0].replace(/^\.?\//, '');
+    if (clean === 'api/proxy') return { ok: false, status: 404, text: async () => '<h1>404</h1>' };
+    return { ok: false, status: 404, json: async () => { throw new Error('404'); }, text: async () => '404' };
+  };
+  const r3 = await tables.pushToMaster({ silent: true });
+  ok('冇代理又冇網址 → 明確話連唔到代理', r3.ok === false && /同源代理/.test(String(r3.msg || '')),
+    String(r3.msg || '').slice(0, 120));
+
+  /* remote.testConnection 一樣唔可以強制要本地網址 */
+  globalThis.fetch = async (url) => {
+    const clean = String(url).split('?')[0].replace(/^\.?\//, '');
+    if (clean === 'api/proxy') {
+      return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, msg: '82venture 後端正常' }) };
+    }
+    return { ok: false, status: 404, text: async () => '404' };
+  };
+  const remote = await import('../assets/js/lib/remote.js');
+  const t = await remote.testConnection();
+  ok('remote.testConnection 經代理都 test 到（唔使本地網址）', t.ok === true, JSON.stringify(t).slice(0, 160));
+
+  globalThis.fetch = memFetch;
+}
+
 console.log(`\n──────── 後端儲存測試結果：${pass} 通過 / ${fail} 失敗（${Date.now() - t0} ms）────────\n`);
 process.exit(fail ? 1 : 0);

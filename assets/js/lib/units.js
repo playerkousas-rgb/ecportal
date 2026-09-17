@@ -47,6 +47,12 @@ export function registry() {
 let regReachable = false;
 export function registryReachable() { return regReachable; }
 
+/* 而家用緊嘅係咪「上次記住嘅舊清單」？
+   （伺服器／檔案一時讀唔到嗰陣，loadRegistry 會用舊嘅頂住，
+     等個閘唔會一時變空 —— 見下面，2026-09-17 0082 事件。） */
+let staleCache = false;
+export function registryStale() { return staleCache; }
+
 /* ---------------- 伺服器端 Registry（Vercel 環境變數）狀態 ----------------
    2026-09 團長回報「喺 Vercel 加咗 TROOP_*，但首頁揀唔到旅團」。
    以前 /api/units 一失敗（未 redeploy、環境變數名打錯、函數 500…）
@@ -108,30 +114,75 @@ export async function fetchRegistryDiag() {
 
 export async function loadRegistry(force = false) {
   if (cache && !force) return cache;
+
+  /* 上次記住嘅清單 —— 下面讀失敗嗰陣嘅救生艇。
+     （2026-09-17 0082 事件：data/units.json 本身係空但讀得到，
+       /api/units 一時 404 → 合併結果係空 → 好好地記住咗嘅 0082
+       就咁被洗走，成個閘變空。所以讀唔齊嗰陣唔可以用空殼覆蓋。） */
+  const prevUnits = (() => {
+    try {
+      if (cache && cache.units && Object.keys(cache.units).length) return { ...cache.units };
+      const raw = localStorage.getItem(REG_CACHE);
+      const j = raw ? JSON.parse(raw) : null;
+      if (j && j.units && Object.keys(j.units).length) return { ...j.units };
+    } catch { /* ignore */ }
+    return {};
+  })();
+
   let fromFile = null;
+  let fileFailed = false;
   try {
     const r = await fetch(REG_URL + '?_=' + Date.now(), { cache: 'no-store' });
     if (r.ok) { fromFile = await r.json(); regReachable = true; }
-  } catch (e) { /* 可能係 file:// 或者未部署 */ }
+    else fileFailed = true;
+  } catch (e) { fileFailed = true; /* 可能係 file:// 或者未部署 */ }
 
   /* 伺服器 Registry：Vercel 環境變數定義嘅旅團（冇 /api 就自動略過） */
   const fromApi = await fetchServerUnits();
   if (Object.keys(fromApi).length) regReachable = true;
 
+  /* 今次新讀到嘅（未寫入住 —— 要經過下面嘅「讀唔齊」檢查先作準） */
+  let fresh = null;
   if (fromFile && fromFile.units) {
-    const merged = { ...fromFile, units: { ...fromFile.units } };
+    fresh = { ...fromFile, units: { ...fromFile.units } };
     Object.entries(fromApi).forEach(([code, u]) => {
-      merged.units[code] = { ...(merged.units[code] || {}), ...u, fromApi: true, server: true };
+      fresh.units[code] = { ...(fresh.units[code] || {}), ...u, fromApi: true, server: true };
     });
-    cache = merged;
-    try { localStorage.setItem(REG_CACHE, JSON.stringify(merged)); } catch { /* ignore */ }
   } else if (Object.keys(fromApi).length) {
     /* 讀唔到 data/units.json（例如 Vercel 唔會 bundle 呢個檔）但伺服器 Registry 有嘢
        → 直接用伺服器嗰份，唔好白白當冇旅團 */
-    cache = { schema: 2, defaultUnit: '', units: { ...fromApi } };
-    Object.values(cache.units).forEach(u => { u.fromApi = true; u.server = true; });
+    fresh = { schema: 2, defaultUnit: '', units: { ...fromApi } };
+    Object.values(fresh.units).forEach(u => { u.fromApi = true; u.server = true; });
     regReachable = true;
-    try { localStorage.setItem(REG_CACHE, JSON.stringify(cache)); } catch { /* ignore */ }
+  }
+
+  /* 讀唔齊（/api 或者檔案其中一邊失敗），但上次記住嘅仲有嘢：
+     用「新讀到嘅為主、上次記住嘅補返」合併，唔好用個唔齊嘅結果
+     洗走記住咗嘅旅團。注意：真係「一個都未登記」嗰陣 serverStatus.ok
+     係 true、fileFailed 係 false，唔會入呢度 —— 管理員啱啱取消登記嘅
+     旅團仍然會即刻消失，唔會陰魂不散。 */
+  const fetchFailed = fileFailed || !serverStatus.ok;
+  if (fetchFailed && Object.keys(prevUnits).length) {
+    const base = fresh
+      ? { ...fresh, units: { ...fresh.units } }
+      : { schema: 2, defaultUnit: '', units: {} };
+    let filled = 0;
+    for (const [code, u] of Object.entries(prevUnits)) {
+      if (!base.units[code]) { base.units[code] = { ...u }; filled++; }
+    }
+    if (filled > 0 || !fresh) {
+      base._stale = true;
+      staleCache = true;
+      cache = base;
+      regReachable = true;   // 有份可用嘅（舊）清單 —— 照計係「讀到」
+      return cache;          // 唔覆蓋 localStorage —— 留返上次好嘅嗰份喺度
+    }
+  }
+
+  staleCache = false;
+  if (fresh) {
+    cache = fresh;
+    try { localStorage.setItem(REG_CACHE, JSON.stringify(fresh)); } catch { /* ignore */ }
   } else {
     registry(); // 用快取或內建
   }

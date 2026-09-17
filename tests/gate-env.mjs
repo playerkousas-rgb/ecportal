@@ -406,6 +406,80 @@ section('部署環境對唔上（變數只勾 Production）');
   ok('還原之後 0081 返嚟', !!getRegistry()['0081']);
 }
 
+/* ============================================================
+   ⑨ 伺服器一時讀唔到（例如部署緊／網絡 blip）：唔可以洗走記住咗嘅旅團
+   ------------------------------------------------------------
+   2026-09-17 0082 事件：data/units.json 本身係空但讀得到，
+   /api/units 一時 404 → 合併結果係空 → 記住咗嘅 0082 被洗走，
+   成個閘變空。而家：讀唔齊嗰陣用上次記住嘅頂住。
+   ============================================================ */
+section('伺服器一時讀唔到：舊清單要頂住（唔可以洗走旅團）');
+{
+  const { window } = makeBrowser('http://localhost:8080/', {
+    'venture82.units.cache.v2': JSON.stringify({ schema: 2, defaultUnit: '', units: {
+      '0082': { code: '0082', name: '第八十二旅深資童軍團', server: true, fromApi: true, backendReady: true }
+    } })
+  });
+  const memFetch = globalThis.fetch;
+
+  /* 情況一：靜態檔讀到但係空 ＋ /api/units 一時 404 */
+  globalThis.fetch = async (url) => {
+    const clean = String(url).split('?')[0].replace(/^\.?\//, '');
+    if (/^api\/units/.test(clean)) {
+      return { ok: false, status: 404, json: async () => { throw new Error('404'); }, text: async () => '<h1>404</h1>' };
+    }
+    return memFetch(url);
+  };
+  const units = await import('../assets/js/lib/units.js?stale1=1');
+  await units.loadRegistry(true);
+  globalThis.fetch = memFetch;
+  ok('★ /api 404 都唔會洗走記住咗嘅 0082',
+    units.unitList().some(u => String(u.code) === '0082'),
+    units.unitList().map(u => u.code).join(',') || '（空）');
+  ok('會標示而家係舊清單', units.registryStale() === true);
+  ok('localStorage 嗰份好嘅唔會被空殼覆蓋',
+    (JSON.parse(window.localStorage.getItem('venture82.units.cache.v2') || '{}').units || {})['0082'] !== undefined);
+
+  /* 情況二：伺服器正常回覆「0 個旅團」→ 係真・冇登記，舊嘅要清走 */
+  globalThis.fetch = async (url) => {
+    const clean = String(url).split('?')[0].replace(/^\.?\//, '');
+    if (/^api\/units/.test(clean)) {
+      const body = { units: {}, count: 0 };
+      return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
+    }
+    return memFetch(url);
+  };
+  const units2 = await import('../assets/js/lib/units.js?stale2=1');
+  await units2.loadRegistry(true);
+  globalThis.fetch = memFetch;
+  ok('伺服器正常回 0 個旅團 → 清單真係空（舊嘅唔會陰魂不散）',
+    units2.unitList().length === 0, units2.unitList().map(u => u.code).join(','));
+  ok('正常清空唔會標 stale', units2.registryStale() === false);
+
+  /* 情況三：檔案嗰邊有貨、/api 嗰邊 500 → 兩邊加埋，唔可以唔見咗一邊 */
+  window.localStorage.setItem('venture82.units.cache.v2', JSON.stringify({ schema: 2, defaultUnit: '', units: {
+    '0082': { code: '0082', name: '第八十二旅深資童軍團', server: true, fromApi: true, backendReady: true }
+  } }));
+  globalThis.fetch = async (url) => {
+    const clean = String(url).split('?')[0].replace(/^\.?\//, '');
+    if (/^api\/units/.test(clean)) {
+      return { ok: false, status: 500, json: async () => { throw new Error('500'); }, text: async () => 'error' };
+    }
+    if (clean === 'data/units.json') {
+      const body = { schema: 2, defaultUnit: '', units: { '0100': { code: '0100', name: '第一百旅' } } };
+      return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
+    }
+    return memFetch(url);
+  };
+  const units3 = await import('../assets/js/lib/units.js?stale3=1');
+  await units3.loadRegistry(true);
+  globalThis.fetch = memFetch;
+  const codes3 = units3.unitList().map(u => String(u.code)).sort();
+  ok('★ 檔案嘅 0100 照見到', codes3.includes('0100'), codes3.join(','));
+  ok('★ 記住咗嘅 0082 補得返', codes3.includes('0082'), codes3.join(','));
+  ok('合併咗舊貨會標 stale', units3.registryStale() === true);
+}
+
 if (errors.length) {
   console.log(`\n捕捉到 ${errors.length} 個 console.error：`);
   errors.slice(0, 6).forEach(e => console.log('  • ' + e.slice(0, 200)));

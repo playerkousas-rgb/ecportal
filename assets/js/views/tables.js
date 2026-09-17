@@ -781,40 +781,84 @@ export function buildPayload({ sample = false } = {}) {
   return payload;
 }
 
+/* 有冇同源代理可以用（同 remote.js 一樣嘅判斷：http/https 先有 /api/proxy） */
+function canUseProxy() {
+  try { return typeof location !== 'undefined' && /^https?:$/.test(location.protocol); }
+  catch { return false; }
+}
+
 export async function pushToMaster({ silent = false } = {}) {
   const s = load().sync || {};
-  if (!s.url) {
-    const db = load();
-    db.sync = {
-      ...(db.sync || {}),
-      log: [...((db.sync || {}).log || []), { at: new Date().toISOString().slice(0, 19).replace('T', ' '), msg: '✗ 未設定 Apps Script 網址（去「總表同步」填 /exec）' }].slice(-40)
-    };
-    commit();
-    if (!silent) toast('未設定 Apps Script 網址', 'err');
-    return { ok: false, msg: '未設定網址' };
-  }
   const payload = buildPayload();
+  /* 冇填本地 /exec？先試同源代理 —— Vercel 登記嘅旅團正路係咁：
+     後端網址同 API Key 留喺伺服器端（TROOP_*），前端淨係送旅團編號。
+     （2026-09-17 0082 事件：純環境變數開團嘅旅團呢度永遠「未設定網址」，
+       連「測試連線」都撳唔到，明明經代理係寫得入嘅。） */
+  let endpoint = (s.url || '').trim();
+  let viaProxy = false;
+  if (!endpoint) {
+    if (canUseProxy()) { endpoint = 'api/proxy'; viaProxy = true; }
+    else {
+      const db = load();
+      db.sync = {
+        ...(db.sync || {}),
+        log: [...((db.sync || {}).log || []), { at: new Date().toISOString().slice(0, 19).replace('T', ' '), msg: '✗ 未設定 Apps Script 網址（去「總表同步」填 /exec）' }].slice(-40)
+      };
+      commit();
+      if (!silent) toast('未設定 Apps Script 網址', 'err');
+      return { ok: false, msg: '未設定網址' };
+    }
+  }
+  /* 經代理就唔好送空 key —— 等伺服器端由 TROOP_* 注入（同 remote.js 一樣做法） */
+  if (viaProxy && !payload.apiKey) delete payload.apiKey;
   const log = (msg) => {
     const db = load();
     db.sync = { ...(db.sync || {}), log: [...((db.sync || {}).log || []), { at: new Date().toISOString().slice(0, 19).replace('T', ' '), msg }].slice(-40), lastAt: new Date().toISOString() };
     commit();
   };
   try {
-    const res = await fetch(s.url, {
+    const res = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      headers: { 'Content-Type': viaProxy ? 'application/json' : 'text/plain;charset=utf-8' },
       body: JSON.stringify(payload)
     });
-    const txt = (await res.text()).slice(0, 300);
-    const ok = res.ok;
+    const txt = (await res.text()).slice(0, 2000);
+    let json = null;
+    try { json = JSON.parse(txt); } catch { /* 直接打 GAS 嗰陣成日唔係 JSON，唔出奇 */ }
+    if (viaProxy && !json) {
+      /* 同源根本冇呢個 API（純靜態部署）＋ 又冇填本地網址 → 同未設定一樣 */
+      const msg = `連唔到同源代理（HTTP ${res.status}），又未設定後端網址`;
+      log(`✗ ${msg}`);
+      if (!silent) toast(msg, 'err');
+      return { ok: false, msg, viaProxy };
+    }
+    /* 經代理一定讀到 JSON：唔好淨係睇 HTTP code —— GAS 就算拒絕
+       （例如 API Key 唔啱）都係回 HTTP 200，要睇 ok／success 先知
+       究竟寫入咗未。（直接打 GAS 嗰陣多數讀唔到回應，維持舊做法。） */
+    const failed = viaProxy
+      ? (!res.ok || !json || json.ok === false || json.success === false)
+      : !res.ok;
+    const ok = !failed;
+    const detail = viaProxy ? String(json?.error || json?.msg || '').replace(/\s+/g, ' ').slice(0, 120) : '';
     if (ok) {
       const d = load();
       d.sync = { ...(d.sync || {}), pending: 0, lastPushAt: new Date().toISOString(), lastError: '' };
+    } else if (viaProxy && detail) {
+      const d = load();
+      d.sync = { ...(d.sync || {}), lastError: detail };
     }
-    log(`${ok ? '✓' : '✗'} HTTP ${res.status} · ${payload.counts ? Object.values(payload.counts).reduce((a, b) => a + b, 0) : 0} 筆 · ${txt.replace(/\s+/g, ' ').slice(0, 80)}`);
-    if (!silent) toast(ok ? '已同步到總表' : '同步失敗（' + res.status + '）', ok ? 'ok' : 'err');
-    return { ok, msg: txt };
+    const total = payload.counts ? Object.values(payload.counts).reduce((a, b) => a + b, 0) : 0;
+    log(`${ok ? '✓' : '✗'} HTTP ${res.status}${viaProxy ? '（代理）' : ''} · ${total} 筆 · ${(detail || txt).replace(/\s+/g, ' ').slice(0, 80)}`);
+    if (!silent) toast(ok ? '已同步到總表' : ('同步失敗：' + (detail || ('HTTP ' + res.status))), ok ? 'ok' : 'err');
+    return { ok, msg: detail || txt.slice(0, 300), viaProxy };
   } catch (e) {
+    if (viaProxy) {
+      /* 經代理唔會有「送咗但讀唔到」呢回事 —— 掟 exception 即係根本未送到 */
+      const msg = /abort/i.test(e?.name || '') ? '連線逾時' : ('連唔到同源代理：' + (e.message || '網絡錯誤'));
+      log(`✗ ${msg}`);
+      if (!silent) toast(msg, 'err');
+      return { ok: false, msg, viaProxy };
+    }
     // 跨網域下瀏覽器可能唔畀讀回應（Apps Script 常見）→ 資料其實可能已經寫入
     const uncertain = /Failed to fetch|NetworkError|load failed|network/i.test(e.message || '');
     log(`${uncertain ? '⚠' : '✗'} ${uncertain ? '已送出，但讀唔到伺服器回應（Apps Script 可能已收到）' : e.message} · ${e.message}`);

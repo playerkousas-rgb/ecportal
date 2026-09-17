@@ -8,7 +8,7 @@ import {
 } from './lib/store.js';
 import {
   loadRegistry, unitList, unitEntry, defaultUnitCode, registryReachable,
-  serverUnitsStatus, fetchRegistryDiag
+  serverUnitsStatus, fetchRegistryDiag, registryStale
 } from './lib/units.js';
 import {
   adminInbox, validateApplication, submitApplication, adminChecklist,
