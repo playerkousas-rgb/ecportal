@@ -101,7 +101,7 @@ section('Apps Script 範本（Code.gs）');
   ok('doGet 都讀得（換機時用瀏覽器直接開都拎得返）', /action === 'loadDb' \|\| action === 'dbInfo'/.test(code));
   ok('寫入用 LockService 包住（兩個執委同時改都唔會爛）',
     /withLock\(function \(\) \{ return saveDb\(body\); \}\)/.test(code));
-  ok('寫入前會刪走舊段（唔會殘留舊資料）', /sh\.deleteRow\(i \+ 1\)/.test(code));
+  ok('寫入前會刪走舊段（v2.3.0 成梳 deleteRows，唔會殘留舊資料）', /sh\.deleteRows\(runs\[rd\]\[0\], runs\[rd\]\[1\]\)/.test(code));
   ok('分段大小喺 Sheet 單格上限之內（50000）', /var DB_CHUNK = 45000;/.test(code));
   ok('sync 一併存埋整份資料庫（報表 ＋ 可讀返嘅資料庫）', /if \(body\.db && typeof body\.db === 'object'\)/.test(code));
   ok('寫入資料庫要 API Key（唔係人人改得）',
@@ -469,6 +469,16 @@ section('會議模式：右上「立即儲存」掣＋自動睇隊友更新');
   ok('main.js 右上角有「立即同步」掣（同步咗嗰陣）', /立即同步/.test(mainSrc));
   ok('開機之後會啟動會議模式輪詢', /startPolling\(\)/.test(mainSrc));
   ok('狀態 badge 撳擊仍去「總表同步」詳情', /tables\/sync/.test(mainSrc));
+  ok('remote.js 有 uploadPhotos（相片上 Drive，db 只留連結）',
+    /export async function uploadPhotos/.test(remoteSrc) && /action: 'uploadPhotos'/.test(remoteSrc));
+  ok('pushDb 有 9MB 體積預警（8.5MB 就擋，叫去體積檢查）',
+    /too_big/.test(remoteSrc) && /8500000/.test(remoteSrc) && /體積檢查/.test(remoteSrc));
+  const tablesSrc = fs.readFileSync(path.join(ROOT, 'assets/js/views/tables.js'), 'utf8');
+  ok('總表同步有「體積檢查」同「相片瘦身」掣',
+    /size-check/.test(tablesSrc) && /size-slim/.test(tablesSrc) && /slimClaimPhotos/.test(tablesSrc));
+  const financeSrc = fs.readFileSync(path.join(ROOT, 'assets/js/views/finance.js'), 'utf8');
+  ok('APP 內申報相片會先試 uploadPhotos 上 Drive（失敗先本地存）',
+    /uploadPhotos\(photos/.test(financeSrc) && /photosOnDrive/.test(financeSrc));
 }
 
 /* ============================================================

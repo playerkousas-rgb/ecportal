@@ -273,8 +273,8 @@ section('gastemplate 同 apps-script/Code.gs 一致');
   ok('gastemplate 有 saveDb / loadDb / dbInfo', /saveDb/.test(tpl) && /loadDb/.test(tpl) && /dbInfo/.test(tpl));
   ok('兩份都有「資料庫」分頁', /資料庫/.test(built) && /資料庫/.test(tpl));
   ok('版本號一致',
-    (built.match(/v?2\.2\.\d/) || [''])[0] === (tpl.match(/v?2\.2\.\d/) || [''])[0],
-    `built=${(built.match(/v?2\.2\.\d/) || [''])[0]} tpl=${(tpl.match(/v?2\.2\.\d/) || [''])[0]}`);
+    (built.match(/v?2\.3\.\d/) || [''])[0] === (tpl.match(/v?2\.3\.\d/) || [''])[0],
+    `built=${(built.match(/v?2\.3\.\d/) || [''])[0]} tpl=${(tpl.match(/v?2\.3\.\d/) || [''])[0]}`);
 }
 
 /* ============================================================
@@ -337,6 +337,40 @@ section('團員自助申報：addRequest / myRequests');
   /* 缺欄位要拒 */
   const bad = g.post({ action: 'addRequest', unit: '0082', ymis: '', item_id: '' });
   ok('缺 ymis/item_id → 拒', bad.ok === false, JSON.stringify(bad).slice(0, 120));
+}
+
+/* ============================================================
+   ⑩ 體積治理（v2.3.0）：uploadPhotos／dbInfo sizes
+   ------------------------------------------------------------
+   APP 內申報嘅相片要直接上 Drive（唔好入 db JSON）；
+   dbInfo 要回逐分頁體積（app 畫「體積檢查」用）。
+   ============================================================ */
+section('體積治理：uploadPhotos 上 Drive／dbInfo 回體積');
+{
+  const g = makeGas();
+  /* 唔叫 initializeSheets（唔想生成 API Key 擋住 saveDb；呢個 section 只測體積契約） */
+  /* savePhotos 冇 DRIVE_FOLDER_ID 嗰陣會回空陣列 —— 契約唔可以爆 */
+  const up = g.post({ action: 'uploadPhotos', unit: '0082',
+    payload: { id: 'c_test1', photos: [{ name: 'a.jpg', type: 'image/jpeg', dataUrl: 'data:image/jpeg;base64,AAAA' }] } });
+  ok('uploadPhotos 免 key 都用到', up.ok === true, JSON.stringify(up).slice(0, 160));
+  ok('uploadPhotos 回 links 陣列（冇 Folder 時係空）', Array.isArray(up.links) && up.saved === 0, JSON.stringify(up));
+
+  /* dbInfo 回逐分頁體積 */
+  const db = sampleDb();
+  db.claims = [{ id: 'c1', photos: [{ name: 'x', dataUrl: 'data:image/jpeg;base64,' + 'A'.repeat(1000) }] }];
+  const saved = g.post({ action: 'saveDb', unit: '0082', db });
+  ok('存一份有相片嘅 db 成功', saved.ok === true, JSON.stringify(saved).slice(0, 140));
+  const info = g.post({ action: 'dbInfo', unit: '0082' });
+  ok('dbInfo 回 sizes（逐分頁 bytes）', info.ok === true && typeof info.sizes === 'object' && info.sizes.members > 0, JSON.stringify(info.sizes || {}));
+  ok('dbInfo 回 photoBytes（相片食緊幾多）', info.photoBytes > 1000, JSON.stringify(info.photoBytes));
+  ok('dbInfo counts 照舊有（向後兼容）', info.counts?.members === 2, JSON.stringify(info.counts));
+
+  /* 大份 db 再存一次：確認 deleteRows 成梳刪唔會爛（存完讀得返） */
+  const big = sampleDb(); big.blob = 'z'.repeat(60000);
+  const bigSave = g.post({ action: 'saveDb', unit: '0082', db: big, baseVersion: saved.version });
+  ok('大份資料重存（成梳刪舊段）成功', bigSave.ok === true, JSON.stringify(bigSave).slice(0, 120));
+  const bigBack = g.post({ action: 'loadDb', unit: '0082' });
+  ok('成梳刪之後讀返冇殘留', bigBack.db?.blob?.length === 60000);
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} Code.gs：${pass} 過 / ${fail} 唔過（${Date.now() - t0}ms）`);

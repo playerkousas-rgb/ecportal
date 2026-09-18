@@ -222,6 +222,18 @@ export async function pushDb({ silent = true, _retried = 0 } = {}) {
     }
   }
 
+  /* 體積預警（v2.3.0）：後端 saveDb 上限 9MB —— 去到 8.5MB 就唔好再送，
+     話畀用家知去「體積檢查」瘦身（九成係相片 dataURL）。 */
+  let dbBytes = 0;
+  try { dbBytes = JSON.stringify(db).length; } catch { /* ignore */ }
+  if (dbBytes > 8500000) {
+    db.sync = db.sync || {};
+    pushLog(db, `✗ 資料庫已達 ${fmtBytes(dbBytes)}（上限 9MB）—— 去總表同步「體積檢查」瘦身（多數係相片）`);
+    commitMeta();
+    setState('error', `資料庫太大（${fmtBytes(dbBytes)}）`);
+    return { ok: false, reason: 'too_big', hint: '去「帳號與系統 → 資料管理 → 總表同步 → 體積檢查」，多數係申報相片食緊位，撳「相片瘦身」就會改做 Drive 連結。' };
+  }
+
   inFlight = true;
   if (!silent) setState('saving', '儲存緊…');
   else setState('saving');
@@ -393,6 +405,21 @@ export function startPolling(intervalMs = 60000) {
   }, Math.max(20000, intervalMs));
 }
 export function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+
+/**
+ * 相片上 Drive（v2.3.0 體積治理）：
+ * APP 內申報嘅單據相直接經後端存入 Drive，db 入面只留連結 ——
+ * 以前 dataURL 會將整個資料庫 JSON 撐到爆（saveDb 9MB 上限，
+ * 一到就成個同步寫唔入）。
+ */
+export async function uploadPhotos(photos = [], { id = '' } = {}) {
+  if (isMock()) return { ok: false, reason: 'mock', links: [] };
+  const cfg = remoteCfg();
+  if (!cfg.ok) return { ok: false, reason: 'not_configured', links: [] };
+  const r = await callBackend({ action: 'uploadPhotos', payload: { id, photos } }, { timeoutMs: 90000 });
+  if (r?.ok && Array.isArray(r.links)) return { ok: true, links: r.links };
+  return { ok: false, error: r?.error || '上載唔到', links: [] };
+}
 
 /* ---------------- 自動儲存 ---------------- */
 

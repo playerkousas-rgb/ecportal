@@ -16,6 +16,7 @@ import { toCSV, toWord, download as dlFile, stamp } from '../lib/exporter.js';
 import { go, parse, setQuery } from '../lib/router.js';
 import { can, current } from '../lib/auth.js';
 import { profile, settings } from '../lib/model.js';
+import { fmtBytes } from '../lib/remote.js';
 import { pageHead, tabs, stat, empty, noteBox, kv, storageBar } from './ui.js';
 
 let tab = 'design';
@@ -519,6 +520,16 @@ function syncView() {
       <button class="btn btn-sm" data-act="db-info">${icon('search', 15)} 睇後端有咩資料</button>
       <button class="btn btn-sm" data-act="migrate-check">${icon('shield', 15)} 搬遷檢查</button>
     </div>
+    ${(() => {
+      const bk = dbSizeBreakdown(load());
+      const mb = bk.total / 1048576;
+      const cls = mb > 6 ? 'b-danger' : (mb > 3 ? 'b-warn' : 'b-ok');
+      return `<div class="row gap-8 mt-12 wrap" style="align-items:center">
+      <span class="badge ${cls}" title="資料庫 JSON 總大小（後端 saveDb 上限 9MB）">${icon('chart', 12)} 體積 ${fmtBytes(bk.total)}${mb > 3 ? '（' + Math.round(mb) + ' MB，' + (mb > 6 ? '危險' : '偏大') + '）' : ''}</span>
+      <button class="btn btn-xs btn-sm" data-act="size-check">${icon('chart', 13)} 體積檢查</button>
+      ${bk.photoBytes > 0 ? `<button class="btn btn-xs" data-act="size-slim">${icon('image', 13)} 相片瘦身（${fmtBytes(bk.photoBytes)}）</button>` : ''}
+    </div>`;
+    })()}
     <div class="hint mt-8">「由後端還原」會<b>用後端嘅資料覆蓋呢部機</b>（換咗新手機／清咗 cache 就用呢個）。</div>
   </div></div>` : `
   <div class="note-box danger mb-16">${icon('alert', 15)}<div>
@@ -782,6 +793,31 @@ export function buildPayload({ sample = false } = {}) {
   return payload;
 }
 
+/* ---------- 體積檢查（v2.3.0）----------
+   「資料庫」分頁存係分段 JSON；成團人用耐咗，最會撐大嘅係
+   申報相片 dataURL、稽核紀錄。呢度逐分頁數（同後端 dbInfo 嘅演算法一致），
+   有數字先可以管理。 */
+function dbSizeBreakdown(db) {
+  const parts = Object.keys(db || {})
+    .filter(k => k !== 'meta' && k !== 'sync' && k !== 'backend')
+    .map(k => {
+      let bytes = 0;
+      try { bytes = JSON.stringify(db[k] ?? null).length; } catch { /* ignore */ }
+      return { key: k, bytes };
+    })
+    .filter(x => x.bytes > 0)
+    .sort((a, b) => b.bytes - a.bytes);
+  let photoBytes = 0, photoClaims = 0;
+  (db.claims || []).forEach(c => (c.photos || []).forEach(ph => {
+    if (ph?.dataUrl) { photoBytes += String(ph.dataUrl).length; photoClaims++; }
+  }));
+  let total = 0;
+  try { total = JSON.stringify(db).length; } catch { /* ignore */ }
+  return { parts: parts.slice(0, 12), photoBytes, photoClaims, total };
+}
+
+const LABEL_K = { members: '團員', transactions: '帳目', claims: '收支申報（連相片）', fees: '團費', budgets: '預算', notices: '通告', events: '行事曆', quizzes: '試卷', meetings: '會議', invItems: '物資', invLoans: '借用', invAudits: '盤點', constitution: '團章', auditLog: '稽核紀錄', reference: '舊帳參考', accountApps: '開戶申請' };
+
 /* 有冇同源代理可以用（同 remote.js 一樣嘅判斷：http/https 先有 /api/proxy） */
 function canUseProxy() {
   try { return typeof location !== 'undefined' && /^https?:$/.test(location.protocol); }
@@ -875,6 +911,41 @@ export async function pushToMaster({ silent = false } = {}) {
     if (!silent) toast(uncertain ? '已送出（讀唔到回應，可能已寫入總表；睇同步紀錄）' : '同步失敗：' + e.message, uncertain ? 'warn' : 'err');
     return { ok: false, pending: uncertain, msg: e.message };
   }
+}
+
+/** 相片瘦身：把申報入面嘅相片 dataURL 換走（留名留連結位），
+    db JSON 即刻細幾 MB。資料取捨（對話框會講清楚）：
+      · 有 Drive 連結（photosOnDrive / 經團員入口交嘅）：完全冇損失
+      · 淨 dataURL 嘅舊相：會被清走 —— 建議先匯出 JSON 備份 */
+async function slimClaimPhotos(root) {
+  const db = load();
+  let n = 0, freed = 0, lost = 0;
+  (db.claims || []).forEach(c => (c.photos || []).forEach(ph => {
+    if (ph?.dataUrl) {
+      freed += String(ph.dataUrl).length;
+      if (!ph.link) lost++;
+      delete ph.dataUrl;
+      ph.stripped = true;
+      n++;
+    }
+  }));
+  if (!n) { toast('冇舊相片數據需要清理', 'info'); return; }
+  const okGo = await confirmDlg({
+    title: '相片瘦身', danger: lost > 0, okText: `清走 ${n} 張相片數據`,
+    message: `會把 <b>${n}</b> 張申報相片嘅圖片數據從資料庫移走（騰出 <b>${fmtBytes(freed)}</b>）。<br><br>
+      ${lost > 0
+        ? `⚠️ 當中 <b>${lost} 張冇 Drive 連結</b>（舊式本地存嘅）—— 清走後<b>張相會唔再睇得到</b>（申報紀錄本身仲在）。<br>建議先撳「匯出 JSON 備份」留底先做。`
+        : '全部都有 Drive 連結，完全冇損失。'}
+      <br><br>瘦身之後會自動儲存到後端。`
+  });
+  if (!okGo) return;
+  commit();
+  toast(`已瘦身：騰出 ${fmtBytes(freed)}，自動儲存中…`, 'ok');
+  try {
+    const remote = await import('../lib/remote.js');
+    if (remote.remoteConfigured?.()) await remote.flush();
+  } catch { /* 照樣交畀自動存 */ }
+  refresh();
 }
 
 /* ============================================================
@@ -1242,6 +1313,33 @@ export function mount(root, params) {
           actions: [{ label: '知道喇', class: 'btn-primary', value: true }]
         });
       }
+      /* ---- 體積檢查（v2.3.0）：逐分頁睇邊個食緊嘢 ---- */
+      if (act === 'size-check') {
+        const bk = dbSizeBreakdown(load());
+        const totalMB = (bk.total / 1048576).toFixed(2);
+        const level = bk.total > 6291456 ? 'err' : (bk.total > 3145728 ? 'warn' : 'ok');
+        await modal({
+          title: `資料庫體積：${fmtBytes(bk.total)}（${totalMB} MB）`,
+          sub: '後端「資料庫」分頁上限 9MB —— 呢度逐分頁睇邊個食緊位',
+          body: `
+            ${bk.total > 6291456 ? `<div class="note-box err mb-12">${icon('alert', 15)}<div><b>已接近 9MB 上限</b> —— 後端好快會拒收，即刻做「相片瘦身」。</div></div>`
+            : bk.total > 3145728 ? `<div class="note-box warn mb-12">${icon('alert', 15)}<div>體積偏大（多數係申報相片）。建議做「相片瘦身」。</div></div>`
+            : `<div class="note-box ok mb-12">${icon('check', 15)}<div>體積健康。成團人用都唔會咁快爆。</div></div>`}
+            <table class="tbl sm"><thead><tr><th>分頁</th><th class="r">大小</th><th class="r">佔比</th></tr></thead>
+            <tbody>${bk.parts.map(x => `<tr>
+              <td>${esc(LABEL_K[x.key] || x.key)}${x.key === 'claims' && bk.photoBytes ? ` <span class="xs faint">（相片 ${fmtBytes(bk.photoBytes)}）</span>` : ''}</td>
+              <td class="r mono">${fmtBytes(x.bytes)}</td>
+              <td class="r mono">${Math.round(x.bytes / Math.max(1, bk.total) * 100)}%</td>
+            </tr>`).join('')}</tbody></table>
+            <p class="sm muted mt-12">以後<b>新申報嘅相會自動上 Drive</b>（db 只留連結）；舊嘅 dataURL 相可以用「相片瘦身」一次過清走。</p>`,
+          actions: [
+            ...(bk.photoBytes > 0 ? [{ label: `相片瘦身（${fmtBytes(bk.photoBytes)}）`, class: 'btn-primary', value: 'slim' }] : []),
+            { label: '知道喇', class: 'btn', value: null }
+          ]
+        }).then(r => { if (r === 'slim') slimClaimPhotos(root); });
+      }
+      if (act === 'size-slim') slimClaimPhotos(root);
+
       /* ---- 搬遷檢查：確認後端真係有齊嘢，先至夠膽清走前端／靜態資料 ----
          呢個係「搬屋前數吓箱」嘅工具。0082 原本啲資料係靜態檔（data/units/0082/*.json）
          ＋ 瀏覽器 localStorage，要搬入後端。清嘢之前必須逐項對數，

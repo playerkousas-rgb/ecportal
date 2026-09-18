@@ -2191,12 +2191,33 @@ export async function claimForm(preset = null) {
     onMount: el => bindPhotoPicker(el, 'c-photos', state, { max: 6 })
   });
   if (!r) return;
+  /* 相片唔好入 db JSON（v2.3.0 體積治理）：第一時間經後端上 Drive，
+     db 入面淨係留連結。以前 dataURL（每張可達 300KB+）會將「資料庫」
+     分頁撐爆 9MB，成個同步寫唔入。
+     上載唔到（離線／未接後端）→ 照舊本地存（唔會蝕資料），
+     遲啲喺「總表同步 → 體積檢查」可以再瘦身。 */
+  let photos = r.photos || [];
+  let photosOnDrive = false;
+  const cid = uid('c');
+  if (photos.length) {
+    try {
+      const remote = await import('../lib/remote.js');
+      if (remote.remoteConfigured?.()) {
+        const up = await remote.uploadPhotos(photos, { id: cid });
+        if (up?.ok) {
+          photos = photos.map((p, i) => ({ name: p.name || '', type: p.type || 'image/jpeg', link: (up.links || [])[i] || '' }));
+          photosOnDrive = true;
+        }
+      }
+    } catch { /* 本地存做後備 */ }
+  }
   add('claims', {
-    id: uid('c'), ...r,
+    id: cid, ...r, photos,
+    photosOnDrive,
     byName: r.memberId ? memberName(r.memberId) : (current()?.name || ''),
     status: 'pending', requestedBy: current()?.username || 'super', requestedAt: nowStamp()
   });
-  toast(`已提交申報${state.photos.length ? `（連 ${state.photos.length} 張單據）` : ''}，等批核`, 'ok');
+  toast(`已提交申報${photos.length ? `（連 ${photos.length} 張單據${photosOnDrive ? '，已存 Drive' : '，暫存本機'}）` : ''}，等批核`, 'ok');
   claimFilter = 'all';
   refresh();
 }

@@ -3,6 +3,11 @@
  *  82venture · 總表同步與多旅團後端 Apps Script（Code.gs）
  *  版本：v2.2.0
  *
+ *  ★ v2.3.0 新增（2026-09-18 同一晚，體積治理）：
+ *    ① uploadPhotos —— 相片直接上 Drive（回連結），唔使再入 app 資料庫 JSON
+ *       （以前 APP 內申報嘅相 dataURL 會將「資料庫」分頁撐到爆 9MB）
+ *    ② dbInfo 附帶逐分頁體積（sizes）—— app 可以畫「體積檢查」
+ *    ③ saveDb 刪舊段改為一次過 deleteRows（以前逐行刪，大資料會燒晒 GAS 配額）
  *  ★ v2.2.0 新增（2026-09-18 團長事故修正）：
  *    ① saveDb 樂觀鎖（baseVersion）—— 舊瀏覽器／離線耐咗嘅裝置，唔可以再
  *       用過時資料「盲蓋」後端（之前試過一登入就把另一部機同步嘅資料清空）。
@@ -209,7 +214,8 @@ function doPost(e) {
       if (body.action === 'dbInfo') {
         var nfo = dbInfo(textOf(body.unit));
         return json({ ok: nfo.success === true, success: nfo.success === true, found: !!nfo.found,
-          at: nfo.at || '', version: nfo.version || '', bytes: nfo.bytes || 0, counts: nfo.counts || null, error: nfo.error || '' });
+          at: nfo.at || '', version: nfo.version || '', bytes: nfo.bytes || 0,
+          sizes: nfo.sizes || null, photoBytes: nfo.photoBytes || 0, counts: nfo.counts || null, error: nfo.error || '' });
       }
       var ld = loadDb(textOf(body.unit));
       return json({ ok: ld.success === true, success: ld.success === true, found: !!ld.found,
@@ -269,6 +275,12 @@ function doPost(e) {
       var saved = appendClaim(body);
       return json({ ok: true, msg: '已記錄，等批核', photos: saved });
     }
+    /* ---- 相片上 Drive（v2.3.0；免 API Key，同 claim 同一信任級別）----
+       APP 內申報用：只存檔回連結，唔會寫任何報表行（報表行由 syncAll 負責）。 */
+    if (body.action === 'uploadPhotos') {
+      var links = savePhotos((body.payload && body.payload.photos) || [], textOf(body.unit), textOf(body.payload && body.payload.id) || 'x');
+      return json({ ok: true, links: links, saved: links.length, asked: (body.payload && body.payload.photos || []).length });
+    }
     if (body.action === 'loan') {
       var photos = appendLoan(body);
       return json({ ok: true, msg: '已記錄借用申請，等批核', photos: photos });
@@ -304,7 +316,7 @@ function doPost(e) {
       var c2 = syncAll(body);
       return json({ ok: true, msg: '已寫入總表（無 action，當 sync）', counts: c2, unit: body.unit });
     }
-    return json({ ok: false, error: '未知 action：' + body.action, got: Object.keys(body || {}), hint: '支援 action: ping / sync / status / saveDb / loadDb / dbInfo / claim / noticeSignup / loan / save / saveOtherBadge / reviewRequest / reviewLogRequest / addRequest / myRequests' });
+    return json({ ok: false, error: '未知 action：' + body.action, got: Object.keys(body || {}), hint: '支援 action: ping / sync / status / saveDb / loadDb / dbInfo / claim / noticeSignup / loan / uploadPhotos / save / saveOtherBadge / reviewRequest / reviewLogRequest / addRequest / myRequests' });
   } catch (err) {
     return json({ ok: false, error: String(err) });
   }
@@ -333,7 +345,8 @@ function doGet(e) {
     if (action === 'dbInfo') {
       var gi = dbInfo(unitParam);
       return json({ ok: gi.success === true, success: gi.success === true, found: !!gi.found,
-        at: gi.at || '', version: gi.version || '', bytes: gi.bytes || 0, counts: gi.counts || null, error: gi.error || '' });
+        at: gi.at || '', version: gi.version || '', bytes: gi.bytes || 0,
+        sizes: gi.sizes || null, photoBytes: gi.photoBytes || 0, counts: gi.counts || null, error: gi.error || '' });
     }
     var gd = loadDb(unitParam);
     return json({ ok: gd.success === true, success: gd.success === true, found: !!gd.found,
@@ -405,10 +418,17 @@ function saveDb(body) {
       error: '後端已有較新版本（另一部機剛剛同步過）。唔敢用舊資料蓋上去 —— app 會自動拉後端合併後重存。' };
   }
 
-  /* 由下而上刪走呢個旅團嘅舊段（由下而上先唔會搞亂行號） */
-  for (var i = rows.length - 1; i >= 1; i--) {
-    if (textOf(rows[i][0]) === unit) sh.deleteRow(i + 1);
+  /* v2.3.0：舊段成梳一次過刪（deleteRows）—— 以前逐行 deleteRow，
+     200 段資料 = 200 次調用（每次成頁 shift），GAS 配額同時間都燒好快。 */
+  var runs = [];
+  for (var i = 1; i < rows.length; i++) {
+    if (textOf(rows[i][0]) !== unit) continue;
+    var rowNo = i + 1;
+    if (runs.length && runs[runs.length - 1][0] + runs[runs.length - 1][1] === rowNo) runs[runs.length - 1][1]++;
+    else runs.push([rowNo, 1]);
   }
+  /* 由最底嗰梳刪起 —— 刪上面會令下面行號走位 */
+  for (var rd = runs.length - 1; rd >= 0; rd--) sh.deleteRows(runs[rd][0], runs[rd][1]);
 
   var now = new Date();
   /* v2.2.0：版本由**伺服器**派（ISO 時間＋隨機尾數）。
@@ -452,13 +472,28 @@ function loadDb(unit) {
   }
 }
 
-/** 只睇 meta：後端有冇資料、幾時更新（唔會傳成份資料庫落嚟） */
+/** 只睇 meta：後端有冇資料、幾時更新（唔會傳成份資料庫落嚟）。
+ *  v2.3.0：附帶逐分頁體積（sizes，只計 JSON 字元長度）同相片 bytes ——
+ *  app 用嚟畫「體積檢查」，等成團人用嗰陣知道邊個分頁食緊嘢。 */
 function dbInfo(unit) {
   var r = loadDb(unit);
   if (!r.success) return { success: false, error: r.error };
   var db = r.db || {};
+  var sizes = {}, photoBytes = 0;
+  if (r.found) {
+    var keys = Object.keys(db).sort(function (a, b) {
+      return JSON.stringify(db[b] || null).length - JSON.stringify(db[a] || null).length;
+    });
+    keys.slice(0, 14).forEach(function (k) { sizes[k] = JSON.stringify(db[k] || null).length; });
+    (db.claims || []).forEach(function (c) {
+      (c.photos || []).forEach(function (ph) {
+        if (ph && ph.dataUrl) photoBytes += String(ph.dataUrl).length;
+      });
+    });
+  }
   return {
     success: true, found: !!r.found, at: r.at || '', version: r.version || '', bytes: r.bytes || 0,
+    sizes: sizes, photoBytes: photoBytes,
     counts: r.found ? {
       members: (db.members || []).length,
       transactions: (db.transactions || []).length,
