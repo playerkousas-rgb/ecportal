@@ -8,7 +8,7 @@ import {
 } from './lib/store.js';
 import {
   loadRegistry, unitList, unitEntry, defaultUnitCode, registryReachable,
-  serverUnitsStatus, bakedUnitsStatus, fetchRegistryDiag, registryStale
+  serverUnitsStatus, bakedUnitsStatus, fileUnitsStatus, fetchRegistryDiag, registryStale
 } from './lib/units.js';
 import {
   adminInbox, validateApplication, submitApplication, adminChecklist,
@@ -246,6 +246,15 @@ function serverRegistryLine() {
   return `${icon('alert', 13)} 讀唔到伺服器登記清單（<code>${esc(s.error || '網絡錯誤')}</code>）`;
 }
 
+/** 旅團嚟自邊條路？（檔案／Vercel 可以並存，合併顯示） */
+function unitSourceTags(x) {
+  const tags = [];
+  if (x.local) tags.push('本地旅團');
+  if (x.fromFile) tags.push('檔案');
+  if (!x.local && (x.fromApi || x.server)) tags.push('Vercel 登記');
+  return tags.length ? ' · ' + tags.join(' · ') : '';
+}
+
 function renderUnitGate() {
   document.body.classList.add('login-body');
   const units = unitList();
@@ -301,7 +310,7 @@ function renderUnitGate() {
             <span class="code">${esc(x.code)}</span>
             <span class="grow">
               <span class="semibold" style="display:block">${esc(x.name || '')}</span>
-              <span class="xs faint">${esc(x.nameEn || x.section || '')}${x.local ? ' · 本地旅團' : ((x.fromApi || x.server) ? ' · Vercel 登記' : '')}</span>
+              <span class="xs faint">${esc(x.nameEn || x.section || '')}${unitSourceTags(x)}</span>
               ${(x.fromApi || x.server) && x.backendReady === false
                 ? `<span class="xs" style="display:block;color:var(--warn,#B8892B)">${'⚠'} 後端未設定／URL 未通過驗證 —— 要加 <code>TROOP_${esc(x.code)}_BACKEND</code>（https://script.google.com/macros/s/…/exec）</span>`
                 : ''}
@@ -408,8 +417,14 @@ function gotoUnit(code, { remember = true } = {}) {
 async function openRegistryDiag() {
   const local = serverUnitsStatus();
   const baked = bakedUnitsStatus();
+  const file = fileUnitsStatus();
   const d = await fetchRegistryDiag();
   const rows = [];
+  rows.push(['檔案名單 <code>data/units.json</code>', !file.at
+    ? '（未檢查）'
+    : (file.ok
+      ? `<span class="badge b-ok">OK</span>&nbsp; ${file.count} 個旅團`
+      : `<span class="badge b-warn">失敗</span> <code>${esc(file.error || '')}</code>`)]);
   rows.push(['瀏覽器讀 <code>/api/units</code>', local.ok
     ? `<span class="badge b-ok">OK</span>&nbsp; ${local.count} 個旅團`
     : `<span class="badge b-warn">失敗</span> <code>${esc(local.error || '')}</code>`]);
@@ -1126,7 +1141,7 @@ async function unitPicker() {
       ${units.map(x => `<button class="unit-card" data-unit="${esc(x.code)}" ${x.code === cur ? 'disabled' : ''}>
         <span class="code">${esc(x.code)}</span>
         <span class="grow"><span class="semibold" style="display:block">${esc(x.name || '')}</span>
-          <span class="xs faint">${esc(x.nameEn || '')} ${x.local ? '· 本地旅團' : ((x.fromApi || x.server) ? '· Vercel 登記' : '')}</span></span>
+          <span class="xs faint">${esc(x.nameEn || '')}${unitSourceTags(x)}</span></span>
         ${x.code === cur ? '<span class="badge b-brand">目前</span>' : icon('chevronR', 16)}
       </button>`).join('')}
     </div>

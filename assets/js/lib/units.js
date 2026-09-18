@@ -70,6 +70,11 @@ export function serverUnitsStatus() { return { ...serverStatus }; }
 let bakedStatus = { ok: false, count: 0, generatedAt: '', vercelEnv: '', at: '' };
 export function bakedUnitsStatus() { return { ...bakedStatus }; }
 
+/* 檔案名單（data/units.json）讀成點？（2026-09-18 起係主流程，
+   閘面同診斷要分得清「邊條路」俾嘅旅團。） */
+let fileStatus = { ok: false, count: 0, error: '', at: '' };
+export function fileUnitsStatus() { return { ...fileStatus }; }
+
 const API_UNITS_URL = 'api/units';
 const API_DIAG_URL = 'api/units?diag=1';
 
@@ -166,9 +171,20 @@ export async function loadRegistry(force = false) {
   let fileFailed = false;
   try {
     const r = await fetch(REG_URL + '?_=' + Date.now(), { cache: 'no-store' });
-    if (r.ok) { fromFile = await r.json(); regReachable = true; }
-    else fileFailed = true;
-  } catch (e) { fileFailed = true; /* 可能係 file:// 或者未部署 */ }
+    if (r.ok) {
+      fromFile = await r.json();
+      regReachable = true;
+      const n = (fromFile && fromFile.units && typeof fromFile.units === 'object')
+        ? Object.keys(fromFile.units).length : 0;
+      fileStatus = { ok: true, count: n, error: '', at: new Date().toISOString() };
+    } else {
+      fileFailed = true;
+      fileStatus = { ok: false, count: 0, error: `HTTP ${r.status}`, at: new Date().toISOString() };
+    }
+  } catch (e) {
+    fileFailed = true; /* 可能係 file:// 或者未部署 */
+    fileStatus = { ok: false, count: 0, error: e?.message || String(e), at: new Date().toISOString() };
+  }
 
   /* 伺服器 Registry：Vercel 環境變數定義嘅旅團（冇 /api 就自動略過） */
   const fromApi = await fetchServerUnits();
@@ -177,7 +193,11 @@ export async function loadRegistry(force = false) {
   /* 今次新讀到嘅（未寫入住 —— 要經過下面嘅「讀唔齊」檢查先作準） */
   let fresh = null;
   if (fromFile && fromFile.units) {
-    fresh = { ...fromFile, units: { ...fromFile.units } };
+    fresh = { ...fromFile, units: {} };
+    Object.entries(fromFile.units).forEach(([code, u]) => {
+      /* 記住呢個旅團嚟自檔案（閘面會標「檔案」，同 Vercel 路分開睇） */
+      fresh.units[code] = { ...(u || {}), fromFile: true };
+    });
     Object.entries(fromBaked).forEach(([code, u]) => {
       fresh.units[code] = { ...(fresh.units[code] || {}), ...u, baked: true, server: true };
     });

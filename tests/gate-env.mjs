@@ -651,6 +651,58 @@ section('檔案名單（淨靠 Git JSON 都入到閘）');
   globalThis.fetch = memFetch12;
 }
 
+/* ============================================================
+   ⑬ 兩條路並行：閘面分得清邊個旅團嚟自邊條路
+   ------------------------------------------------------------
+   檔案（0082）＋ 即時 API（0033 fixture）同時跑 —— 閘面 subline
+   同診斷 modal 要睇得出邊個嚟自邊條路（唔可以撈埋一齊）。
+   ============================================================ */
+section('兩條路並行：閘面分得清邊個旅團嚟自邊條路');
+{
+  const memFetch13 = globalThis.fetch;
+  const API_0033 = { units: { '0033': { code: '0033', name: '第三十三旅深資童軍團' } }, count: 1 };
+  globalThis.fetch = async (url) => {
+    const clean = String(url).split('?')[0].replace(/^\.?\//, '');
+    if (/^api\/units/.test(clean)) {
+      return { ok: true, status: 200, json: async () => API_0033, text: async () => JSON.stringify(API_0033) };
+    }
+    if (clean === 'data/units.generated.json') {
+      return { ok: false, status: 404, json: async () => { throw new Error('404'); }, text: async () => '' };
+    }
+    return memFetch13(url);   // data/units.json 讀 repo 真檔（0082）
+  };
+  const units = await import('../assets/js/lib/units.js?file13=1');
+  await units.loadRegistry(true);
+  ok('檔案狀態記得住（0082）', units.fileUnitsStatus().ok === true && units.fileUnitsStatus().count === 1,
+    JSON.stringify(units.fileUnitsStatus()));
+  ok('即時 API 狀態記得住（0033）', units.serverUnitsStatus().ok === true && units.serverUnitsStatus().count === 1);
+  ok('0082 打住檔案旗（冇 Vercel 旗）',
+    units.unitEntry('0082')?.fromFile === true && !units.unitEntry('0082')?.fromApi && !units.unitEntry('0082')?.server);
+  ok('0033 打住 Vercel 旗（冇檔案旗）',
+    units.unitEntry('0033')?.fromApi === true && !units.unitEntry('0033')?.fromFile);
+
+  /* 閘面：subline 標籤分得清 */
+  const { window } = makeBrowser('http://localhost:8080/');
+  await import('../assets/js/main.js?file13=1');
+  await wait(600);
+  const doc = window.document;
+  doc.querySelector('[data-act="reload"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await wait(600);
+  const sub = (code) => doc.querySelector(`[data-pick="${code}"] .xs.faint`)?.textContent || '';
+  ok('★ 0082 標「檔案」唔標 Vercel', /檔案/.test(sub('0082')) && !/Vercel/.test(sub('0082')), sub('0082'));
+  ok('★ 0033 標「Vercel 登記」唔標檔案', /Vercel 登記/.test(sub('0033')) && !/檔案/.test(sub('0033')), sub('0033'));
+
+  /* 診斷 modal：三行對照表 */
+  const shared = await import('../assets/js/lib/units.js');
+  ok('閘面用緊嘅 shared 狀態：檔案 OK', shared.fileUnitsStatus().ok === true);
+  doc.querySelector('[data-act="diag"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await wait(400);
+  const modalText = doc.querySelector('.overlay .modal')?.textContent.replace(/\s+/g, ' ') || '';
+  ok('★ 診斷有「檔案名單」行', /檔案名單/.test(modalText), modalText.slice(0, 100));
+  ok('★ 診斷有齊三條路對照', /檔案名單/.test(modalText) && /瀏覽器讀/.test(modalText) && /部署時名單/.test(modalText));
+  globalThis.fetch = memFetch13;
+}
+
 if (errors.length) {
   console.log(`\n捕捉到 ${errors.length} 個 console.error：`);
   errors.slice(0, 6).forEach(e => console.log('  • ' + e.slice(0, 200)));
