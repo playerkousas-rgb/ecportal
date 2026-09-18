@@ -129,8 +129,10 @@ section('首頁旅團閘（Vercel 環境變數登記）');
   ok('★ 環境變數登記嘅 0081 出現在清單', !!doc.querySelector('[data-pick="0081"]'),
     [...doc.querySelectorAll('[data-pick]')].map(b => b.dataset.pick).join(','));
   ok('旅團名由 TROOP_0081_NAME 讀到', /第八十一旅深資童軍團/.test(text()));
+  ok('檔案登記嘅 0082 同場出現', !!doc.querySelector('[data-pick="0082"]'));
   ok('標示「Vercel 登記」', /Vercel 登記/.test(text()));
-  ok('閘面顯示伺服器登記狀態（1 個旅團）', /伺服器登記（Vercel 環境變數）：/.test(text()) && /1/.test(text()));
+  ok('閘面顯示伺服器登記狀態（0081 環境變數＋0082 檔案＝2 個旅團）',
+    /伺服器登記（Vercel 環境變數）：/.test(text()) && /2 個旅團/.test(text()), text().slice(0, 120));
   ok('有「重新載入清單」同「診斷伺服器登記」入口',
     !!doc.querySelector('[data-act="reload"]') && !!doc.querySelector('[data-act="diag"]'));
   ok('清單冇外洩 API Key', !text().includes('troop_81_secret_should_never_reach_browser'));
@@ -385,7 +387,10 @@ section('部署環境對唔上（變數只勾 Production）');
 
   const res = callUnitsApi('https://ecportal-git-abc123.vercel.app/api/units?diag=1',
     { host: 'ecportal-git-abc123.vercel.app' });
-  ok('★ Preview 環境讀唔到 Production 變數（0 個旅團）', res.body.count === 0, String(res.body.count));
+  ok('★ Preview 環境認唔到任何 TROOP_* 變數', res.body.diag.recognizedNames.length === 0,
+    JSON.stringify(res.body.diag.recognizedNames));
+  ok('檔案登記嘅 0082 照出現（名單唔依賴環境變數）',
+    res.body.count === 1 && !!res.body.units['0082'], String(res.body.count));
   ok('★ 診斷講清楚而家嘅部署環境', res.body.diag.vercelEnv === 'preview', JSON.stringify(res.body.diag.vercelEnv));
   ok('★ 診斷帶埋用家開緊嘅 host（畀管理員核對係唔係正式網域）',
     res.body.diag.host === 'ecportal-git-abc123.vercel.app', res.body.diag.host);
@@ -395,8 +400,9 @@ section('部署環境對唔上（變數只勾 Production）');
   const { window } = makeBrowser('http://localhost:8080/');
   const units = await import('../assets/js/lib/units.js?preview=1');
   await units.loadRegistry(true);
-  ok('前端狀態列記得住「讀到，但 0 個旅團」', units.serverUnitsStatus().ok === true
-    && units.serverUnitsStatus().count === 0, JSON.stringify(units.serverUnitsStatus()));
+  ok('前端狀態列記得住「讀到，檔案嘅 0082」', units.serverUnitsStatus().ok === true
+    && units.serverUnitsStatus().count === 1, JSON.stringify(units.serverUnitsStatus()));
+  ok('前端照樣揀到 0082', units.unitList().some(u => String(u.code) === '0082'));
 
   process.env.VERCEL_ENV = savedVercel;
   delete process.env.VERCEL;
@@ -428,6 +434,11 @@ section('伺服器一時讀唔到：舊清單要頂住（唔可以洗走旅團�
     if (/^api\/units/.test(clean)) {
       return { ok: false, status: 404, json: async () => { throw new Error('404'); }, text: async () => '<h1>404</h1>' };
     }
+    if (clean === 'data/units.json') {
+      /* 呢個 case 要驗「檔讀到但係空」—— 唔讀真檔（真檔而家有 0082 名單） */
+      const body = { schema: 2, defaultUnit: '', units: {} };
+      return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
+    }
     return memFetch(url);
   };
   const units = await import('../assets/js/lib/units.js?stale1=1');
@@ -445,6 +456,11 @@ section('伺服器一時讀唔到：舊清單要頂住（唔可以洗走旅團�
     const clean = String(url).split('?')[0].replace(/^\.?\//, '');
     if (/^api\/units/.test(clean)) {
       const body = { units: {}, count: 0 };
+      return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
+    }
+    if (clean === 'data/units.json') {
+      /* 呢個 case 要驗「真係一個都未登記」—— 唔讀真檔（真檔而家有 0082 名單） */
+      const body = { schema: 2, defaultUnit: '', units: {} };
       return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
     }
     return memFetch(url);
@@ -593,6 +609,46 @@ section('部署名單（靜態檔行先，/api 404 都照有得揀）');
   const codes3 = units3.unitList().map(u => String(u.code));
   ok('★ 焗名單嘅 0082 同 /api 嘅 0081 兩邊都見到',
     codes3.includes('0082') && codes3.includes('0081'), codes3.join(','));
+}
+
+/* ============================================================
+   ⑫ 檔案名單（Git JSON：/api 同焗名單死晒都照有得揀）
+   ------------------------------------------------------------
+   2026-09-18 之後嘅主流程：名單返嚟 Git 靜態檔，唔再淨係靠
+   runtime /api。呢度讀 repo 真檔（唔係 fixture），驗端到端。
+   ============================================================ */
+section('檔案名單（淨靠 Git JSON 都入到閘）');
+{
+  const memFetch12 = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const clean = String(url).split('?')[0].replace(/^\.?\//, '');
+    if (/^api\/units/.test(clean) || clean === 'data/units.generated.json') {
+      return { ok: false, status: 404, json: async () => { throw new Error('404'); }, text: async () => '' };
+    }
+    return memFetch12(url);   // data/units.json 讀 repo 真檔
+  };
+  const units = await import('../assets/js/lib/units.js?filefirst=1');
+  await units.loadRegistry(true);
+  const e82 = units.unitEntry('0082') || {};
+  ok('★ /api 同焗名單死晒，檔案嘅 0082 照出現',
+    units.unitList().some(u => String(u.code) === '0082'),
+    units.unitList().map(u => u.code).join(',') || '（空）');
+  ok('檔案名正確', e82.name === '第八十二旅深資童軍團', e82.name);
+  ok('★ 檔案 entry 冇後端冇 Key（密鑰唔落 Git）',
+    e82.backend === undefined && e82.apiKey === undefined && !JSON.stringify(e82).includes('script.google'));
+  ok('未配後端 ＝ backendOf 係 null（唔會借用人哋張 Sheet）', units.backendOf('0082') === null);
+
+  /* 閘面端到端：撳「重新載入清單」→ 0082 照揀得（兩條伺服器路會如實顯示紅字） */
+  const { window } = makeBrowser('http://localhost:8080/');
+  await import('../assets/js/main.js?filefirst=1');
+  await wait(600);
+  const doc = window.document;
+  const text = () => (doc.getElementById('app')?.textContent || '').replace(/\s+/g, ' ');
+  doc.querySelector('[data-act="reload"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await wait(600);
+  ok('★ 閘面有 0082 揀（淨靠檔案）', !!doc.querySelector('[data-pick="0082"]'));
+  ok('兩條伺服器路死晒會如實顯示紅字（但唔阻揀旅團）', /讀唔到伺服器登記清單/.test(text()));
+  globalThis.fetch = memFetch12;
 }
 
 if (errors.length) {

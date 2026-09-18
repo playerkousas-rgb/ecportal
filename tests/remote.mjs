@@ -277,8 +277,10 @@ section('旅團隔離（新旅團唔會見到 82 旅嘅資料）');
   /* 以前 registry 有個頂層共用 backend，任何未登記旅團都會 fallback 去到，
      即係會見到 82 旅張 Sheet。而家已經拆走 —— 呢個測試守住佢唔好返嚟。 */
   ok('Registry 冇咗頂層共用 backend（舊漏洞已封）', !reg.backend?.gasUrl, JSON.stringify(reg.backend || null));
-  ok('Registry 冇任何旅團（0082 資料已全清）',
-    Object.keys(reg.units || {}).length === 0, Object.keys(reg.units || {}).join(','));
+  ok('★ 0082 得個公開名單（冇後端冇 Key，唔會洩漏唔會被借用）',
+    !!reg.units?.['0082'] && !reg.units['0082'].backend?.gasUrl && !reg.units['0082'].apiKey
+    && !/script\.google/.test(JSON.stringify(reg.units)),
+    Object.keys(reg.units || {}).join(',') || '（空）');
   ok('Registry 預設旅團係空（唔會靜靜雞當你係 82 旅）', !reg.defaultUnit, String(reg.defaultUnit));
 
   /* 扮一個「已登記但未交後端」嘅新旅團 */

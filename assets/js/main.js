@@ -349,8 +349,8 @@ function renderUnitGate() {
 
       <div class="gate-foot">
         揀完之後先會出現<b>登入畫面</b>（領袖 / 執行委員會）。<br>
-        管理員開新旅團：喺 Vercel 加 <code>TROOP_&lt;編號&gt;_BACKEND</code> / <code>_APIKEY</code> / <code>_NAME</code> 再 Redeploy
-        —— 唔使改 Git，亦唔使起資料夾（詳見 docs/ADD_NEW_UNIT.md）。
+        管理員開新旅團：喺 <code>data/units.json</code> 加 entry（唔使起資料夾）＋ Vercel 加
+        <code>TROOP_&lt;編號&gt;_BACKEND</code> / <code>_APIKEY</code>，再 Redeploy（詳見 docs/ADD_NEW_UNIT.md）。
       </div>
     </div>
   </div>`;

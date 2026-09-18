@@ -37,7 +37,7 @@ const FIXTURE_REG = {
 };
 globalThis.fetch = async (url) => {
   const clean = String(url).split('?')[0].replace(/^\.?\//, '');
-  /* Registry：唔好讀真 data/units.json（而家係空嘅）→ 用測試 registry */
+  /* Registry：唔好讀真 data/units.json（真檔有 0082 名單，會污染測試）→ 用測試 registry */
   if (/(^|\/)units\.json$/.test(clean) || /api\/units/.test(clean)) {
     return { ok: true, status: 200, json: async () => FIXTURE_REG, text: async () => JSON.stringify(FIXTURE_REG) };
   }

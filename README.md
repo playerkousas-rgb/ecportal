@@ -41,8 +41,8 @@ node dev-server.mjs             # 推薦（靜態＋/api，同 Vercel 行為一�
 揀完先會出現**登入畫面**。選擇會記住；登入頁有「更換旅團 / 示範」掣可以返去重揀。
 （直接連結 `/?u=<旅團編號>`、`/?mock=1` 照用，會跳過呢一步。）
 
-> 系統**冇預載任何旅團資料**。旅團要經 Vercel 環境變數
-> `TROOP_<編號>_BACKEND` / `_APIKEY` / `_NAME` 登記先會喺選擇閘出現，
+> 旅團名單喺 `data/units.json` 登記（公開資料，人人睇到）；各旅團嘅後端 `/exec` 同 API Key
+> 放 Vercel 環境變數 `TROOP_<編號>_BACKEND` / `_APIKEY`（唔入 Git），加完 Redeploy 即生效；
 > 詳見 [`docs/ADD_NEW_UNIT.md`](docs/ADD_NEW_UNIT.md)。每個旅團只讀寫自己嗰張 Google Sheet。
 
 ### 第一次登入

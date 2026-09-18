@@ -96,22 +96,33 @@ if (MODE === 'real') {
 
   section('私隱：唔會再見到第八十二旅嘅嘢');
   const blob = JSON.stringify(db);
-  ok('資料庫冇「第八十二旅」字樣', !/第八十二旅/.test(blob));
+  /* 0082 而家係註冊旅團（名單喺 data/units.json），db.unit 係自己個名好正常；
+     私隱要驗嘅係：冇 82 旅嘅團員／帳目／地址等真實資料。 */
+  const { unit: _ownUnit, ...restDb } = db;
+  ok('資料庫（自己個名除外）冇「第八十二旅」字樣', !/第八十二旅/.test(JSON.stringify(restDb)));
+  ok('db.unit 係返自己（註冊名由名單讀到）', db.unit?.code === '0082' && db.unit?.name === '第八十二旅深資童軍團',
+    JSON.stringify(db.unit));
   ok('資料庫冇 82 旅團址（康山）', !/康山/.test(blob));
   ok('資料庫冇 YMIS 編號', !/\b20\d{8}\b/.test(blob), (blob.match(/\b20\d{8}\b/) || [''])[0]);
   ok('資料庫冇電話號碼樣式嘅嘢', !/9123 4567/.test(blob));
   ok('冇殘留 0082 靜態資料夾', !fs.existsSync(path.join(ROOT, 'data', 'units', '0082')));
 
-  section('後端：交返畀伺服器端（環境變數）');
-  ok('Registry 唔再 hardcode 任何旅團', Object.keys(unitsLib.allUnits() || {}).length === 0,
-    JSON.stringify(Object.keys(unitsLib.allUnits() || {})));
-  ok('冇 fallback 落 0082', unitsLib.defaultUnitCode() === '', unitsLib.defaultUnitCode());
-  ok('未登記旅團 ＝ 冇後端（唔會借用人哋張 Sheet）', unitsLib.backendOf('0082') === null);
+  section('名單：返嚟 Git JSON（靜態，唔依賴 API）');
+  const fileReg = JSON.parse(fs.readFileSync(path.join(ROOT, 'data/units.json'), 'utf8'));
+  ok('名單檔有 0082（code＋中文名）',
+    fileReg.units?.['0082']?.code === '0082' && fileReg.units?.['0082']?.name === '第八十二旅深資童軍團');
+  ok('★ 名單檔唔會逼大家用某個旅團（defaultUnit 係空）', fileReg.defaultUnit === '');
+  ok('★ 名單檔冇後端冇 Key（密鑰唔落 Git）',
+    fileReg.units?.['0082']?.backend === undefined && fileReg.units?.['0082']?.apiKey === undefined
+    && !/script\.google/.test(JSON.stringify(fileReg.units)));
+  ok('閘面讀到檔案嘅 0082', unitsLib.unitList().some(u => String(u.code) === '0082'),
+    unitsLib.unitList().map(u => u.code).join(','));
+  ok('有登記就係預設（唔係空殼幽靈）', unitsLib.defaultUnitCode() === '0082', unitsLib.defaultUnitCode());
+  ok('未配後端 ＝ 冇後端（唔會借用人哋張 Sheet）', unitsLib.backendOf('0082') === null);
 
   /* 下面一大堆測試係驗「後端接通之後」嘅行為（總表同步、手機記帳、
-     通告報名、借用送出、進度…）。Registry 而家係空嘅（真實旅團改用
-     Vercel 環境變數登記），所以喺度自己裝一個**測試用**後端 —— 
-     驗功能，唔再借 82 旅嘅真實 /exec 做 fixture。 */
+     通告報名、借用送出、進度…）。檔案名單得個名（冇後端），
+     所以喺度自己裝一個**測試用**後端 —— 驗功能，唔借任何真實 /exec 做 fixture。 */
   const TEST_EXEC = 'https://script.google.com/macros/s/AKfycbTESTonlyTESTonlyTESTonlyTEST/exec';
   const tdb = store.load();
   tdb.backend = { gasUrl: TEST_EXEC, apiKey: '', name: '測試後端', shared: false, noticeSubmitUrl: TEST_EXEC };

@@ -32,9 +32,10 @@ section('焗名單：形狀同內容');
   process.env.TROOP_0091_NAME = '第九十一旅深資童軍團';
   const out = tmpFile();
   const r = bakeUnits({ outPath: out });
-  ok('bake 成功', r.ok === true && r.count === 1 && r.ids.includes('0091'), JSON.stringify(r));
+  ok('bake 成功（檔案 0082＋環境 0091 合併）',
+    r.ok === true && r.count === 2 && r.ids.includes('0091') && r.ids.includes('0082'), JSON.stringify(r));
   const j = JSON.parse(fs.readFileSync(out, 'utf8'));
-  ok('schema／count／generatedAt 齊全', j.schema === 2 && j.count === 1 && typeof j.generatedAt === 'string',
+  ok('schema／count／generatedAt 齊全', j.schema === 2 && j.count === 2 && typeof j.generatedAt === 'string',
     JSON.stringify({ schema: j.schema, count: j.count }));
   ok('旅團名由 TROOP_0091_NAME 讀到', j.units?.['0091']?.name === '第九十一旅深資童軍團');
   ok('backendReady 照計（白名單過咗）', j.units?.['0091']?.backendReady === true);
@@ -57,11 +58,12 @@ section('焗名單：形狀同內容');
 
 section('焗名單：點都唔會拖冧 build');
 {
-  /* 冇任何 TROOP_*（全新／Preview 部署常見）→ 空名單，有效 JSON */
+  /* 冇任何 TROOP_*（全新／Preview 部署常見）→ 剩檔案名單，有效 JSON */
   const out = tmpFile();
   const r = bakeUnits({ outPath: out });
   const j = JSON.parse(fs.readFileSync(out, 'utf8'));
-  ok('冇變數都照成功（空名單）', r.ok === true && j.count === 0 && typeof j.units === 'object');
+  ok('冇變數都照成功（剩檔案嘅 0082）',
+    r.ok === true && j.count === 1 && !!j.units['0082'] && typeof j.units === 'object');
 
   /* TROOPS_JSON 壞咗 → 照成功 */
   process.env.TROOPS_JSON = '唔係 JSON {{{';
