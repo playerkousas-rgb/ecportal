@@ -244,10 +244,11 @@ export async function remoteInfo() {
   return callBackend({ action: 'dbInfo' }, { timeoutMs: 20000 });
 }
 
-/** 測試連線 */
+/** 測試連線（同 remoteConfigured 一樣：有同源代理＋旅團編號就算接得通，
+    唔會強制要前端填 /exec —— 純環境變數開團嘅旅團根本唔會填呢格） */
 export async function testConnection() {
   const cfg = remoteCfg();
-  if (!cfg.url) return { ok: false, error: '未填 Apps Script 網址' };
+  if (!cfg.url && !cfg.viaProxy) return { ok: false, error: '未填 Apps Script 網址' };
   const r = await callBackend({ action: 'status' }, { timeoutMs: 20000 });
   return r;
 }

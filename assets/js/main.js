@@ -8,7 +8,7 @@ import {
 } from './lib/store.js';
 import {
   loadRegistry, unitList, unitEntry, defaultUnitCode, registryReachable,
-  serverUnitsStatus, fetchRegistryDiag
+  serverUnitsStatus, bakedUnitsStatus, fileUnitsStatus, fetchRegistryDiag, registryStale
 } from './lib/units.js';
 import {
   adminInbox, validateApplication, submitApplication, adminChecklist,
@@ -19,7 +19,7 @@ import {
   login, logout, current, currentRole, ROLES, displayName, displaySub,
   loginAsMock, accounts, isSuper, can
 } from './lib/auth.js';
-import { pendingMeetings, overdueFees, pendingClaims, pendingLoans, profile, notices } from './lib/model.js';
+import { pendingMeetings, overdueFees, pendingClaims, pendingLoans, profile, notices, onLegacyHost, canonicalUrl } from './lib/model.js';
 import { esc, icon, toast, modal, confirmDlg } from './lib/util.js';
 import { parse, go } from './lib/router.js';
 
@@ -64,6 +64,10 @@ let bootError = null;
    BOOT
    ============================================================ */
 async function boot() {
+  /* 舊系統退役截停（2026-09）：如果新 code 有朝一日喺 82venture.vercel.app 度跑
+     （例如舊 Vercel project 重建咗），即刻截住 —— 嗰個站冇後端，
+     喺嗰度開工只會整出更多混亂（揀唔到旅團、儲存唔到）。 */
+  if (onLegacyHost() && !legacyDismissed()) return renderMoved();
   app.innerHTML = loadingScreen();
   try {
     await loadRegistry();
@@ -229,11 +233,26 @@ function forgetChoice() { resetToGate(); }
 /** 伺服器端 Registry（Vercel 環境變數）而家點？ */
 function serverRegistryLine() {
   const s = serverUnitsStatus();
+  const b = bakedUnitsStatus();
   if (s.ok) {
     return `${icon('check', 13)} 伺服器登記（Vercel 環境變數）：<b>${s.count}</b> 個旅團`;
   }
+  /* 即時 API 讀唔到，但部署嗰陣焗好嘅名單有貨 —— 清單照用，唔好嚇親人 */
+  if (b.ok) {
+    return `${icon('check', 13)} 伺服器登記（部署名單）：<b>${b.count}</b> 個旅團` +
+      `<span class="xs faint">（即時狀態讀唔到：${esc(s.error || '網絡錯誤')}）</span>`;
+  }
   if (!s.at) return `${icon('clock', 13)} 伺服器登記：未檢查`;
   return `${icon('alert', 13)} 讀唔到伺服器登記清單（<code>${esc(s.error || '網絡錯誤')}</code>）`;
+}
+
+/** 旅團嚟自邊條路？（檔案／Vercel 可以並存，合併顯示） */
+function unitSourceTags(x) {
+  const tags = [];
+  if (x.local) tags.push('本地旅團');
+  if (x.fromFile) tags.push('檔案');
+  if (!x.local && (x.fromApi || x.server)) tags.push('Vercel 登記');
+  return tags.length ? ' · ' + tags.join(' · ') : '';
 }
 
 function renderUnitGate() {
@@ -241,12 +260,15 @@ function renderUnitGate() {
   const units = unitList();
   const serverUnits = units.filter(x => x.fromApi || x.server);
   const st = serverUnitsStatus();
+  const bakedGate = bakedUnitsStatus();
+  /* 即時 API 同部署名單兩邊都冇，先至算「讀唔到」 */
+  const serverFailed = st.at && !st.ok && !bakedGate.ok;
   /* 清單空咗，係「伺服器讀唔到」定「真係一個都未登記」？兩個講法完全唔同。 */
   const emptyBox = !units.length ? `
-    <div class="note-box ${st.at && !st.ok ? 'warn' : ''}">${icon(st.at && !st.ok ? 'alert' : 'info', 15)}
+    <div class="note-box ${serverFailed ? 'warn' : ''}">${icon(serverFailed ? 'alert' : 'info', 15)}
       <div>
-        <b>${st.at && !st.ok ? '讀唔到伺服器嘅旅團登記清單。' : '暫時未有旅團登記。'}</b>
-        ${st.at && !st.ok
+        <b>${serverFailed ? '讀唔到伺服器嘅旅團登記清單。' : '暫時未有旅團登記。'}</b>
+        ${serverFailed
           ? `（<code>${esc(st.error || '')}</code>）呢個通常係以下其中一樣：
              <ul style="margin:6px 0 0;padding-left:18px;line-height:1.8">
                <li>環境變數加咗但未 <b>Redeploy</b>（加／改完一定要重新部署先生效）</li>
@@ -288,7 +310,7 @@ function renderUnitGate() {
             <span class="code">${esc(x.code)}</span>
             <span class="grow">
               <span class="semibold" style="display:block">${esc(x.name || '')}</span>
-              <span class="xs faint">${esc(x.nameEn || x.section || '')}${x.local ? ' · 本地旅團' : ((x.fromApi || x.server) ? ' · Vercel 登記' : '')}</span>
+              <span class="xs faint">${esc(x.nameEn || x.section || '')}${unitSourceTags(x)}</span>
               ${(x.fromApi || x.server) && x.backendReady === false
                 ? `<span class="xs" style="display:block;color:var(--warn,#B8892B)">${'⚠'} 後端未設定／URL 未通過驗證 —— 要加 <code>TROOP_${esc(x.code)}_BACKEND</code>（https://script.google.com/macros/s/…/exec）</span>`
                 : ''}
@@ -336,8 +358,8 @@ function renderUnitGate() {
 
       <div class="gate-foot">
         揀完之後先會出現<b>登入畫面</b>（領袖 / 執行委員會）。<br>
-        管理員開新旅團：喺 Vercel 加 <code>TROOP_&lt;編號&gt;_BACKEND</code> / <code>_APIKEY</code> / <code>_NAME</code> 再 Redeploy
-        —— 唔使改 Git，亦唔使起資料夾（詳見 docs/ADD_NEW_UNIT.md）。
+        管理員開新旅團：喺 <code>data/units.json</code> 加 entry（唔使起資料夾）＋ Vercel 加
+        <code>TROOP_&lt;編號&gt;_BACKEND</code> / <code>_APIKEY</code>，再 Redeploy（詳見 docs/ADD_NEW_UNIT.md）。
       </div>
     </div>
   </div>`;
@@ -356,7 +378,10 @@ function renderUnitGate() {
     await loadRegistry(true);
     renderUnitGate();
     const s = serverUnitsStatus();
-    toast(s.ok ? `已重新載入：伺服器登記 ${s.count} 個旅團` : `仲係讀唔到伺服器清單：${s.error}`, s.ok ? 'ok' : 'err');
+    const b = bakedUnitsStatus();
+    toast(s.ok ? `已重新載入：伺服器登記 ${s.count} 個旅團`
+      : (b.ok ? `已重新載入：部署名單 ${b.count} 個旅團（即時 API：${s.error || '讀唔到'}）`
+        : `仲係讀唔到伺服器清單：${s.error}`), (s.ok || b.ok) ? 'ok' : 'err');
   });
   app.querySelector('[data-act="diag"]')?.addEventListener('click', openRegistryDiag);
   const goCode = () => {
@@ -391,11 +416,24 @@ function gotoUnit(code, { remember = true } = {}) {
    ============================================================ */
 async function openRegistryDiag() {
   const local = serverUnitsStatus();
+  const baked = bakedUnitsStatus();
+  const file = fileUnitsStatus();
   const d = await fetchRegistryDiag();
   const rows = [];
+  rows.push(['檔案名單 <code>data/units.json</code>', !file.at
+    ? '（未檢查）'
+    : (file.ok
+      ? `<span class="badge b-ok">OK</span>&nbsp; ${file.count} 個旅團`
+      : `<span class="badge b-warn">失敗</span> <code>${esc(file.error || '')}</code>`)]);
   rows.push(['瀏覽器讀 <code>/api/units</code>', local.ok
     ? `<span class="badge b-ok">OK</span>&nbsp; ${local.count} 個旅團`
     : `<span class="badge b-warn">失敗</span> <code>${esc(local.error || '')}</code>`]);
+  rows.push(['部署時名單（靜態）', !baked.at
+    ? '（未檢查）'
+    : (baked.ok
+      ? `<span class="badge b-ok">OK</span>&nbsp; ${baked.count} 個旅團` +
+        (baked.generatedAt ? ` · <span class="xs muted">${esc(baked.generatedAt)}${baked.vercelEnv ? `（${esc(baked.vercelEnv)}）` : ''}</span>` : '')
+      : `<span class="badge b-warn">冇</span> <span class="xs muted">呢個部署冇焗名單（舊部署／未經正常 build）</span>`)]);
   rows.push(['伺服器端回應', d.ok
     ? `<span class="badge b-ok">OK</span>`
     : `<span class="badge b-warn">有問題</span> <code>${esc(d.error || '')}</code>`]);
@@ -675,6 +713,40 @@ async function openApplication() {
 
 function loadingScreen() {
   return `<div style="display:grid;place-items:center;min-height:100vh;color:#9A868C;font-size:14px">載入中…</div>`;
+}
+
+function legacyDismissed() {
+  try { return sessionStorage.getItem('v82.legacy.ok') === '1'; } catch { return false; }
+}
+
+/* 舊站截停畫面：唔畀人喺個冇後端嘅空站度開工 */
+function renderMoved() {
+  document.body.classList.add('login-body');
+  app.innerHTML = `
+  <div class="gate-wrap">
+    <div class="gate-card">
+      <div class="gate-brand">
+        <div class="logo">82</div>
+        <div>
+          <div class="gate-title">執委管理系統已經搬遷</div>
+          <div class="gate-sub">呢個舊網址（82venture.vercel.app）已經退役</div>
+        </div>
+      </div>
+      <div class="note-box warn">${icon('alert', 15)}<div>
+        你而家開緊嘅係<b>舊系統</b>，上面嘅資料唔會再更新，儲存都唔會成功。
+        請轉去新系統，書籤／捷徑都請更新。
+      </div></div>
+      <div class="row gap-8 wrap mt-16">
+        <a class="btn btn-primary" href="${esc(canonicalUrl())}">${icon('chevronR', 15)} 去新系統</a>
+        <button class="btn" id="btnLegacyGo">我知，繼續用舊站</button>
+      </div>
+      <div class="gate-foot">唔肯定新網址？問你嘅領袖／執委攞最新連結。</div>
+    </div>
+  </div>`;
+  app.querySelector('#btnLegacyGo')?.addEventListener('click', () => {
+    try { sessionStorage.setItem('v82.legacy.ok', '1'); } catch { /* ignore */ }
+    location.reload();
+  });
 }
 
 function renderFatal(e) {
@@ -1069,7 +1141,7 @@ async function unitPicker() {
       ${units.map(x => `<button class="unit-card" data-unit="${esc(x.code)}" ${x.code === cur ? 'disabled' : ''}>
         <span class="code">${esc(x.code)}</span>
         <span class="grow"><span class="semibold" style="display:block">${esc(x.name || '')}</span>
-          <span class="xs faint">${esc(x.nameEn || '')} ${x.local ? '· 本地旅團' : ((x.fromApi || x.server) ? '· Vercel 登記' : '')}</span></span>
+          <span class="xs faint">${esc(x.nameEn || '')}${unitSourceTags(x)}</span></span>
         ${x.code === cur ? '<span class="badge b-brand">目前</span>' : icon('chevronR', 16)}
       </button>`).join('')}
     </div>

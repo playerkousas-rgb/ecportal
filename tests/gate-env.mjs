@@ -129,8 +129,10 @@ section('首頁旅團閘（Vercel 環境變數登記）');
   ok('★ 環境變數登記嘅 0081 出現在清單', !!doc.querySelector('[data-pick="0081"]'),
     [...doc.querySelectorAll('[data-pick]')].map(b => b.dataset.pick).join(','));
   ok('旅團名由 TROOP_0081_NAME 讀到', /第八十一旅深資童軍團/.test(text()));
+  ok('檔案登記嘅 0082 同場出現', !!doc.querySelector('[data-pick="0082"]'));
   ok('標示「Vercel 登記」', /Vercel 登記/.test(text()));
-  ok('閘面顯示伺服器登記狀態（1 個旅團）', /伺服器登記（Vercel 環境變數）：/.test(text()) && /1/.test(text()));
+  ok('閘面顯示伺服器登記狀態（0081 環境變數＋0082 檔案＝2 個旅團）',
+    /伺服器登記（Vercel 環境變數）：/.test(text()) && /2 個旅團/.test(text()), text().slice(0, 120));
   ok('有「重新載入清單」同「診斷伺服器登記」入口',
     !!doc.querySelector('[data-act="reload"]') && !!doc.querySelector('[data-act="diag"]'));
   ok('清單冇外洩 API Key', !text().includes('troop_81_secret_should_never_reach_browser'));
@@ -385,7 +387,10 @@ section('部署環境對唔上（變數只勾 Production）');
 
   const res = callUnitsApi('https://ecportal-git-abc123.vercel.app/api/units?diag=1',
     { host: 'ecportal-git-abc123.vercel.app' });
-  ok('★ Preview 環境讀唔到 Production 變數（0 個旅團）', res.body.count === 0, String(res.body.count));
+  ok('★ Preview 環境認唔到任何 TROOP_* 變數', res.body.diag.recognizedNames.length === 0,
+    JSON.stringify(res.body.diag.recognizedNames));
+  ok('檔案登記嘅 0082 照出現（名單唔依賴環境變數）',
+    res.body.count === 1 && !!res.body.units['0082'], String(res.body.count));
   ok('★ 診斷講清楚而家嘅部署環境', res.body.diag.vercelEnv === 'preview', JSON.stringify(res.body.diag.vercelEnv));
   ok('★ 診斷帶埋用家開緊嘅 host（畀管理員核對係唔係正式網域）',
     res.body.diag.host === 'ecportal-git-abc123.vercel.app', res.body.diag.host);
@@ -395,8 +400,9 @@ section('部署環境對唔上（變數只勾 Production）');
   const { window } = makeBrowser('http://localhost:8080/');
   const units = await import('../assets/js/lib/units.js?preview=1');
   await units.loadRegistry(true);
-  ok('前端狀態列記得住「讀到，但 0 個旅團」', units.serverUnitsStatus().ok === true
-    && units.serverUnitsStatus().count === 0, JSON.stringify(units.serverUnitsStatus()));
+  ok('前端狀態列記得住「讀到，檔案嘅 0082」', units.serverUnitsStatus().ok === true
+    && units.serverUnitsStatus().count === 1, JSON.stringify(units.serverUnitsStatus()));
+  ok('前端照樣揀到 0082', units.unitList().some(u => String(u.code) === '0082'));
 
   process.env.VERCEL_ENV = savedVercel;
   delete process.env.VERCEL;
@@ -404,6 +410,297 @@ section('部署環境對唔上（變數只勾 Production）');
   if (savedVercel === undefined) delete process.env.VERCEL_ENV;
   Object.assign(process.env, saved);
   ok('還原之後 0081 返嚟', !!getRegistry()['0081']);
+}
+
+/* ============================================================
+   ⑨ 伺服器一時讀唔到（例如部署緊／網絡 blip）：唔可以洗走記住咗嘅旅團
+   ------------------------------------------------------------
+   2026-09-17 0082 事件：data/units.json 本身係空但讀得到，
+   /api/units 一時 404 → 合併結果係空 → 記住咗嘅 0082 被洗走，
+   成個閘變空。而家：讀唔齊嗰陣用上次記住嘅頂住。
+   ============================================================ */
+section('伺服器一時讀唔到：舊清單要頂住（唔可以洗走旅團）');
+{
+  const { window } = makeBrowser('http://localhost:8080/', {
+    'venture82.units.cache.v2': JSON.stringify({ schema: 2, defaultUnit: '', units: {
+      '0082': { code: '0082', name: '第八十二旅深資童軍團', server: true, fromApi: true, backendReady: true }
+    } })
+  });
+  const memFetch = globalThis.fetch;
+
+  /* 情況一：靜態檔讀到但係空 ＋ /api/units 一時 404 */
+  globalThis.fetch = async (url) => {
+    const clean = String(url).split('?')[0].replace(/^\.?\//, '');
+    if (/^api\/units/.test(clean)) {
+      return { ok: false, status: 404, json: async () => { throw new Error('404'); }, text: async () => '<h1>404</h1>' };
+    }
+    if (clean === 'data/units.json') {
+      /* 呢個 case 要驗「檔讀到但係空」—— 唔讀真檔（真檔而家有 0082 名單） */
+      const body = { schema: 2, defaultUnit: '', units: {} };
+      return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
+    }
+    return memFetch(url);
+  };
+  const units = await import('../assets/js/lib/units.js?stale1=1');
+  await units.loadRegistry(true);
+  globalThis.fetch = memFetch;
+  ok('★ /api 404 都唔會洗走記住咗嘅 0082',
+    units.unitList().some(u => String(u.code) === '0082'),
+    units.unitList().map(u => u.code).join(',') || '（空）');
+  ok('會標示而家係舊清單', units.registryStale() === true);
+  ok('localStorage 嗰份好嘅唔會被空殼覆蓋',
+    (JSON.parse(window.localStorage.getItem('venture82.units.cache.v2') || '{}').units || {})['0082'] !== undefined);
+
+  /* 情況二：伺服器正常回覆「0 個旅團」→ 係真・冇登記，舊嘅要清走 */
+  globalThis.fetch = async (url) => {
+    const clean = String(url).split('?')[0].replace(/^\.?\//, '');
+    if (/^api\/units/.test(clean)) {
+      const body = { units: {}, count: 0 };
+      return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
+    }
+    if (clean === 'data/units.json') {
+      /* 呢個 case 要驗「真係一個都未登記」—— 唔讀真檔（真檔而家有 0082 名單） */
+      const body = { schema: 2, defaultUnit: '', units: {} };
+      return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
+    }
+    return memFetch(url);
+  };
+  const units2 = await import('../assets/js/lib/units.js?stale2=1');
+  await units2.loadRegistry(true);
+  globalThis.fetch = memFetch;
+  ok('伺服器正常回 0 個旅團 → 清單真係空（舊嘅唔會陰魂不散）',
+    units2.unitList().length === 0, units2.unitList().map(u => u.code).join(','));
+  ok('正常清空唔會標 stale', units2.registryStale() === false);
+
+  /* 情況三：檔案嗰邊有貨、/api 嗰邊 500 → 兩邊加埋，唔可以唔見咗一邊 */
+  window.localStorage.setItem('venture82.units.cache.v2', JSON.stringify({ schema: 2, defaultUnit: '', units: {
+    '0082': { code: '0082', name: '第八十二旅深資童軍團', server: true, fromApi: true, backendReady: true }
+  } }));
+  globalThis.fetch = async (url) => {
+    const clean = String(url).split('?')[0].replace(/^\.?\//, '');
+    if (/^api\/units/.test(clean)) {
+      return { ok: false, status: 500, json: async () => { throw new Error('500'); }, text: async () => 'error' };
+    }
+    if (clean === 'data/units.json') {
+      const body = { schema: 2, defaultUnit: '', units: { '0100': { code: '0100', name: '第一百旅' } } };
+      return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
+    }
+    return memFetch(url);
+  };
+  const units3 = await import('../assets/js/lib/units.js?stale3=1');
+  await units3.loadRegistry(true);
+  globalThis.fetch = memFetch;
+  const codes3 = units3.unitList().map(u => String(u.code)).sort();
+  ok('★ 檔案嘅 0100 照見到', codes3.includes('0100'), codes3.join(','));
+  ok('★ 記住咗嘅 0082 補得返', codes3.includes('0082'), codes3.join(','));
+  ok('合併咗舊貨會標 stale', units3.registryStale() === true);
+}
+
+/* ============================================================
+   ⑩ 舊系統退役截停（喺 82venture.vercel.app 開會見到搬遷提示）
+   ------------------------------------------------------------
+   舊站係冇後端嘅空站（/api 全部 404），喺嗰度開工只會
+   「揀唔到旅團、儲存唔到」。如果新 code 喺舊 host 度跑，
+   boot 第一時間就要截停，指去新系統。
+   ============================================================ */
+section('舊系統退役截停');
+{
+  const { window } = makeBrowser('https://82venture.vercel.app/');
+  await import('../assets/js/main.js?legacy1=1');
+  await wait(400);
+  const doc = window.document;
+  const text = () => (doc.getElementById('app')?.textContent || '').replace(/\s+/g, ' ');
+  ok('★ 舊站會截停並顯示搬遷提示', /已經搬遷/.test(text()), text().slice(0, 100));
+  ok('有去新系統嘅連結', !!doc.querySelector('a[href*="ecportal.vercel.app"]'));
+  ok('唔會出現旅團閘（唔畀人喺空站開工）', !/揀你嘅旅團/.test(text()));
+}
+{
+  /* 正常 host 唔受影響 */
+  const { window } = makeBrowser('http://localhost:8080/');
+  await import('../assets/js/main.js?legacy2=1');
+  await wait(600);
+  const text = () => (window.document.getElementById('app')?.textContent || '').replace(/\s+/g, ' ');
+  ok('正常網址唔會被截停（照見旅團閘）', /揀你嘅旅團/.test(text()), text().slice(0, 80));
+  ok('正常網址唔會彈搬遷提示', !/已經搬遷/.test(text()));
+}
+
+/* ============================================================
+   ⑪ 部署時焗好嘅名單（靜態 data/units.generated.json 行先）
+   ------------------------------------------------------------
+   2026-09-18 真實事件：有用戶 fetch('api/units') 一律 HTTP 404
+   （唔同機、唔同網絡、唔同 browser 都係），但網址列直接開就 200。
+   教每個用戶搞設定係冇意思嘅 —— 名單改為 build 嗰陣焗入靜態檔，
+   閘面攞靜態行先，/api 留做後備＋診斷。
+   ============================================================ */
+section('部署名單（靜態檔行先，/api 404 都照有得揀）');
+{
+  const BAKED_82 = { schema: 2, generatedAt: '2026-09-18T00:00:00.000Z', vercelEnv: 'production',
+    units: { '0082': { code: '0082', name: '第八十二旅深資童軍團', nameEn: '', short: '0082venture',
+      section: '深資童軍', region: '', sponsor: '', address: '', theme: null,
+      progressServerSide: false, noticeReady: true, server: true, backendReady: true } }, count: 1,
+    diagNames: { recognizedNames: ['TROOP_0082_BACKEND'], suspicious: [], withKey: ['0082'], trusted: ['0082'], withName: ['0082'] } };
+  const memFetch11 = globalThis.fetch;
+
+  /* 情況一：用戶嘅真實情況 —— 靜態焗名單有 0082，/api/units 404 */
+  globalThis.fetch = async (url) => {
+    const clean = String(url).split('?')[0].replace(/^\.?\//, '');
+    if (clean === 'data/units.generated.json') {
+      return { ok: true, status: 200, json: async () => BAKED_82, text: async () => JSON.stringify(BAKED_82) };
+    }
+    if (/^api\/units/.test(clean)) {
+      return { ok: false, status: 404, json: async () => { throw new Error('404'); }, text: async () => '' };
+    }
+    return memFetch11(url);
+  };
+  const units = await import('../assets/js/lib/units.js?bake1=1');
+  await units.loadRegistry(true);
+  ok('★ /api 404，但焗名單嘅 0082 照出現', units.unitList().some(u => String(u.code) === '0082'),
+    units.unitList().map(u => u.code).join(',') || '（空）');
+  ok('焗名單狀態記得住（1 個旅團）', units.bakedUnitsStatus().ok === true && units.bakedUnitsStatus().count === 1,
+    JSON.stringify(units.bakedUnitsStatus()));
+  ok('即時 API 狀態照樣誠實記錄失敗', units.serverUnitsStatus().ok === false);
+  ok('有第一手名單就唔標 stale', units.registryStale() === false);
+  ok('焗名單嘅旅團一樣標示 server（閘面會寫 Vercel 登記）',
+    units.unitEntry('0082')?.server === true);
+  ok('焗名單嘅旅團唔會被當成有資料夾（由空白開始）', units.dataPathOf('0082') === null);
+
+  /* 閘面：初次 render 用嘅係 shared cache（§1 留低嘅 0081）唔會 fetch ——
+     撳「重新載入清單」先會用而家嘅 fetch（焗名單 0082＋/api 404）重載，
+     呢個正正就係真實用戶撳嗰粒掣嘅流程 */
+  const { window } = makeBrowser('http://localhost:8080/');
+  await import('../assets/js/main.js?bake1=1');
+  await wait(600);
+  const doc = window.document;
+  const text = () => (doc.getElementById('app')?.textContent || '').replace(/\s+/g, ' ');
+  doc.querySelector('[data-act="reload"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await wait(600);
+  ok('★ 撳「重新載入清單」之後閘面有 0082 揀', !!doc.querySelector('[data-pick="0082"]'));
+  ok('閘面顯示「部署名單」而唔係紅色錯誤', /部署名單/.test(text()) && !/讀唔到伺服器登記清單/.test(text()),
+    text().slice(0, 120));
+  globalThis.fetch = memFetch11;
+
+  /* 情況二：舊部署（冇焗名單檔）＋ /api 正常 —— 行為同以前一模一樣 */
+  globalThis.fetch = async (url) => {
+    const clean = String(url).split('?')[0].replace(/^\.?\//, '');
+    if (clean === 'data/units.generated.json') {
+      return { ok: false, status: 404, json: async () => { throw new Error('404'); }, text: async () => '' };
+    }
+    return memFetch11(url);   // api/units 行真 handler（TROOP_0081_*），data/units.json 讀 repo 檔
+  };
+  const units2 = await import('../assets/js/lib/units.js?bake2=1');
+  await units2.loadRegistry(true);
+  ok('冇焗名單檔：/api 嘅 0081 照出現（向後兼容）',
+    units2.unitList().some(u => String(u.code) === '0081'),
+    units2.unitList().map(u => u.code).join(',') || '（空）');
+  ok('冇焗名單檔：焗狀態係「冇」而唔係錯', units2.bakedUnitsStatus().ok === false && units2.bakedUnitsStatus().at !== '');
+  globalThis.fetch = memFetch11;
+
+  /* 情況三：兩邊都有 —— 合併，唔會唔見咗一邊 */
+  globalThis.fetch = async (url) => {
+    const clean = String(url).split('?')[0].replace(/^\.?\//, '');
+    if (clean === 'data/units.generated.json') {
+      return { ok: true, status: 200, json: async () => BAKED_82, text: async () => JSON.stringify(BAKED_82) };
+    }
+    return memFetch11(url);
+  };
+  const units3 = await import('../assets/js/lib/units.js?bake3=1');
+  await units3.loadRegistry(true);
+  globalThis.fetch = memFetch11;
+  const codes3 = units3.unitList().map(u => String(u.code));
+  ok('★ 焗名單嘅 0082 同 /api 嘅 0081 兩邊都見到',
+    codes3.includes('0082') && codes3.includes('0081'), codes3.join(','));
+}
+
+/* ============================================================
+   ⑫ 檔案名單（Git JSON：/api 同焗名單死晒都照有得揀）
+   ------------------------------------------------------------
+   2026-09-18 之後嘅主流程：名單返嚟 Git 靜態檔，唔再淨係靠
+   runtime /api。呢度讀 repo 真檔（唔係 fixture），驗端到端。
+   ============================================================ */
+section('檔案名單（淨靠 Git JSON 都入到閘）');
+{
+  const memFetch12 = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const clean = String(url).split('?')[0].replace(/^\.?\//, '');
+    if (/^api\/units/.test(clean) || clean === 'data/units.generated.json') {
+      return { ok: false, status: 404, json: async () => { throw new Error('404'); }, text: async () => '' };
+    }
+    return memFetch12(url);   // data/units.json 讀 repo 真檔
+  };
+  const units = await import('../assets/js/lib/units.js?filefirst=1');
+  await units.loadRegistry(true);
+  const e82 = units.unitEntry('0082') || {};
+  ok('★ /api 同焗名單死晒，檔案嘅 0082 照出現',
+    units.unitList().some(u => String(u.code) === '0082'),
+    units.unitList().map(u => u.code).join(',') || '（空）');
+  ok('檔案名正確', e82.name === '第八十二旅深資童軍團', e82.name);
+  ok('★ 檔案 entry 冇後端冇 Key（密鑰唔落 Git）',
+    e82.backend === undefined && e82.apiKey === undefined && !JSON.stringify(e82).includes('script.google'));
+  ok('未配後端 ＝ backendOf 係 null（唔會借用人哋張 Sheet）', units.backendOf('0082') === null);
+
+  /* 閘面端到端：撳「重新載入清單」→ 0082 照揀得（兩條伺服器路會如實顯示紅字） */
+  const { window } = makeBrowser('http://localhost:8080/');
+  await import('../assets/js/main.js?filefirst=1');
+  await wait(600);
+  const doc = window.document;
+  const text = () => (doc.getElementById('app')?.textContent || '').replace(/\s+/g, ' ');
+  doc.querySelector('[data-act="reload"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await wait(600);
+  ok('★ 閘面有 0082 揀（淨靠檔案）', !!doc.querySelector('[data-pick="0082"]'));
+  ok('兩條伺服器路死晒會如實顯示紅字（但唔阻揀旅團）', /讀唔到伺服器登記清單/.test(text()));
+  globalThis.fetch = memFetch12;
+}
+
+/* ============================================================
+   ⑬ 兩條路並行：閘面分得清邊個旅團嚟自邊條路
+   ------------------------------------------------------------
+   檔案（0082）＋ 即時 API（0033 fixture）同時跑 —— 閘面 subline
+   同診斷 modal 要睇得出邊個嚟自邊條路（唔可以撈埋一齊）。
+   ============================================================ */
+section('兩條路並行：閘面分得清邊個旅團嚟自邊條路');
+{
+  const memFetch13 = globalThis.fetch;
+  const API_0033 = { units: { '0033': { code: '0033', name: '第三十三旅深資童軍團' } }, count: 1 };
+  globalThis.fetch = async (url) => {
+    const clean = String(url).split('?')[0].replace(/^\.?\//, '');
+    if (/^api\/units/.test(clean)) {
+      return { ok: true, status: 200, json: async () => API_0033, text: async () => JSON.stringify(API_0033) };
+    }
+    if (clean === 'data/units.generated.json') {
+      return { ok: false, status: 404, json: async () => { throw new Error('404'); }, text: async () => '' };
+    }
+    return memFetch13(url);   // data/units.json 讀 repo 真檔（0082）
+  };
+  const units = await import('../assets/js/lib/units.js?file13=1');
+  await units.loadRegistry(true);
+  ok('檔案狀態記得住（0082）', units.fileUnitsStatus().ok === true && units.fileUnitsStatus().count === 1,
+    JSON.stringify(units.fileUnitsStatus()));
+  ok('即時 API 狀態記得住（0033）', units.serverUnitsStatus().ok === true && units.serverUnitsStatus().count === 1);
+  ok('0082 打住檔案旗（冇 Vercel 旗）',
+    units.unitEntry('0082')?.fromFile === true && !units.unitEntry('0082')?.fromApi && !units.unitEntry('0082')?.server);
+  ok('0033 打住 Vercel 旗（冇檔案旗）',
+    units.unitEntry('0033')?.fromApi === true && !units.unitEntry('0033')?.fromFile);
+
+  /* 閘面：subline 標籤分得清 */
+  const { window } = makeBrowser('http://localhost:8080/');
+  await import('../assets/js/main.js?file13=1');
+  await wait(600);
+  const doc = window.document;
+  doc.querySelector('[data-act="reload"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await wait(600);
+  const sub = (code) => doc.querySelector(`[data-pick="${code}"] .xs.faint`)?.textContent || '';
+  ok('★ 0082 標「檔案」唔標 Vercel', /檔案/.test(sub('0082')) && !/Vercel/.test(sub('0082')), sub('0082'));
+  ok('★ 0033 標「Vercel 登記」唔標檔案', /Vercel 登記/.test(sub('0033')) && !/檔案/.test(sub('0033')), sub('0033'));
+
+  /* 診斷 modal：三行對照表 */
+  const shared = await import('../assets/js/lib/units.js');
+  ok('閘面用緊嘅 shared 狀態：檔案 OK', shared.fileUnitsStatus().ok === true);
+  doc.querySelector('[data-act="diag"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await wait(400);
+  const modalText = doc.querySelector('.overlay .modal')?.textContent.replace(/\s+/g, ' ') || '';
+  ok('★ 診斷有「檔案名單」行', /檔案名單/.test(modalText), modalText.slice(0, 100));
+  ok('★ 診斷有齊三條路對照', /檔案名單/.test(modalText) && /瀏覽器讀/.test(modalText) && /部署時名單/.test(modalText));
+  globalThis.fetch = memFetch13;
 }
 
 if (errors.length) {

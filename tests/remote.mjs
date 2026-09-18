@@ -277,8 +277,10 @@ section('旅團隔離（新旅團唔會見到 82 旅嘅資料）');
   /* 以前 registry 有個頂層共用 backend，任何未登記旅團都會 fallback 去到，
      即係會見到 82 旅張 Sheet。而家已經拆走 —— 呢個測試守住佢唔好返嚟。 */
   ok('Registry 冇咗頂層共用 backend（舊漏洞已封）', !reg.backend?.gasUrl, JSON.stringify(reg.backend || null));
-  ok('Registry 冇任何旅團（0082 資料已全清）',
-    Object.keys(reg.units || {}).length === 0, Object.keys(reg.units || {}).join(','));
+  ok('★ 0082 得個公開名單（冇後端冇 Key，唔會洩漏唔會被借用）',
+    !!reg.units?.['0082'] && !reg.units['0082'].backend?.gasUrl && !reg.units['0082'].apiKey
+    && !/script\.google/.test(JSON.stringify(reg.units)),
+    Object.keys(reg.units || {}).join(',') || '（空）');
   ok('Registry 預設旅團係空（唔會靜靜雞當你係 82 旅）', !reg.defaultUnit, String(reg.defaultUnit));
 
   /* 扮一個「已登記但未交後端」嘅新旅團 */
@@ -418,6 +420,148 @@ section('搬遷檢查（清前端之前要對數）');
     /團章章節/.test(src) && /團費紀錄/.test(src) && /收支申報/.test(src)
     && /活動預算/.test(src) && /物資借用/.test(src));
   ok('建議次序有叫人先做 JSON 備份', /匯出 JSON 備份/.test(src));
+}
+
+/* ============================================================
+   ⑧ 「總表同步」唔填 /exec 都要經得同源代理（純環境變數開團）
+   ------------------------------------------------------------
+   2026-09-17 0082 事件：純 Vercel env 開團嘅旅團，前端根本唔會填
+   /exec（網址同 key 留喺伺服器端），但 pushToMaster 一見冇 s.url
+   就即刻話「未設定網址」—— 連「測試連線」都撳唔到。
+   而家：冇本地網址就經同源 /api/proxy 照送。
+   ============================================================ */
+section('總表同步經同源代理（唔填 /exec 都得）');
+{
+  const { JSDOM } = await import('jsdom');
+  const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost:8080/', pretendToBeVisual: true });
+  const { window } = dom;
+  for (const k of ['window', 'document', 'navigator', 'localStorage', 'location', 'HTMLElement',
+    'CustomEvent', 'Event', 'Node', 'getComputedStyle', 'URL', 'URLSearchParams']) {
+    try { Object.defineProperty(globalThis, k, { value: window[k], configurable: true, writable: true }); }
+    catch { /* 唯讀 → 略過 */ }
+  }
+  globalThis.window = window;
+
+  const seen = [];
+  const memFetch = globalThis.fetch;
+  /* 假代理：扮 GAS 經 proxy 回嚟嘅 JSON */
+  let proxyReply = { ok: true, msg: '已寫入總表', counts: { members: 1 }, unit: '0082' };
+  globalThis.fetch = async (url, init = {}) => {
+    const clean = String(url).split('?')[0].replace(/^\.?\//, '');
+    if (clean === 'api/proxy') {
+      seen.push(JSON.parse(init.body || '{}'));
+      return { ok: true, status: 200, text: async () => JSON.stringify(proxyReply) };
+    }
+    return { ok: false, status: 404, json: async () => { throw new Error('404'); }, text: async () => '404' };
+  };
+
+  const store = await import('../assets/js/lib/store.js');
+  await store.init({ mode: 'real', unit: '0082' });
+  ok('測試 DB 冇本地後端網址（純 env 開團嘅狀態）',
+    !store.load().sync?.url && !store.load().backend?.gasUrl);
+
+  const tables = await import('../assets/js/views/tables.js');
+  const r1 = await tables.pushToMaster({ silent: true });
+  ok('★ 冇填 /exec 都經得代理送出', r1.ok === true, JSON.stringify(r1).slice(0, 200));
+  ok('送去代理嘅係 sync action＋旅團編號',
+    seen[0]?.action === 'sync' && seen[0]?.unit === '0082',
+    JSON.stringify({ a: seen[0]?.action, u: seen[0]?.unit }));
+  ok('★ 經代理唔會送空 apiKey（等伺服器端注入）',
+    !('apiKey' in (seen[0] || {})), Object.keys(seen[0] || {}).join(','));
+  ok('有帶成份資料庫上去（後端會存入「資料庫」分頁）', seen[0]?.db?.unitCode === '0082');
+
+  /* GAS 拒絕（例如 key 唔啱）嗰陣，HTTP 200 都要當失敗，而且要講得出原因 */
+  proxyReply = { ok: false, success: false, error: '未授權：API Key 唔正確（寫入資料庫需要 API Key）' };
+  const r2 = await tables.pushToMaster({ silent: true });
+  ok('★ 代理回未授權 → 唔可以扮成功', r2.ok === false, JSON.stringify(r2).slice(0, 160));
+  ok('錯誤原因要浮得返上嚟', /未授權/.test(String(r2.msg || '')), String(r2.msg || '').slice(0, 100));
+
+  /* 純靜態部署（冇 /api/proxy）＋ 冇填網址 → 先至係真・未設定 */
+  globalThis.fetch = async (url) => {
+    const clean = String(url).split('?')[0].replace(/^\.?\//, '');
+    if (clean === 'api/proxy') return { ok: false, status: 404, text: async () => '<h1>404</h1>' };
+    return { ok: false, status: 404, json: async () => { throw new Error('404'); }, text: async () => '404' };
+  };
+  const r3 = await tables.pushToMaster({ silent: true });
+  ok('冇代理又冇網址 → 明確話連唔到代理', r3.ok === false && /同源代理/.test(String(r3.msg || '')),
+    String(r3.msg || '').slice(0, 120));
+
+  /* remote.testConnection 一樣唔可以強制要本地網址 */
+  globalThis.fetch = async (url) => {
+    const clean = String(url).split('?')[0].replace(/^\.?\//, '');
+    if (clean === 'api/proxy') {
+      return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, msg: '82venture 後端正常' }) };
+    }
+    return { ok: false, status: 404, text: async () => '404' };
+  };
+  const remote = await import('../assets/js/lib/remote.js');
+  const t = await remote.testConnection();
+  ok('remote.testConnection 經代理都 test 到（唔使本地網址）', t.ok === true, JSON.stringify(t).slice(0, 160));
+
+  globalThis.fetch = memFetch;
+}
+
+/* ============================================================
+   ⑨ 舊系統遷移：指去 82venture 嘅公開網址要搵得出＋一鍵搬
+   ------------------------------------------------------------
+   各旅團資料庫入面嘅公開網址（通告／團章／公開頁）好可能仲係
+   舊站嗰陣填嘅 82venture.vercel.app —— 嗰啲 QR／WhatsApp 連結
+   退役之後會死晒。呢度驗：搵得出、搬得啱、頁面識得警告。
+   （沿用第 ⑧ 節嘅 jsdom 環境：location ＝ http://localhost:8080/）
+   ============================================================ */
+section('舊系統遷移（一鍵搬公開網址）');
+{
+  const store = await import('../assets/js/lib/store.js');
+  const model = await import('../assets/js/lib/model.js');
+
+  ok('認得舊站網址', model.isLegacyUrl('https://82venture.vercel.app/notice.html?u=0082&n=x') === true);
+  ok('唔理大細楷', model.isLegacyUrl('https://82VENTURE.VERCEL.APP/entry.html') === true);
+  ok('相對路徑唔算舊站', model.isLegacyUrl('notice.html?u=0082') === false);
+  ok('新站唔算舊站', model.isLegacyUrl('https://ecportal.vercel.app/notice.html') === false);
+  ok('而家唔係喺舊站', model.onLegacyHost() === false);
+
+  /* 播種：扮 0082 資料庫入面仲有舊網址（單旅團年代填落嘅） */
+  const db = store.load();
+  db.settings.notice = { ...(db.settings.notice || {}), publicBaseUrl: 'https://82venture.vercel.app/notice.html' };
+  db.settings.publicBaseUrl = 'https://82venture.vercel.app/constitution.html?u={u}';
+  db.settings.publicLinks = {
+    ...(db.settings.publicLinks || {}), base: '',
+    'entry.html': 'https://82venture.vercel.app/entry.html', 'borrow.html': ''
+  };
+  store.commit();
+
+  const found = model.findLegacyPublicUrls();
+  ok('★ 搵得出 3 個指去舊站嘅設定', found.length === 3, JSON.stringify(found.map(f => f.key)));
+  ok('搬遷淨係換 host（path＋參數照留）',
+    model.migrateLegacyUrl('https://82venture.vercel.app/notice.html?u=0082&n=5') === 'http://localhost:8080/notice.html?u=0082&n=5',
+    model.migrateLegacyUrl('https://82venture.vercel.app/notice.html?u=0082&n=5'));
+  ok('唔係舊站網址就原樣回傳',
+    model.migrateLegacyUrl('https://ecportal.vercel.app/x') === 'https://ecportal.vercel.app/x');
+
+  const n = model.migrateLegacyPublicUrls();
+  ok('★ 一鍵搬走 3 個', n === 3, String(n));
+  ok('搬完之後搵唔到舊站網址', model.findLegacyPublicUrls().length === 0);
+  ok('通告網址已經係而家呢個站',
+    store.load().settings.notice.publicBaseUrl === 'http://localhost:8080/notice.html',
+    store.load().settings.notice.publicBaseUrl);
+  ok('{u} 參數搬完之後仲喺度',
+    store.load().settings.publicBaseUrl === 'http://localhost:8080/constitution.html?u={u}',
+    store.load().settings.publicBaseUrl);
+
+  /* 成員連結頁會出 banner（播返個舊嘅先） */
+  store.load().settings.publicLinks['borrow.html'] = 'https://82venture.vercel.app/borrow.html';
+  store.commit();
+  const links = await import('../assets/js/views/links.js');
+  const html = links.render();
+  ok('★ 成員連結頁有舊站警告＋一鍵搬掣', /舊系統/.test(html) && /data-act="migrate-urls"/.test(html));
+  ok('受影響嘅連結卡有警告', /退役之後會死/.test(html));
+
+  /* 通告分享連結都係同一個來源（搬完就啱） */
+  const notices = await import('../assets/js/views/notices.js');
+  store.add('notices', { id: 'n_legacy1', title: { zh: '測試通告' }, status: 'published' });
+  const rec = store.find('notices', 'n_legacy1');
+  ok('通告 publicUrl 用搬完之後嘅新網址',
+    notices.publicUrl(rec).startsWith('http://localhost:8080/notice.html?'), notices.publicUrl(rec));
 }
 
 console.log(`\n──────── 後端儲存測試結果：${pass} 通過 / ${fail} 失敗（${Date.now() - t0} ms）────────\n`);

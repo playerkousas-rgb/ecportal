@@ -28,9 +28,8 @@ function ok(name, cond, extra = '') {
 }
 const wait = (ms) => new Promise(r => setTimeout(r, ms));
 
-/* Registry fixture：真 data/units.json 而家係空嘅（0082 資料已移除，
-   真旅團一律靠 Vercel env TROOP_<編號>_* 登記）。呢個測試要驗「有旅團可揀」
-   嘅閘行為，所以自己餵一個虛構旅團 TEST9。 */
+/* Registry fixture：唔讀真 data/units.json（真檔而家有 0082 名單，會污染測試）。
+   呢個測試要驗「有旅團可揀」嘅閘行為，所以自己餵一個虛構旅團 TEST9。 */
 const FIXTURE_REG = {
   schema: 2, defaultUnit: '',
   units: {

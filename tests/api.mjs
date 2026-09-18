@@ -21,9 +21,8 @@ ok('擋住非 GAS URL', !isTrustedExecUrl('https://evil.com/exec'));
 ok('擋住 GAS /dev URL', !isTrustedExecUrl('https://script.google.com/macros/s/AKfycbySGLBg5KuWzgM9EySiOIppqnzrL0QASIYLlhbCIHocGHcLHKbkMdvmhJvam3baG___/dev'));
 
 // 2. getRegistry & getTrustedUnit
-/* 注意：data/units.json 而家冇任何旅團（0082 嘅資料已全清，
-   真旅團一律靠 Vercel 環境變數 TROOP_<編號>_* 登記）。
-   所以呢度先用環境變數開一個虛構旅團 TEST9 做 fixture。 */
+/* 注意：data/units.json 而家得個 0082 名單（公開資料，冇後端冇 Key）。
+   呢度再用環境變數開一個虛構旅團 TEST9 做 fixture，驗 env 嗰邊同合併。 */
 const TEST_GAS = 'https://script.google.com/macros/s/AKfycbTESTonlyFixtureNotARealDeploymentId000000000/exec';
 process.env.TROOP_TEST9_BACKEND = TEST_GAS;
 process.env.TROOP_TEST9_APIKEY = 'test9_secret_key';
@@ -32,7 +31,8 @@ process.env.TROOP_TEST9_NAME = '測試旅深資童軍團';
 const reg = getRegistry();
 ok('Registry 讀取到環境變數登記嘅旅團', !!reg.TEST9, Object.keys(reg).join(','));
 ok('旅團包含 code 與名稱', reg.TEST9?.code === 'TEST9' && reg.TEST9?.name === '測試旅深資童軍團');
-ok('Registry 冇殘留 0082（資料已全清）', !reg['0082'], Object.keys(reg).join(','));
+ok('檔案嘅 0082 只係公開名單（冇後端冇 Key）',
+  !!reg['0082'] && !reg['0082'].backend?.gasUrl && !reg['0082'].backend?.apiKey, Object.keys(reg).join(','));
 
 const trusted = getTrustedUnit('TEST9');
 ok('getTrustedUnit 取得可信後端', !!trusted && !!trusted.gasUrl);

@@ -3,7 +3,7 @@
    （會議狀態、團員／生日、財務統計、物資庫存、團章）
    ============================================================ */
 
-import { load, collection, find } from './store.js';
+import { load, collection, find, commit } from './store.js';
 import { todayISO, parseBirthday, daysUntilBirthday, ageFrom, turningAge } from './dates.js';
 import { agmIsDefault, unitFYOf, scoutFYLabel, scoutFYRange, inRange } from './fiscal.js';
 export * from './fiscal.js';
@@ -65,6 +65,97 @@ export function memberLinks() {
     });
   });
   return out;
+}
+
+/* ---------------- 舊系統遷移（82venture → ecportal） ----------------
+   82venture.vercel.app 係舊嘅單旅團系統，退役之後上面嘅公開頁
+   （notice.html / entry.html / borrow.html / constitution.html）會死晒。
+   但各旅團資料庫入面儲存咗嘅公開網址（settings.notice.publicBaseUrl、
+   settings.publicBaseUrl、settings.publicLinks.*）好可能仲指去舊站 ——
+   嗰陣時舊站就係正站，個個都係咁填，仲會跟埋後端同步去每一部機。
+   呢度幫手搵出嚟＋一鍵搬去而家呢個站。
+   （新舊站嘅公開頁檔名一樣，所以淨係換 host 就得，path＋參數照留。） */
+
+/** 已經退役嘅舊站（唔好再派呢啲 host 嘅連結／QR 出街） */
+export const LEGACY_HOSTS = ['82venture.vercel.app'];
+/** 新正站（舊站截停畫面會指去呢度；轉 custom domain 嗰陣記得改埋呢度） */
+export const CANONICAL_HOST = 'ecportal.vercel.app';
+export const canonicalUrl = () => `https://${CANONICAL_HOST}/`;
+
+function hostOf(u) {
+  try { return new URL(String(u || ''), 'https://x.invalid').hostname.toLowerCase(); }
+  catch { return ''; }
+}
+
+/** 呢條連結係咪指去舊站？（相對路徑／留空＝唔係） */
+export function isLegacyUrl(u) {
+  const h = hostOf(u);
+  return !!h && h !== 'x.invalid' && LEGACY_HOSTS.includes(h);
+}
+
+/** 而家係咪喺舊站開緊？（main.js boot 截停用） */
+export function onLegacyHost() {
+  try {
+    return LEGACY_HOSTS.includes(String(location.hostname || '').toLowerCase());
+  } catch { return false; }
+}
+
+/** 把舊站網址換成而家呢個站（淨換 host；唔係舊站網址就原樣回傳） */
+export function migrateLegacyUrl(u) {
+  try {
+    if (!isLegacyUrl(u)) return String(u || '');
+    const cur = (typeof location !== 'undefined' && location.origin && location.origin !== 'null')
+      ? location.origin : '';
+    if (!cur) return String(u);
+    const next = new URL(String(u));
+    const curU = new URL(cur);
+    next.protocol = curU.protocol;
+    next.host = curU.host;
+    return next.toString();
+  } catch { return String(u || ''); }
+}
+
+/** 搵出資料庫入面所有指去舊站嘅公開網址設定（[{ key, label, url }]） */
+export function findLegacyPublicUrls() {
+  const out = [];
+  const s = settings() || {};
+  const push = (key, label, url) => {
+    if (url && isLegacyUrl(url)) out.push({ key, label, url: String(url) });
+  };
+  push('notice.publicBaseUrl', '通告公開頁基礎網址', s.notice?.publicBaseUrl);
+  push('publicBaseUrl', '團章公開網址', s.publicBaseUrl);
+  const pl = s.publicLinks || {};
+  push('publicLinks.base', '公開頁基礎網址', pl.base);
+  for (const f of ['entry.html', 'borrow.html', 'notice.html', 'constitution.html']) {
+    push('publicLinks.' + f, `公開頁 ${f}`, pl[f]);
+  }
+  return out;
+}
+
+/** 一鍵搬：把上面搵到嘅全部換成而家呢個站。回傳搬咗幾多個。 */
+export function migrateLegacyPublicUrls() {
+  const found = findLegacyPublicUrls();
+  if (!found.length) return 0;
+  const db = load();
+  db.settings = { ...(db.settings || {}) };
+  for (const { key } of found) {
+    if (key === 'notice.publicBaseUrl') {
+      db.settings.notice = {
+        ...(db.settings.notice || {}),
+        publicBaseUrl: migrateLegacyUrl(db.settings.notice?.publicBaseUrl)
+      };
+    } else if (key === 'publicBaseUrl') {
+      db.settings.publicBaseUrl = migrateLegacyUrl(db.settings.publicBaseUrl);
+    } else if (key.startsWith('publicLinks.')) {
+      const k = key.slice('publicLinks.'.length);
+      db.settings.publicLinks = {
+        ...(db.settings.publicLinks || {}),
+        [k]: migrateLegacyUrl(db.settings.publicLinks?.[k])
+      };
+    }
+  }
+  commit();
+  return found.length;
 }
 
 /* ---------------- 會議 ---------------- */

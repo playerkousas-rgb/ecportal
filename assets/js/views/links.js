@@ -9,7 +9,7 @@
 import { load, commit } from '../lib/store.js';
 import { esc, icon, modal, toast, copyText, qrSvg } from '../lib/util.js';
 import { toWord, printDoc, downloadQrSvg, stamp } from '../lib/exporter.js';
-import { profile, settings, memberLinks, publicPageUrl } from '../lib/model.js';
+import { profile, settings, memberLinks, publicPageUrl, findLegacyPublicUrls, migrateLegacyPublicUrls, isLegacyUrl } from '../lib/model.js';
 import { pageHead, empty, noteBox } from './ui.js';
 import { can } from '../lib/auth.js';
 
@@ -38,6 +38,8 @@ export function render() {
       ? '<br><span class="xs">已連接總表：成員一送出就會寫入你嘅 Google Sheet（待批核）。</span>'
       : '<br><span class="xs" style="color:var(--warn)">未設定 Apps Script：成員送出嘅內容會存喺佢哋自己部手機，可以「複製內容」傳畀司庫。</span>'}`, 'brand')}
   <div class="mb-16"></div>
+
+  ${legacyBanner()}
 
   <div class="card mb-16">
     <div class="card-head"><div><div class="card-title">成員系統</div>
@@ -81,13 +83,29 @@ export function render() {
   </div>`;
 }
 
+/* 舊站遷移橫額：資料庫入面仲有公開網址指去 82venture 就彈出嚟，
+   等領袖／執委一鍵搬返去而家呢個站（唔搬嘅話嗰啲 QR／連結退役之後會死）。 */
+function legacyBanner() {
+  const bad = findLegacyPublicUrls();
+  if (!bad.length) return '';
+  let host = '';
+  try { host = location.host || ''; } catch { host = ''; }
+  return `<div class="mb-16">${noteBox(`<b>⚠ 有 ${bad.length} 個公開網址仲指去舊系統（82venture.vercel.app）。</b>
+    舊站退役之後，呢啲連結／QR 會死晒，團員掃唔到嘢。<br>
+    <span class="xs mono">${bad.map(b => esc(b.label + '：' + b.url)).join('<br>')}</span><br>
+    <button class="btn btn-sm btn-primary mt-8" data-act="migrate-urls">${icon('refresh', 14)} 一鍵轉去而家呢個網址${host ? `（${esc(host)}）` : ''}</button>
+    <div class="xs faint mt-4">轉完之後要<b>重新下載 QR／重印海報</b>，舊嗰啲已經派出街嘅要重新派過。</div>`, 'danger')}</div>`;
+}
+
 function linkCard(l) {
+  const legacy = isLegacyUrl(l.url);
   return `<div class="link-card">
     <span class="ic">${icon(l.icon, 18)}</span>
     <div class="grow" style="min-width:0">
       <div class="semibold sm">${esc(l.label)}</div>
       <div class="xs muted mt-4">${esc(l.desc)}</div>
       <div class="u mt-6">${esc(l.url)}</div>
+      ${legacy ? `<div class="xs mt-4" style="color:var(--danger)">⚠ 呢條連結指去舊系統（退役之後會死）—— 撳上面嗰個「一鍵轉去而家呢個網址」搬返佢。</div>` : ''}
     </div>
     <div class="row gap-6 wrap no-print" style="justify-content:flex-end">
       <button class="btn btn-xs" data-copy="${esc(l.url)}">${icon('copy', 13)} 複製</button>
@@ -135,6 +153,15 @@ export function mount(root) {
   });
   root.querySelector('[data-act="print-all"]')?.addEventListener('click', () => printAllPosters());
   root.querySelector('[data-act="settings"]')?.addEventListener('click', () => settingsDialog());
+  root.querySelector('[data-act="migrate-urls"]')?.addEventListener('click', () => {
+    const n = migrateLegacyPublicUrls();
+    if (n > 0) {
+      toast(`已轉移 ${n} 個網址去而家呢個站 —— 記得重新下載 QR／重印海報`, 'ok');
+      refresh();
+    } else {
+      toast('已經冇指去舊站嘅網址', 'info');
+    }
+  });
 }
 
 function poster(url, label) {
