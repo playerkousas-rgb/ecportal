@@ -163,7 +163,8 @@ export function mount(root) {
 
   const hubUrl = memberLinks().find(l => l.id === 'hub')?.url;
   root.querySelector('[data-act="copy-hub"]')?.addEventListener('click', async () => {
-    if (hubUrl && await copyText('【' + (profile().name || '') + '】團員入口（掃一次齊晒）\n' + hubUrl)) toast('已複製團員入口', 'ok');
+    if (hubUrl && await copyText(`【${profile().name || ''}】團員入口（掃一次齊晒）
+${hubUrl}`)) toast('已複製團員入口', 'ok');
   });
   root.querySelector('[data-act="print-hub"]')?.addEventListener('click', () => hubUrl && poster(hubUrl, '團員入口（掃一次齊晒）'));
   root.querySelector('[data-act="settings"]')?.addEventListener('click', () => settingsDialog());

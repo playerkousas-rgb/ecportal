@@ -645,7 +645,7 @@ function newUnitDoc() {
     <li>□ 收到旅團嘅 <code>/exec</code> 網址 ＋ API Key</li>
     <li>□ Vercel 加咗 5 個 <code>TROOP_&lt;編號&gt;_*</code> 變數</li>
     <li>□ Redeploy 完成，旅團清單見到新編號</li>
-    <li>□ 旅團更新咗 Code.gs ＋ 執行 <code>initializeSheets</code></li>
+    <li>□ 旅團更新咗 Code.gs ＋ 部署新版本（第一次先要 initializeSheets）</li>
     <li>□ 實測：登入 → 開一張測試通告 → 用 QR／連結報名 → Sheet「報名」分頁見到紀錄</li>
     <li>□ 實測：進度頁見到成員（或者顯示「伺服器端已設定」）</li>
     <li>□ 通知旅團：以後自己入「進度 → 設定」可以覆蓋 <code>/exec</code> ＋ Key</li>
