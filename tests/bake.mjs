@@ -89,6 +89,9 @@ section('部署接線（regression：唔可以整甩）');
   ok('★ vercel.json outputDirectory 係根目錄（冇 public/，唔寫就會紅燈 missing-public-directory）',
     v.outputDirectory === '.',
     v.outputDirectory === undefined ? '（冇寫）' : String(v.outputDirectory));
+  ok('★ vercel.json 冇 routes（舊式 routes 會將 /api/* 指去靜態源碼檔，function 唔會執行）',
+    !('routes' in v),
+    'routes' in v ? JSON.stringify(v.routes) : '（冇 routes，行 Vercel 預設 /api/* 直達 function）');
   const gi = fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf8');
   ok('★ 焗出嚟嘅檔唔入 Git（免得有份過期嘅喺 repo 誤導人）',
     gi.includes('data/units.generated.json'));
