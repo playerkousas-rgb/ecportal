@@ -8,6 +8,8 @@
 // data/units.generated.json；閘面攞靜態行先，/api 留做後備＋診斷。
 //
 // 部署接線：vercel.json → "buildCommand": "node scripts/build-units.mjs"
+// 加 "outputDirectory": "."（個站係根目錄靜態、冇 public/；有 buildCommand
+// 冇 outputDirectory 的話 Vercel 會去搵 public/ 並紅燈 missing-public-directory）。
 // 加／改環境變數之後照舊 Redeploy —— 新部署會重新焗過份名單。
 //
 // 安全：只會寫入 listPublicUnits() 嘅公開欄位 —— 永遠唔會有 gasUrl／apiKey。

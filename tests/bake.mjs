@@ -86,6 +86,9 @@ section('部署接線（regression：唔可以整甩）');
   ok('★ vercel.json 有 buildCommand 焗名單',
     typeof v.buildCommand === 'string' && v.buildCommand.includes('build-units.mjs'),
     v.buildCommand || '（冇）');
+  ok('★ vercel.json outputDirectory 係根目錄（冇 public/，唔寫就會紅燈 missing-public-directory）',
+    v.outputDirectory === '.',
+    v.outputDirectory === undefined ? '（冇寫）' : String(v.outputDirectory));
   const gi = fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf8');
   ok('★ 焗出嚟嘅檔唔入 Git（免得有份過期嘅喺 repo 誤導人）',
     gi.includes('data/units.generated.json'));
