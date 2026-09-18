@@ -222,17 +222,23 @@ export async function pushDb({ silent = true, _retried = 0 } = {}) {
     }
   }
 
-  /* 體積預警（v2.3.0）：後端 saveDb 上限 9MB —— 去到 8.5MB 就唔好再送，
-     話畀用家知去「體積檢查」瘦身（九成係相片 dataURL）。 */
-  let dbBytes = 0;
-  try { dbBytes = JSON.stringify(db).length; } catch { /* ignore */ }
-  if (dbBytes > 8500000) {
+  /* 體積路由（v2.4.0）：
+     · < 2.8MB → 單一 saveDb（同以前一樣）
+     · ≥ 2.8MB → 自動分件（saveDbPart × N + saveDbCommit）—— 每件 < 2.8MB，
+       行得晒現有所有路徑（同源 proxy／直接 /exec），所以旅團用幾十年、
+       db 幾十 MB 都照存得，冇「要停止使用」嘅天花板。
+     · > 40MB → 硬止（GAS 6 分鐘執行上限先會真係有問題），叫去體積檢查。 */
+  let dbText = '';
+  try { dbText = JSON.stringify(db); } catch { /* ignore */ }
+  const dbBytes = dbText.length;
+  if (dbBytes > 40000000) {
     db.sync = db.sync || {};
-    pushLog(db, `✗ 資料庫已達 ${fmtBytes(dbBytes)}（上限 9MB）—— 去總表同步「體積檢查」瘦身（多數係相片）`);
+    pushLog(db, `✗ 資料庫已達 ${fmtBytes(dbBytes)} —— 去「體積檢查」睇下邊個分頁食緊嘢`);
     commitMeta();
     setState('error', `資料庫太大（${fmtBytes(dbBytes)}）`);
-    return { ok: false, reason: 'too_big', hint: '去「帳號與系統 → 資料管理 → 總表同步 → 體積檢查」，多數係申報相片食緊位，撳「相片瘦身」就會改做 Drive 連結。' };
+    return { ok: false, reason: 'too_big', hint: '去「帳號與系統 → 資料管理 → 總表同步 → 體積檢查」睇下邊個分頁食緊位（多數係試卷答卷／通告回應累積）。' };
   }
+  const useParts = dbBytes > CHUNKED_ABOVE;
 
   inFlight = true;
   if (!silent) setState('saving', '儲存緊…');
@@ -244,38 +250,61 @@ export async function pushDb({ silent = true, _retried = 0 } = {}) {
   const sentAt = db.meta?.updatedAt || '';
 
   try {
-    const r = await callBackend({ action: 'saveDb', db, baseVersion: synced });
+    let r;
+    let usedParts = 0;
+    if (useParts) {
+      /* v2.4.0 分件：拆件 → 逐件送（任何一件撞版都即停）→ commit 拼合 */
+      const parts = splitDbIntoParts(db, PART_MAX_BYTES);
+      const saveId = `${cfg.unit}-stg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+      r = null;
+      let fellBack = false;   // 舊後端（未部署 v2.4.0）→ 退返單件路
+      for (let i = 0; i < parts.length; i++) {
+        setState('saving', `分件儲存中…（${i + 1}/${parts.length}）`);
+        let pr = await callBackend({ action: 'saveDbPart', unit: cfg.unit, data: parts[i],
+          partIdx: i, parts: parts.length, saveId, baseVersion: synced });
+        /* 後端話「未知 action」＝ 仲係 v2.3.0 舊版 → 退返單件 saveDb
+           （舊後端照收得到 4MB 以下；真係超標會喺單件路度如實回錯） */
+        if (!pr.ok && /未知 action/.test(String(pr.error || ''))) {
+          pushLog(load(), '⚠ 後端仲係舊版（未部署分件儲存 v2.4.0）—— 改用單一件儲存');
+          r = await callBackend({ action: 'saveDb', db, baseVersion: synced });
+          fellBack = true;
+          break;      // 已經成份存咗，唔好再送剩低嘅件
+        }
+        if (!fellBack && !pr.ok) {
+          const cur0 = load();
+          cur0.sync = cur0.sync || {};
+          if (pr.conflict) {
+            cur0.sync.lastError = pr.error || '後端有較新版本';
+            pushLog(cur0, `⚠ 第 ${i + 1}/${parts.length} 件撞版 —— 自動拉後端合併再重存`);
+            commitMeta();
+            inFlight = false;
+            return await recoverFromConflict(pr, silent, _retried);
+          }
+          cur0.sync.lastError = pr.error || '分件儲存失敗';
+          pushLog(cur0, `✗ 分件 ${i + 1}/${parts.length} 失敗：${pr.error || '未知錯誤'}`);
+          commitMeta();
+          setState('error', pr.error || '分件儲存失敗');
+          return { ok: false, reason: pr.reason || 'backend', error: pr.error || '分件儲存失敗' };
+        }
+      }
+      if (!fellBack) {
+        setState('saving', `分件完成，拼合中…（${parts.length} 件）`);
+        r = await callBackend({ action: 'saveDbCommit', unit: cfg.unit, saveId, parts: parts.length, baseVersion: synced });
+        usedParts = parts.length;
+      }
+    } else {
+      r = await callBackend({ action: 'saveDb', db, baseVersion: synced });
+    }
     const cur = load();
     cur.sync = cur.sync || {};
 
-    /* 樂觀鎖撞版：另一部機啱啱先寫入後端。
-       自動復原：拉後端 → 聯集合併本機未同步改動 → 重存一次。 */
+    /* 樂觀鎖撞版：另一部機啱啱先寫入後端 → 自動復原（拉＋合併＋重存一次） */
     if (!r.ok && r.conflict) {
       cur.sync.lastError = r.error || '後端有較新版本';
       pushLog(cur, `⚠ 後端有另一部機寫入嘅新版本 —— 自動拉返嚟合併（第 ${_retried + 1} 次）`);
       commitMeta();
       inFlight = false;
-      if (_retried >= 1) {
-        setState('conflict', '兩邊都改咗：已合併一次都仲撞版，請去「總表同步」核對');
-        return { ...r, ok: false, reason: 'conflict', hint: '已經自動合併咗一次都仲撞版 —— 好可能兩部機同時改緊。去「帳號與系統 → 資料管理 → 總表同步」撳「由後端還原」，或者等一陣再儲存。' };
-      }
-      const got = await pullDb();
-      if (got?.ok && got.found && got.db) {
-        try {
-          store.adoptRemote(got.db, { version: got.version || got.db?.meta?.updatedAt || '', merge: true });
-          if (typeof window !== 'undefined') {
-            try { (await import('./util.js')).toast('另一部機更新咗後端 —— 已自動合併兩邊資料', 'ok'); } catch { /* */ }
-          }
-          setState('pending', '合併完成，儲存緊…');
-          return await pushDb({ silent, _retried: _retried + 1 });
-        } catch (e) {
-          setState('error', '合併失敗：' + (e?.message || ''));
-          return { ok: false, reason: 'conflict', error: '自動合併失敗：' + (e?.message || '') };
-        }
-      }
-      setState('conflict', '後端有新版本但拉唔到 —— 一陣再自動試');
-      scheduleRetry();
-      return { ...r, ok: false, reason: 'conflict', hint: '拉唔到後端最新版本嚟合併，會自動再試。' };
+      return await recoverFromConflict(r, silent, _retried);
     }
 
     if (r.ok) {
@@ -287,7 +316,8 @@ export async function pushDb({ silent = true, _retried = 0 } = {}) {
       /* 呢個版本嘅內容而家本機＝後端完全一致 —— 之後 push 用佢做 baseVersion */
       if (r.version) cur.sync.lastSyncedVersion = String(r.version);
       cur.sync.lastError = '';
-      pushLog(cur, `✓ 已儲存到後端（${fmtBytes(r.bytes)}）`);
+      if (usedParts) r.parts = usedParts;     // 測試／log 用：今次行咗分件
+      pushLog(cur, `✓ 已儲存到後端（${fmtBytes(r.bytes)}${usedParts ? `，分 ${usedParts} 件` : ''}）`);
       retryStep = 0;
       setState(cur.sync.pending ? 'pending' : 'saved', cur.sync.pending ? '仲有新改動未儲存' : '已儲存到後端');
       /* 送出期間又有改動 → 再存多次 */
@@ -304,6 +334,32 @@ export async function pushDb({ silent = true, _retried = 0 } = {}) {
   } finally {
     inFlight = false;
   }
+}
+
+/** 撞版復原（單件／分件共用）：拉後端 → 聯集合併 → 重存一次 */
+async function recoverFromConflict(r, silent, _retried) {
+  if (_retried >= 1) {
+    setState('conflict', '兩邊都改咗：已合併一次都仲撞版，請去「總表同步」核對');
+    return { ...r, ok: false, reason: 'conflict', hint: '已經自動合併咗一次都仲撞版 —— 好可能兩部機同時改緊。去「帳號與系統 → 資料管理 → 總表同步」撳「由後端還原」，或者等一陣再儲存。' };
+  }
+  const got = await pullDb();
+  if (got?.ok && got.found && got.db) {
+    try {
+      const store = await import('./store.js');
+      store.adoptRemote(got.db, { version: String(got.version || got.db?.meta?.updatedAt || ''), merge: true });
+      if (typeof window !== 'undefined') {
+        try { (await import('./util.js')).toast('另一部機更新咗後端 —— 已自動合併兩邊資料', 'ok'); } catch { /* */ }
+      }
+      setState('pending', '合併完成，儲存緊…');
+      return await pushDb({ silent, _retried: _retried + 1 });
+    } catch (e) {
+      setState('error', '合併失敗：' + (e?.message || ''));
+      return { ok: false, reason: 'conflict', error: '自動合併失敗：' + (e?.message || '') };
+    }
+  }
+  setState('conflict', '後端有新版本但拉唔到 —— 一陣再自動試');
+  scheduleRetry();
+  return { ...r, ok: false, reason: 'conflict', hint: '拉唔到後端最新版本嚟合併，會自動再試。' };
 }
 
 /** 由後端讀返成個資料庫（唔會自動覆蓋本機 —— 交返畀呼叫者決定） */
@@ -406,6 +462,55 @@ export function startPolling(intervalMs = 60000) {
 }
 export function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
 
+/* ============================================================
+   分件儲存（v2.4.0 長壽命架構）
+   資料庫大過單一請求上限（proxy/Vercel ~4MB）都存得到：
+   把 db 頂層 key 貪心分組成 N 件（每件 JSON < maxBytes）；
+   大過 maxBytes 嘅陣列（例如十年帳目）會自己再切件。
+   後端 saveDbCommit 拼合：同 key 全部係陣列 → 接駁；否則後件覆蓋。
+   ============================================================ */
+export const PART_MAX_BYTES = 2_800_000;   // 每件安全上限（< proxy 4MB / Vercel 4.5MB）
+export const CHUNKED_ABOVE = 2_800_000;    // db JSON 大過呢個數就自動行分件
+
+/** 純函數：把 db 拆成部分 db 陣列（每件 < maxBytes）。第一件一定有 meta／schema／unitCode。 */
+export function splitDbIntoParts(db, maxBytes = PART_MAX_BYTES) {
+  const must = ['schema', 'kind', 'unitCode'];
+  const keys = Object.keys(db || {}).filter(k => !must.includes(k));
+  const parts = [];
+  let cur = {};
+  const sizeOf = v => { try { return JSON.stringify(v ?? null).length; } catch { return 0; } };
+  const curSize = () => Object.keys(cur).reduce((a, k) => a + sizeOf(cur[k]) + k.length + 4, 2);
+
+  /* 細 key 先裝入第一件 */
+  keys.forEach(k => {
+    const sz = sizeOf(db[k]);
+    if (sz > maxBytes * 0.8) return;               // 大件遲啲處理
+    if (curSize() + sz > maxBytes && Object.keys(cur).length) { parts.push(cur); cur = {}; }
+    cur[k] = db[k];
+  });
+  if (Object.keys(cur).length) { parts.push(cur); cur = {}; }
+
+  /* 大 key：陣列可以切片；物件就要成件（理論上唔會超，超就照送） */
+  keys.forEach(k => {
+    const v = db[k];
+    const sz = sizeOf(v);
+    if (sz <= maxBytes * 0.8) return;
+    if (Array.isArray(v)) {
+      const per = Math.max(1, Math.ceil(v.length / Math.ceil(sz / (maxBytes * 0.8))));
+      for (let i = 0; i < v.length; i += per) parts.push({ [k]: v.slice(i, i + per) });
+    } else {
+      parts.push({ [k]: v });
+    }
+  });
+
+  /* 第一件注入必要欄位 */
+  const head = {};
+  must.forEach(k => { if (db?.[k] !== undefined) head[k] = db[k]; });
+  if (!parts.length) parts.push({});
+  parts[0] = { ...head, ...parts[0] };
+  return parts;
+}
+
 /**
  * 相片上 Drive（v2.3.0 體積治理）：
  * APP 內申報嘅單據相直接經後端存入 Drive，db 入面只留連結 ——
@@ -416,7 +521,9 @@ export async function uploadPhotos(photos = [], { id = '' } = {}) {
   if (isMock()) return { ok: false, reason: 'mock', links: [] };
   const cfg = remoteCfg();
   if (!cfg.ok) return { ok: false, reason: 'not_configured', links: [] };
-  const r = await callBackend({ action: 'uploadPhotos', payload: { id, photos } }, { timeoutMs: 90000 });
+  /* 單據 Drive 資料夾：旅團設定（財務 → 設定／帳號與系統 都改到同一個欄） */
+  const receiptDrive = String(tryLoad()?.settings?.receiptDrive || '').trim();
+  const r = await callBackend({ action: 'uploadPhotos', payload: { id, photos }, folderId: receiptDrive }, { timeoutMs: 90000 });
   if (r?.ok && Array.isArray(r.links)) return { ok: true, links: r.links };
   return { ok: false, error: r?.error || '上載唔到', links: [] };
 }

@@ -12,7 +12,7 @@ import {
   summarize, openingBalance, currentBalance, balanceBreakdown, currency, agmIsDefault, setAgmDate, lastSaturdayOfAugust,
   openingOf, openingBalances, legacyOpening, currentFY, currentFYRange, prevFYKey, yearRange, refYearKey, carriedForward,
   feePeriodOf, feePeriods, feeOf, feeGrid, feeStats, matchMemberByName,
-  standardFee, overseasFee, defaultFeeDue,
+  standardFee, overseasFee, defaultFeeDue, feeForYear,
   inRange, fyMonths, fyMonthStats, monthText, categoryBreakdown, feeExempt, feeExemptList, identityOf
 } from '../lib/model.js';
 import { todayISO, nowStamp } from '../lib/dates.js';
@@ -66,7 +66,7 @@ export function render(params) {
     ['claims', '收支申報', pendingClaims().length],
     ['budgets', '活動預算', budgets().length],
     ['import', '匯入舊帳'],
-    ['settings', '年度設定']
+    ['settings', '設定']
   ], tab)}
   ${tab === 'reports' ? reportsView()
     : tab === 'fees' ? feesView()
@@ -448,7 +448,7 @@ function reportsView() {
       </div>
 
       <div class="card">
-        <div class="card-head"><div class="card-title">年度設定</div></div>
+        <div class="card-head"><div class="card-title">設定</div></div>
         <div style="padding:16px 18px">
           ${kv([
             ['期初結餘', money(openingBalance().amount) + (openingBalance().date ? ` <span class="faint xs">(${esc(openingBalance().date)})</span>` : '')],
@@ -456,7 +456,7 @@ function reportsView() {
             ['AGM 日期', (s.agmDates || []).filter(a => a.date).map(a => `<span class="tag">${esc(a.date)}</span>`).join(' ') || '<span class="faint">未設定</span>']
           ])}
           ${can('finance.edit') ? `<button class="btn btn-sm btn-block mt-12" data-act="agm">${icon('calendar', 15)} 逐年輸入 AGM 日期</button>
-            <button class="btn btn-sm btn-block mt-8" data-act="settings">${icon('settings', 15)} 修改期初結餘 / 年度設定</button>` : ''}
+            <button class="btn btn-sm btn-block mt-8" data-act="settings">${icon('settings', 15)} 修改設定（期初／團費／單據 Drive）</button>` : ''}
         </div>
       </div>
     </div>
@@ -541,7 +541,7 @@ function feesView() {
 
   return `
   <div class="grid g-4 mb-16">
-    ${stat('應收團費', money(st.expected), `${st.total} 位團員 · 標準 ${money(standardFee())}／年${overseasFee() !== standardFee() ? `（海外 ${money(overseasFee())}）` : ''}`)}
+    ${stat('應收團費', money(st.expected), `${st.total} 位團員 · 標準 ${money(standardFee(period))}／年${overseasFee() !== standardFee(period) ? `（海外 ${money(overseasFee())}）` : ''}`)}
     ${stat('已收', money(st.collected), `${st.paidCount} / ${st.total} 人（${st.rate}%）`, 'ok')}
     ${stat('未收', money(st.outstanding), `${st.unpaidCount} 人未交`, st.unpaidCount ? 'warn' : 'ok')}
     ${stat('逾期', String(st.overdue), st.noRecord ? `另有 ${st.noRecord} 人未建立紀錄` : (st.overdue ? '需要追收' : '冇逾期'), st.overdue ? 'danger' : 'ok')}
@@ -626,7 +626,7 @@ function feesView() {
     <div class="card"><div class="card-head"><div class="card-title">點樣用</div></div>
       <div style="padding:16px 18px" class="sm muted">
         <ol style="padding-left:18px;line-height:1.9">
-          <li>新一年度：按「<b>開新年度團費</b>」→ 一次過為所有現役團員建立 $${settings().feePerYear ?? 360} 紀錄</li>
+          <li>新一年度：按「<b>開新年度團費</b>」→ 一次過為所有現役團員建立 $${standardFee()} 紀錄（金額＝該年度設定，冇設定就跟上年）</li>
           <li>有人交錢：喺佢一行按「<b>標記已收</b>」→ 自動入帳（可以揀日期／方式）</li>
           <li>追人：按「<b>複製催繳名單</b>」→ 直接貼落 WhatsApp 群</li>
           <li>要收據：按 🖨 → 即刻列印／存 PDF</li>
@@ -726,7 +726,7 @@ function budgetsView() {
 }
 
 /* ============================================================
-   5b. 年度設定（期初結餘 · 年度起點 · 團費預設）
+   5b. 設定（期初結餘 · 年度起點 · 團費逐年 · 單據 Drive）
    ============================================================ */
 /** 由設定頁欄位收集（儲存同暫存共用） */
 function collectSettings(root) {
@@ -740,6 +740,15 @@ function collectSettings(root) {
     if (raw === '') { delete map[y]; return; }
     map[y] = Number(raw);
   });
+  /* 逐年團費：留空＝用返「同上年」，唔會入 map */
+  const feeMap = {};
+  root.querySelectorAll('[data-fee-year]').forEach(el => {
+    const y = el.dataset.feeYear;
+    const raw = String(el.value ?? '').trim();
+    if (raw === '') return;
+    const n = Number(raw);
+    if (Number.isFinite(n) && n >= 0) feeMap[y] = n;
+  });
   return {
     openingBalances: map,
     openingBalance: Number(v('#set-open-legacy')) || 0,   // 第一筆帳目之前嘅底數
@@ -747,11 +756,13 @@ function collectSettings(root) {
     scoutFYStartMonth: Number(v('#set-fym')) || 4,
     scoutFYStartDay: Number(v('#set-fyd')) || 1,
     feePerYear: Number(v('#set-fee')) || 0,
-    feeOverseas: Number(v('#set-feeovs')) || 0
+    feeOverseas: Number(v('#set-feeovs')) || 0,
+    feePerYearMap: feeMap,
+    receiptDrive: String(v('#set-receipt')).trim()
   };
 }
 
-/** 年度設定頁要列出邊幾年（有帳目嘅年度 + 已設定嘅年度 + 本年度） */
+/** 設定頁要列出邊幾年（有帳目嘅年度 + 已設定嘅年度 + 本年度） */
 function openingYearList() {
   const s = settings();
   const keys = new Set();
@@ -767,6 +778,25 @@ function openingYearList() {
 function settingsView() {
   const s = settings();
   const bal = balanceBreakdown();
+  /* 逐年團費（v2.4.0）：feePerYearMap；draft 恢復；留空顯示「同上年」 */
+  const feeMap = s.feePerYearMap || {};
+  const rec2 = readDraft('fin-settings', load().unitCode);
+  const collectedFee = {};
+  if (rec2?.data) Object.keys(rec2.data).forEach(k => {
+    const m2 = /^feeyear:(.+)$/.exec(k);
+    if (m2) collectedFee[m2[1]] = rec2.data[k];
+  });
+  const prevFeeOf = (y) => {
+    const m2 = /^(\d{4})/.exec(String(y));
+    if (m2) {
+      const y0 = Number(m2[1]);
+      for (let i = 1; i <= 15; i++) {
+        const yy = `${y0 - i}-${String(y0 - i + 1).slice(-2)}`;
+        if (feeMap[yy] != null && feeMap[yy] !== '') return Number(feeMap[yy]);
+      }
+    }
+    return Number(s.feePerYear ?? 360);
+  };
   /* 草稿（本機暫存）入面嘅逐年期初要先顯示返，唔會因為 refresh 而失去 */
   const rec = readDraft('fin-settings', load().unitCode);
   const collected = {};
@@ -814,6 +844,12 @@ function settingsView() {
                   <span class="faint">${sum.count} 筆 · 期末 <b class="money">${money(o.amount + sum.net)}</b></span>`
                   : '<span class="faint">未有帳目</span>'}
               </div>
+              <div style="min-width:130px">
+                <label class="label">團費（該年度）</label>
+                <input class="input" type="number" step="0.01" data-fee-year="${esc(y)}" data-draft="feeyear:${esc(y)}"
+                  value="${esc(collectedFee[y] ?? (feeMap[y] ?? ''))}" placeholder="${esc(prevFeeOf(y))}">
+                <div class="hint">${feeMap[y] != null ? '已個別設定' : `留空 → 用 <b>${money(prevFeeOf(y))}</b>（同上年）`}</div>
+              </div>
               <div style="min-width:110px">
                 ${y !== openingYearList()[0] ? '' : ''}
                 <button class="btn btn-xs" data-carry-year="${esc(y)}">${icon('refresh', 14)} 由上年度期末結轉</button>
@@ -858,19 +894,31 @@ function settingsView() {
 
       <div class="card">
         <div class="card-head"><div class="card-title">團費預設</div>
-          <div class="card-sub">每位團員每年（可以逐個團員改）</div></div></div>
+          <div class="card-sub">逐年喺上面表入就得；呢個係「本年度」快速欄（可以逐個團員改）</div></div></div>
         <div style="padding:18px 20px">
           <div class="grid g-2" style="gap:12px">
-            <div class="field"><label class="label">標準團費</label>
+            <div class="field"><label class="label">標準團費（本年度）</label>
               <input class="input" id="set-fee" type="number" step="0.01" data-draft="feePerYear" value="${standardFee()}"></div>
             <div class="field"><label class="label">海外／優惠團費</label>
               <input class="input" id="set-feeovs" type="number" step="0.01" data-draft="feeOverseas" value="${overseasFee()}"></div>
           </div>
+          <div class="hint mt-8">每年幾多錢喺<b>上面「期初結餘」同一張表嘅「團費（該年度）」欄</b>逐年度填；留空＝自動同上一個年度一樣。</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><div class="card-title">單據相片 Drive 資料夾</div>
+          <div class="card-sub">申報相片存邊度 —— 同「帳號與系統 → 旅團設定」係<b>同一個設定</b></div></div>
+        <div style="padding:18px 20px">
+          <div class="field"><label class="label">Drive 資料夾連結（或 ID）</label>
+            <input class="input" id="set-receipt" data-draft="receiptDrive" value="${esc(s.receiptDrive || '')}" placeholder="https://drive.google.com/drive/folders/…"></div>
+          <div class="hint mt-8">貼資料夾連結就得（會自動抽出 ID）。留空＝用旅團後端 Apps Script 預設嘅資料夾。<br>
+            呢個係<b>收單據相</b>嘅資料夾，同「團員睇到嘅公開連結」嗰個旅團 Drive 係兩樣嘢。</div>
         </div>
       </div>
 
       <div class="row gap-8 wrap no-print">
-        <button class="btn btn-primary" data-act="save-settings-page">${icon('save', 16)} 儲存年度設定</button>
+        <button class="btn btn-primary" data-act="save-settings-page">${icon('save', 16)} 儲存設定</button>
         <span class="xs faint">改動會先暫存喺呢部裝置，撳「儲存」先寫入。</span>
       </div>
     </div>
@@ -1242,7 +1290,7 @@ function showImportPreview(root) {
         let f = feeOf(r.memberId, period);
         if (!f) {
           f = add('fees', { id: uid('f'), memberId: r.memberId, period, label: `${period} 團費`,
-            amount: Number(r.amount) || Number(settings().feePerYear || 360), due: `${period.slice(0, 4)}-09-30`, paid: false });
+            amount: Number(r.amount) || standardFee(period), due: `${period.slice(0, 4)}-09-30`, paid: false });
         }
         if (f && !f.paid) {
           update('fees', f.id, { paid: true, paidDate: r.date, method: r.method, txId: t?.id || '', receivedBy: r.byName || '' });
@@ -1510,7 +1558,7 @@ export function mount(root, params) {
     const period = feePeriod || feePeriodOf(todayISO());
     add('fees', {
       id: uid('f'), memberId: b.dataset.newFee, period, label: `${period} 團費`,
-      amount: standardFee(), due: defaultFeeDue(period), paid: false
+      amount: standardFee(period), due: defaultFeeDue(period), paid: false
     });
     toast('已建立團費紀錄', 'ok'); refresh();
   }));
@@ -1619,7 +1667,7 @@ export function mount(root, params) {
       db.settings = { ...db.settings, ...patch };
       commit();
       clearDraft('fin-settings', load().unitCode);
-      toast('已儲存年度設定', 'ok');
+      toast('已儲存設定', 'ok');
       refresh();
       return;
     }
@@ -1627,7 +1675,7 @@ export function mount(root, params) {
     if (act === 'settings') {
       const s = settings();
       const r = await modal({
-        title: '年度設定', sub: '期初結餘、AGM 日期、收費預設',
+        title: '設定', sub: '期初結餘、AGM 日期、收費預設',
         body: `
           <div class="grid g-2" style="gap:12px">
             <div class="field"><label class="label">期初結餘</label>
@@ -1970,7 +2018,7 @@ async function feeSettings() {
     body: `
       <div class="grid g-2" style="gap:12px">
         <div class="field"><label class="label">標準團費（每位團員每年）</label>
-          <input class="input" id="f-std" type="number" step="0.01" value="${standardFee()}"></div>
+          <input class="input" id="f-std" type="number" step="0.01" value="${standardFee(feePeriod)}"></div>
         <div class="field"><label class="label">海外／優惠團費</label>
           <input class="input" id="f-ovs" type="number" step="0.01" value="${overseasFee()}"></div>
         <div class="field"><label class="label">預設到期日</label>
@@ -1994,6 +2042,9 @@ async function feeSettings() {
   const { apply, ...settingsPatch } = r;
   const db = load();
   db.settings = { ...db.settings, ...settingsPatch };
+  /* v2.4.0：呢個 modal 係針對某一期（period）改團費 → 寫入逐年 map（默認同上年嘅機制用） */
+  const per = feePeriod || feePeriodOf(todayISO());
+  db.settings.feePerYearMap = { ...(db.settings.feePerYearMap || {}), [per]: Number(settingsPatch.feePerYear) || 0 };
   commit();
   if (apply) {
     const period = feePeriod || feePeriodOf(todayISO());
@@ -2292,7 +2343,7 @@ function exportFeesWord() {
   toWord({
     filename: `團費收款表_${period}_${stamp()}.doc`, title: `團費收款表 ${period}`, org: profile().name,
     bodyHtml: `<div class="doc-head"><div class="doc-title">團費收款表</div>
-      <div class="doc-sub">${esc(profile().name || '')} · ${esc(period)} 年度 · 每人 ${nf(settings().feePerYear ?? 360, 2)} 元 · 列印日期 ${esc(todayISO())}</div></div>
+      <div class="doc-sub">${esc(profile().name || '')} · ${esc(period)} 年度 · 每人 ${nf(standardFee(period), 2)} 元 · 列印日期 ${esc(todayISO())}</div></div>
       <div class="kpi">
         <div><div class="k">應收</div><div class="v">${nf(g.expected, 2)}</div></div>
         <div><div class="k">已收</div><div class="v">${nf(g.collected, 2)}</div></div>

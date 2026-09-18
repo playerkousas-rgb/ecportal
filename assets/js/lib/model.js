@@ -631,8 +631,30 @@ export function progressRoster(list = members()) {
 }
 
 /* ---------- 團費（金額可改，唔係寫死） ---------- */
-/** 標準團費（每位團員每年）—— 由 settings.feePerYear 讀，可隨時改 */
-export function standardFee() { return Number(settings().feePerYear ?? 360); }
+/** 標準團費（每位團員每年）—— v2.4.0 起支援**逐年**設定（feePerYearMap）：
+ *  每年喺「財務 → 設定」可以改當年團費；冇填嘅年份**默認同上一個有設定嘅年度相同**。
+ *  settings.feePerYear 仲係「總預設」（舊資料兼容），map 優先。 */
+export function feeForYear(period = '') {
+  const s = settings();
+  const map = s.feePerYearMap || {};
+  const p = String(period || '').trim();
+  if (p && map[p] != null && map[p] !== '') return Number(map[p]);
+  if (p) {
+    /* 向過去行，最多 15 年：默認同上年相同（上上年…） */
+    const m = /^(\d{4})/.exec(p);
+    if (m) {
+      const y0 = Number(m[1]);
+      for (let i = 1; i <= 15; i++) {
+        const yy = `${y0 - i}-${String(y0 - i + 1).slice(-2)}`;
+        if (map[yy] != null && map[yy] !== '') return Number(map[yy]);
+      }
+    }
+  }
+  return Number(s.feePerYear ?? 360);
+}
+export function standardFee(period = '') {
+  return feeForYear(period || feePeriodOf(todayISO()));
+}
 /** 海外／優惠團費（預設標準嘅 1/4） */
 export function overseasFee() {
   const v = settings().feeOverseas;
@@ -663,7 +685,7 @@ export function feeOf(memberId, period) {
 }
 /** 團費收款表：每位（非舊團員、非免收）團員 × 某一期 */
 export function feeGrid(period = feePeriodOf(todayISO()), { includeAlumni = false } = {}) {
-  const fallback = standardFee();
+  const fallback = standardFee(period);   // v2.4.0：跟嗰期嘅年度團費（冇設定就跟上年）
   return members()
     .filter(m => (includeAlumni || m.status !== 'alumni') && !feeExempt(m))
     .map(m => {

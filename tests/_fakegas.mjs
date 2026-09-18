@@ -38,8 +38,71 @@ function saveDb(body) {
   return { ok: true, success: true, bytes: text.length, chunks: Math.ceil(text.length / DB_CHUNK), at: now, version };
 }
 
+/* v2.4.0 分件：暫存行 unit='__staging__'，version=saveId，載入時一律 skip */
+function saveDbPart(body) {
+  const unit = String(body.unit || 'UNKNOWN');
+  const saveId = String(body.saveId || '');
+  const parts = Number(body.parts || 0);
+  const partIdx = Number(body.partIdx || 0);
+  if (!saveId.startsWith(unit + '-stg-')) return { ok: false, success: false, error: 'saveId 格式唔啱' };
+  if (partIdx < 0 || partIdx >= parts) return { ok: false, success: false, error: 'partIdx 越界' };
+  /* 樂觀鎖：part 0 對版本 */
+  if (partIdx === 0) {
+    const cur = [...sheet].reverse().find(r => r[0] === unit);
+    const curVersion = cur ? String(cur[4] || '') : '';
+    if (curVersion && String(body.baseVersion ?? '') !== curVersion) {
+      return { ok: false, success: false, conflict: true, version: curVersion, error: '後端已有較新版本（另一部機剛剛同步過）' };
+    }
+  }
+  const now = new Date().toISOString();
+  const chunks = String(JSON.stringify(body.data ?? {}));
+  /* 重試覆寫：只刪同一 saveId 同一件（唔可以刪埋隔籬件！真 Code.gs 只清過期暫存，呢度收緊啲防重試堆疊） */
+  sheet = sheet.filter(r => !(r[0] === '__staging__' && r[4] === saveId && Math.floor(r[1] / 100000) === partIdx));
+  let seq = partIdx * 100000;
+  for (let p = 0; p < chunks.length; p += DB_CHUNK) {
+    seq++;
+    sheet.push(['__staging__', seq, chunks.substring(p, p + DB_CHUNK), now, saveId]);
+  }
+  return { ok: true, success: true, part: partIdx, at: now };
+}
+
+function saveDbCommit(body) {
+  const unit = String(body.unit || 'UNKNOWN');
+  const saveId = String(body.saveId || '');
+  const parts = Number(body.parts || 0);
+  const have = [...new Set(sheet.filter(r => r[0] === '__staging__' && r[4] === saveId)
+    .map(r => Math.floor(r[1] / 100000)))].sort((a, b) => a - b);
+  const missing = [];
+  for (let i = 0; i < parts; i++) if (!have.includes(i)) missing.push(i);
+  if (missing.length) return { ok: false, success: false, error: '缺少分件：' + missing.join(',') + '（請重新儲存）' };
+  const cur = [...sheet].reverse().find(r => r[0] === unit);
+  const curVersion = cur ? String(cur[4] || '') : '';
+  if (curVersion && String(body.baseVersion ?? '') !== curVersion) {
+    return { ok: false, success: false, conflict: true, version: curVersion, error: '後端已有較新版本' };
+  }
+  /* 拼合：逐 part 重組 → 陣列 concat、其他後件覆蓋 */
+  let merged = {};
+  for (let i = 0; i < parts; i++) {
+    const text = sheet.filter(r => r[0] === '__staging__' && r[4] === saveId && Math.floor(r[1] / 100000) === i)
+      .sort((a, b) => a[1] - b[1]).map(r => r[2]).join('');
+    const piece = JSON.parse(text);
+    for (const [k, v] of Object.entries(piece)) {
+      merged[k] = Array.isArray(v) && Array.isArray(merged[k]) ? merged[k].concat(v) : v;
+    }
+  }
+  const text = JSON.stringify(merged);
+  if (text.length > 40000000) return { ok: false, success: false, error: '拼合後體積超過 40MB 上限' };
+  sheet = sheet.filter(r => r[0] !== unit && !(r[0] === '__staging__' && r[4] === saveId));  // 舊段＋暫存成梳清
+  const now = new Date().toISOString();
+  const version = now + '-' + Math.floor(Math.random() * 100000);
+  for (let p = 0, i = 1; p < text.length; p += DB_CHUNK, i++) {
+    sheet.push([unit, i, text.substring(p, p + DB_CHUNK), now, version]);
+  }
+  return { ok: true, success: true, bytes: text.length, at: now, version };
+}
+
 function loadDb(unit) {
-  const parts = sheet.filter(r => !unit || r[0] === unit).sort((a, b) => a[1] - b[1]);
+  const parts = sheet.filter(r => r[0] !== '__staging__' && (!unit || r[0] === unit)).sort((a, b) => a[1] - b[1]);
   if (!parts.length) return { ok: true, success: true, found: false, db: null };
   const text = parts.map(r => r[2]).join('');
   try {
@@ -82,11 +145,13 @@ http.createServer((req, res) => {
     let out;
     const a = body.action || '';
     const key = body.apiKey || body.apikey || '';
-    const needsKey = a === 'saveDb' || a === 'loadDb' || a === 'dbInfo';
+    const needsKey = a === 'saveDb' || a === 'loadDb' || a === 'dbInfo' || a === 'saveDbPart' || a === 'saveDbCommit';
 
     if (EXPECTED_KEY && needsKey && key !== EXPECTED_KEY) {
       out = { ok: false, success: false, error: '未授權：API Key 唔正確' };
     } else if (a === 'saveDb') out = saveDb(body);
+    else if (a === 'saveDbPart') out = saveDbPart(body);
+    else if (a === 'saveDbCommit') out = saveDbCommit(body);
     else if (a === 'loadDb') out = loadDb(String(body.unit || ''));
     else if (a === 'dbInfo') out = dbInfo(String(body.unit || ''));
     else if (a === 'sync') {

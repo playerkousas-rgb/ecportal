@@ -523,9 +523,10 @@ function syncView() {
     ${(() => {
       const bk = dbSizeBreakdown(load());
       const mb = bk.total / 1048576;
-      const cls = mb > 6 ? 'b-danger' : (mb > 3 ? 'b-warn' : 'b-ok');
+      /* v2.4.0：分件儲存之後冇「停止使用」嘅天花板 —— 顏色只係俾你知道大細 */
+      const cls = mb > 25 ? 'b-danger' : (mb > 10 ? 'b-warn' : 'b-ok');
       return `<div class="row gap-8 mt-12 wrap" style="align-items:center">
-      <span class="badge ${cls}" title="資料庫 JSON 總大小（後端 saveDb 上限 9MB）">${icon('chart', 12)} 體積 ${fmtBytes(bk.total)}${mb > 3 ? '（' + Math.round(mb) + ' MB，' + (mb > 6 ? '危險' : '偏大') + '）' : ''}</span>
+      <span class="badge ${cls}" title="資料庫 JSON 總大小。分件儲存之下幾大都存得到；得閒睇吓邊個分頁食緊嘢就得">${icon('chart', 12)} 體積 ${fmtBytes(bk.total)}${mb > 10 ? '（' + Math.round(mb) + ' MB）' : ''}</span>
       <button class="btn btn-xs btn-sm" data-act="size-check">${icon('chart', 13)} 體積檢查</button>
       ${bk.photoBytes > 0 ? `<button class="btn btn-xs" data-act="size-slim">${icon('image', 13)} 相片瘦身（${fmtBytes(bk.photoBytes)}）</button>` : ''}
     </div>`;
@@ -786,10 +787,16 @@ export function buildPayload({ sample = false } = {}) {
     counts: Object.fromEntries(Object.entries(tables).map(([k, v]) => [k, v.length])),
     tables
   };
-  /* 真正嘅同步：除咗攤平嘅報表，仲要帶埋**整個資料庫**（原樣 JSON），
-     後端會存入「資料庫」分頁 —— 咁先讀得返、換機先唔會冇咗。
+  /* 真正嘅同步：報表之便也帶埋**整個資料庫**（原樣 JSON）入「資料庫」分頁。
+     v2.4.0：db 大過 2.5MB 就唔好搭報表便車 —— 整個 db 由 remote.js 嘅
+     自動儲存／「立即儲存到後端」負責（嗰條路識分件，幾大都得）。
      baseVersion ＝ 樂觀鎖：後端版本對唔上就拒收（防過時裝置盲蓋後端）。 */
-  if (!sample) { payload.db = db; payload.baseVersion = String(db.sync?.lastSyncedVersion || ''); }
+  if (!sample) {
+    let bytes = 0;
+    try { bytes = JSON.stringify(db).length; } catch { /* ignore */ }
+    if (bytes <= 2500000) { payload.db = db; payload.baseVersion = String(db.sync?.lastSyncedVersion || ''); }
+    else payload.skipDb = true;
+  }
   return payload;
 }
 
@@ -1317,14 +1324,12 @@ export function mount(root, params) {
       if (act === 'size-check') {
         const bk = dbSizeBreakdown(load());
         const totalMB = (bk.total / 1048576).toFixed(2);
-        const level = bk.total > 6291456 ? 'err' : (bk.total > 3145728 ? 'warn' : 'ok');
         await modal({
           title: `資料庫體積：${fmtBytes(bk.total)}（${totalMB} MB）`,
-          sub: '後端「資料庫」分頁上限 9MB —— 呢度逐分頁睇邊個食緊位',
+          sub: '逐分頁睇邊個食緊位 —— 分件儲存之下幾大都存得到，呢度只係幫你了解',
           body: `
-            ${bk.total > 6291456 ? `<div class="note-box err mb-12">${icon('alert', 15)}<div><b>已接近 9MB 上限</b> —— 後端好快會拒收，即刻做「相片瘦身」。</div></div>`
-            : bk.total > 3145728 ? `<div class="note-box warn mb-12">${icon('alert', 15)}<div>體積偏大（多數係申報相片）。建議做「相片瘦身」。</div></div>`
-            : `<div class="note-box ok mb-12">${icon('check', 15)}<div>體積健康。成團人用都唔會咁快爆。</div></div>`}
+            ${bk.total > 26214400 ? `<div class="note-box warn mb-12">${icon('alert', 15)}<div>體積幾大喇（照常用得）—— 得閒睇下下面邊個分頁食緊嘢，多數係試卷答卷／通告回應累積，可以諗下封存舊嘅。</div></div>`
+            : `<div class="note-box ok mb-12">${icon('check', 15)}<div>體積健康。<b>相片已經自動上 Drive</b>（db 只留連結），純文字資料一年大概長 100–300KB —— 用十幾二十年都唔使擔心。儲存係<b>分件</b>進行，大資料都照存得。</div></div>`}
             <table class="tbl sm"><thead><tr><th>分頁</th><th class="r">大小</th><th class="r">佔比</th></tr></thead>
             <tbody>${bk.parts.map(x => `<tr>
               <td>${esc(LABEL_K[x.key] || x.key)}${x.key === 'claims' && bk.photoBytes ? ` <span class="xs faint">（相片 ${fmtBytes(bk.photoBytes)}）</span>` : ''}</td>

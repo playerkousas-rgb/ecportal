@@ -63,13 +63,25 @@ try {
       store.add('members', { name: step.name, ymis: step.ymis, identity: 'member' });
       out.steps.push({ op: 'addMember', name: step.name, total: store.load().members.length });
     }
+    if (step.op === 'bulkMembers') {
+      /* 灌大量團員把 db 谷大過分件閾值 —— 測 v2.4.0 分件儲存。
+         一次過注入再 commit 一次（同真實「試算表匯入」路徑一樣；
+         唔係逐個 add —— 咁樣會千幾次全 db 序列化，純粹燒記憶體）。 */
+      const db = store.load();
+      for (let i = 0; i < (step.count || 0); i++) {
+        db.members.push({ id: 'mb' + i, name: (step.prefix || 'Bulk') + i, ymis: '2026' + String(1000000 + i), identity: 'member', note: 'x'.repeat((step.kb || 2) * 1024) });
+      }
+      store.commit();
+      const db2 = store.load();
+      out.steps.push({ op: 'bulkMembers', total: db2.members.length, bytes: JSON.stringify(db2).length });
+    }
     if (step.op === 'addTx') {
       store.add('transactions', { date: step.date, type: step.type, item: step.item, amount: step.amount });
       out.steps.push({ op: 'addTx', total: store.load().transactions.length });
     }
     if (step.op === 'push') {
       const r = await remote.pushDb({ silent: true });
-      out.steps.push({ op: 'push', ok: r.ok, error: r.error || '', bytes: r.bytes || 0, pending: Number(store.load().sync?.pending || 0) });
+      out.steps.push({ op: 'push', ok: r.ok, error: r.error || '', bytes: r.bytes || 0, parts: r.parts || 0, pending: Number(store.load().sync?.pending || 0) });
     }
     if (step.op === 'autosave') {
       /* 模擬「改完自動存」：arm 之後改一筆，等 debounce 過咗 */

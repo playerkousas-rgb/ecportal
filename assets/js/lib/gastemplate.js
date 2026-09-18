@@ -13,6 +13,11 @@ export function gasTemplate() {
  *  82venture · 總表同步與多旅團後端 Apps Script（Code.gs）
  *  版本：v2.2.0
  *
+ *  ★ v2.4.0 新增（2026-09-18 同一晚，長壽命架構）：
+ *    分件儲存 saveDbPart / saveDbCommit —— 資料庫大過單一請求上限都照存得：
+ *    前端把 db 拆成 N 件（每件 < 3MB）逐件送，暫存喺「資料庫」分頁
+ *    （unit='__staging__'），全部到齊一次過原子式拼合寫入。
+ *    所以：旅團用十幾二十年，資料庫十幾 MB 都照常用得（配額按件數計，冇天花板）。
  *  ★ v2.3.0 新增（2026-09-18 同一晚，體積治理）：
  *    ① uploadPhotos —— 相片直接上 Drive（回連結），唔使再入 app 資料庫 JSON
  *       （以前 APP 內申報嘅相 dataURL 會將「資料庫」分頁撐到爆 9MB）
@@ -212,7 +217,8 @@ function doPost(e) {
     }
 
     /* ---- 整份資料庫讀／寫（app 嘅真正儲存；要 API Key）---- */
-    if (body.action === 'saveDb' || body.action === 'loadDb' || body.action === 'dbInfo') {
+    if (body.action === 'saveDb' || body.action === 'loadDb' || body.action === 'dbInfo'
+      || body.action === 'saveDbPart' || body.action === 'saveDbCommit') {
       if (expectedKey && key !== expectedKey) {
         return json({ ok: false, success: false, error: '未授權：API Key 唔正確' });
       }
@@ -220,6 +226,16 @@ function doPost(e) {
         var sv = withLock(function () { return saveDb(body); });
         return json({ ok: sv.success === true, success: sv.success === true, conflict: sv.conflict === true,
           chunks: sv.chunks || 0, bytes: sv.bytes || 0, at: sv.at || '', version: sv.version || '', error: sv.error || '' });
+      }
+      if (body.action === 'saveDbPart') {
+        var sp = withLock(function () { return saveDbPart(body); });
+        return json({ ok: sp.success === true, success: sp.success === true, conflict: sp.conflict === true,
+          partIdx: sp.partIdx || 0, chunks: sp.chunks || 0, version: sp.version || '', error: sp.error || '' });
+      }
+      if (body.action === 'saveDbCommit') {
+        var sc = withLock(function () { return saveDbCommit(body); });
+        return json({ ok: sc.success === true, success: sc.success === true, conflict: sc.conflict === true,
+          chunks: sc.chunks || 0, bytes: sc.bytes || 0, at: sc.at || '', version: sc.version || '', error: sc.error || '' });
       }
       if (body.action === 'dbInfo') {
         var nfo = dbInfo(textOf(body.unit));
@@ -288,8 +304,9 @@ function doPost(e) {
     /* ---- 相片上 Drive（v2.3.0；免 API Key，同 claim 同一信任級別）----
        APP 內申報用：只存檔回連結，唔會寫任何報表行（報表行由 syncAll 負責）。 */
     if (body.action === 'uploadPhotos') {
-      var links = savePhotos((body.payload && body.payload.photos) || [], textOf(body.unit), textOf(body.payload && body.payload.id) || 'x');
-      return json({ ok: true, links: links, saved: links.length, asked: (body.payload && body.payload.photos || []).length });
+      var upPhotos = (body.payload && body.payload.photos) || [];
+      var links = savePhotos(upPhotos, textOf(body.unit), textOf(body.payload && body.payload.id) || 'x', textOf(body.folderId));
+      return json({ ok: true, links: links, saved: links.length, asked: upPhotos.length });
     }
     if (body.action === 'loan') {
       var photos = appendLoan(body);
@@ -326,7 +343,7 @@ function doPost(e) {
       var c2 = syncAll(body);
       return json({ ok: true, msg: '已寫入總表（無 action，當 sync）', counts: c2, unit: body.unit });
     }
-    return json({ ok: false, error: '未知 action：' + body.action, got: Object.keys(body || {}), hint: '支援 action: ping / sync / status / saveDb / loadDb / dbInfo / claim / noticeSignup / loan / uploadPhotos / save / saveOtherBadge / reviewRequest / reviewLogRequest / addRequest / myRequests' });
+    return json({ ok: false, error: '未知 action：' + body.action, got: Object.keys(body || {}), hint: '支援 action: ping / sync / status / saveDb / saveDbPart / saveDbCommit / loadDb / dbInfo / claim / noticeSignup / loan / uploadPhotos / save / saveOtherBadge / reviewRequest / reviewLogRequest / addRequest / myRequests' });
   } catch (err) {
     return json({ ok: false, error: String(err) });
   }
@@ -466,6 +483,7 @@ function loadDb(unit) {
   var at = '', version = '';
   for (var i = 1; i < rows.length; i++) {
     var u = textOf(rows[i][0]);
+    if (u === '__staging__') continue;   // v2.4.0：分件暫存唔係正式資料
     if (unit && u && u !== unit) continue;
     if (!unit && !u) continue;
     parts.push({ seq: Number(rows[i][1]) || 0, text: String(rows[i][2] == null ? '' : rows[i][2]) });
@@ -480,6 +498,150 @@ function loadDb(unit) {
   } catch (e) {
     return { success: false, found: true, db: null, error: '資料庫內容壞咗（JSON 解析失敗），請用 app 嘅 JSON 備份還原' };
   }
+}
+
+/* v2.4.0 分件儲存：前端把 db 拆成 N 件逐件送（每件 < 3MB），
+   件寫入「資料庫」分頁嘅暫存行（unit='__staging__'，version=saveId，
+   seq = partIdx*100000 + chunkIdx），全部到齊後 saveDbCommit 原子式拼合。
+   好處：旅團用幾十年、db 幾十 MB 都照存得到（行現有所有路徑，包括 proxy）。 */
+function stagingRows(unit, saveId) {
+  var sh = dbSheet();
+  var rows = sh.getDataRange().getValues();
+  var out = [];
+  for (var i = 1; i < rows.length; i++) {
+    if (textOf(rows[i][0]) !== '__staging__') continue;
+    var ver = textOf(rows[i][4]);
+    if (saveId) { if (ver === saveId) out.push({ row: i + 1, seq: Number(rows[i][1]) || 0, text: String(rows[i][2] == null ? '' : rows[i][2]) }); }
+    else if (!unit || ver.indexOf(unit + '-stg-') === 0) out.push({ row: i + 1, at: rows[i][3] });
+  }
+  return out;
+}
+
+function saveDbPart(body) {
+  var unit = textOf(body.unit) || 'UNKNOWN';
+  var data = body.data;
+  var idx = Number(body.partIdx);
+  var parts = Number(body.parts);
+  if (!data || typeof data !== 'object') return { success: false, error: '冇收到分件內容（data）' };
+  if (!Number.isFinite(idx) || idx < 0 || !parts || idx >= parts) return { success: false, error: '分件編號唔啱（partIdx/parts）' };
+  var saveId = textOf(body.saveId);
+  if (saveId.indexOf(unit + '-stg-') !== 0) return { success: false, error: 'saveId 唔啱格式' };
+
+  var sh = dbSheet();
+  var rows = sh.getDataRange().getValues();
+
+  /* 版本檢查：同 saveDb 一樣 —— 第一件就擋，唔會寫咗一半先知撞版 */
+  var curVersion = '';
+  for (var v = rows.length - 1; v >= 1; v--) {
+    if (textOf(rows[v][0]) === unit) { curVersion = textOf(rows[v][4]); break; }
+  }
+  var baseVersion = textOf(body.baseVersion);
+  if (curVersion && baseVersion !== curVersion) {
+    return { success: false, conflict: true, version: curVersion, error: '後端已有較新版本（另一部機剛剛同步過）' };
+  }
+
+  /* 過期暫存清走（90 分鐘前嘅）—— 唔會越積越多 */
+  var cutoff = Date.now() - 90 * 60 * 1000;
+  var stale = stagingRows('');   // 全部暫存行（連 at）
+  var dead = stale.filter(function (r) {
+    var at = new Date(r.at || 0).getTime() || 0;
+    return at && at < cutoff;
+  }).map(function (r) { return r.row; });
+  var runs = [];
+  dead.forEach(function (rowNo) {
+    if (runs.length && runs[runs.length - 1][0] + runs[runs.length - 1][1] === rowNo) runs[runs.length - 1][1]++;
+    else runs.push([rowNo, 1]);
+  });
+  for (var rd = runs.length - 1; rd >= 0; rd--) sh.deleteRows(runs[rd][0], runs[rd][1]);
+
+  var text = JSON.stringify(data);
+  var chunks = [];
+  for (var p2 = 0; p2 < text.length; p2 += DB_CHUNK) chunks.push(text.substring(p2, p2 + DB_CHUNK));
+  if (!chunks.length) chunks = ['{}'];
+  var now = new Date();
+  var out = [];
+  for (var c2 = 0; c2 < chunks.length; c2++) out.push(['__staging__', idx * 100000 + (c2 + 1), chunks[c2], now, saveId]);
+  sh.getRange(sh.getLastRow() + 1, 1, out.length, 5).setValues(out);
+  return { success: true, partIdx: idx, chunks: chunks.length };
+}
+
+function saveDbCommit(body) {
+  var unit = textOf(body.unit) || 'UNKNOWN';
+  var saveId = textOf(body.saveId);
+  var parts = Number(body.parts);
+  if (saveId.indexOf(unit + '-stg-') !== 0) return { success: false, error: 'saveId 唔啱格式' };
+
+  var sh = dbSheet();
+  var rows = sh.getDataRange().getValues();
+
+  /* commit 前最後一次版本檢查 */
+  var curVersion = '';
+  for (var v = rows.length - 1; v >= 1; v--) {
+    if (textOf(rows[v][0]) === unit) { curVersion = textOf(rows[v][4]); break; }
+  }
+  var baseVersion = textOf(body.baseVersion);
+  if (curVersion && baseVersion !== curVersion) {
+    return { success: false, conflict: true, version: curVersion, error: '後端已有較新版本（另一部機剛剛同步過）' };
+  }
+
+  var got = stagingRows(unit, saveId);
+  if (!got.length) return { success: false, error: '搵唔到暫存分件（可能已過期，請重新儲存）' };
+  var byPart = {};
+  got.forEach(function (r) {
+    var idx = Math.floor(r.seq / 100000);
+    (byPart[idx] = byPart[idx] || []).push(r);
+  });
+  var missing = [];
+  for (var pi = 0; pi < parts; pi++) { if (!byPart[pi]) missing.push(pi); }
+  if (missing.length) return { success: false, error: '缺少分件：' + missing.join(', ') + '（請重新儲存）' };
+
+  /* 拼合：同一 key 所有件都係陣列 → 接駁（前端把大陣列拆件）；否則後件覆蓋 */
+  var merged = {};
+  var order = Object.keys(byPart).map(Number).sort(function (a, b) { return a - b; });
+  order.forEach(function (pi2) {
+    byPart[pi2].sort(function (a, b) { return a.seq - b.seq; });
+    var partDb = JSON.parse(byPart[pi2].map(function (r) { return r.text; }).join(''));
+    Object.keys(partDb).forEach(function (k) {
+      var incoming = partDb[k];
+      if (Array.isArray(incoming) && Array.isArray(merged[k])) merged[k] = merged[k].concat(incoming);
+      else merged[k] = incoming;
+    });
+  });
+  var text = JSON.stringify(merged);
+  if (text.length > 40000000) { cleanStaging(sh, got); return { success: false, error: '拼合後太大（>40MB）' }; }
+
+  /* 刪暫存＋舊段（成梳），寫入正式行 */
+  cleanStaging(sh, got);
+  var oldRuns = [];
+  for (var i = 1; i < rows.length; i++) {
+    if (textOf(rows[i][0]) !== unit) continue;
+    var rowNo = i + 1;
+    if (oldRuns.length && oldRuns[oldRuns.length - 1][0] + oldRuns[oldRuns.length - 1][1] === rowNo) oldRuns[oldRuns.length - 1][1]++;
+    else oldRuns.push([rowNo, 1]);
+  }
+  for (var rd2 = oldRuns.length - 1; rd2 >= 0; rd2--) sh.deleteRows(oldRuns[rd2][0], oldRuns[rd2][1]);
+
+  var now = new Date();
+  var version = now.toISOString() + '-' + Math.floor(Math.random() * 100000);
+  var chunks = [];
+  for (var p3 = 0; p3 < text.length; p3 += DB_CHUNK) chunks.push(text.substring(p3, p3 + DB_CHUNK));
+  if (!chunks.length) chunks = ['{}'];
+  var out2 = [];
+  for (var c3 = 0; c3 < chunks.length; c3++) out2.push([unit, c3 + 1, chunks[c3], now, version]);
+  sh.getRange(sh.getLastRow() + 1, 1, out2.length, 5).setValues(out2);
+
+  return { success: true, chunks: chunks.length, bytes: text.length, at: now, version: version, parts: parts };
+}
+
+function cleanStaging(sh, rowsArr) {
+  if (!rowsArr.length) return;
+  var deletes = rowsArr.map(function (r) { return r.row; }).sort(function (a, b) { return b - a; });
+  var run = null;
+  deletes.forEach(function (rowNo) {
+    if (run && run[0] === rowNo + 1) run[0] = rowNo;
+    else { if (run) sh.deleteRows(run[0], run[1]); run = [rowNo, 1]; }
+  });
+  if (run) sh.deleteRows(run[0], run[1]);
 }
 
 /** 只睇 meta：後端有冇資料、幾時更新（唔會傳成份資料庫落嚟）。
@@ -1065,7 +1227,7 @@ function appendClaim(body) {
     sh.appendRow(['旅團', '時間', '日期', '類型', '欄目', '項目', '金額', '付款人', '備註', '相片張數', '相片連結', '紀錄編號'])
       .getRange(1, 1, 1, 12).setFontWeight('bold');
   }
-  var links = savePhotos(p.photos || [], body.unit || '', p.id || '');
+  var links = savePhotos(p.photos || [], body.unit || '', p.id || '', textOf(body.folderId));
   sh.appendRow([
     body.unit || '', new Date(), p.date || '', p.type === 'income' ? '收入' : '支出',
     p.category || '', p.item || '', Number(p.amount) || 0, p.byName || '', p.note || '',
@@ -1075,11 +1237,32 @@ function appendClaim(body) {
 }
 
 /** 將 base64 相片存去 Drive（未設定資料夾就只記數量） */
-function savePhotos(photos, unit, id) {
+/** v2.3.0 單據 Drive 資料夾：優先次序
+ *  ① 前端明確指定（APP 內「財務 → 設定」填嘅 settings.receiptDrive，uploadPhotos 帶上嚟）
+ *  ② 該旅團資料庫 settings.receiptDrive（團員入口 entry.html 走呢條路）
+ *  ③ Apps Script Script Property DRIVE_FOLDER_ID（部署時設定嘅預設）
+ *  收連結或者 ID 都得（自動抽出 folders/… ID）。 */
+function receiptFolderId(explicit, unit) {
+  var v = textOf(explicit);
+  if (!v && unit) {
+    try {
+      var r = loadDb(unit);
+      if (r.found && r.db && r.db.settings) v = textOf(r.db.settings.receiptDrive);
+    } catch (e2) { /* 讀唔到就用預設 */ }
+  }
+  if (!v) return '';
+  var m = String(v).match(/folders\\/([A-Za-z0-9_-]{10,})/);
+  if (m) return m[1];
+  if (/^[A-Za-z0-9_-]{10,}$/.test(v)) return v;
+  return '';
+}
+
+function savePhotos(photos, unit, id, explicitFolder) {
   var out = [];
-  if (!DRIVE_FOLDER_ID) return out;
+  var fid = receiptFolderId(explicitFolder, unit) || DRIVE_FOLDER_ID;
+  if (!fid) return out;
   var folder;
-  try { folder = DriveApp.getFolderById(DRIVE_FOLDER_ID); } catch (e) { return out; }
+  try { folder = DriveApp.getFolderById(fid); } catch (e) { return out; }
   for (var i = 0; i < photos.length; i++) {
     try {
       var ph = photos[i];

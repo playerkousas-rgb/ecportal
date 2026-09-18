@@ -14,6 +14,7 @@ import {
   current, currentRole, isSuper, isMe, displayName, RESERVED_USERNAMES, TEMP_PASSWORD
 } from '../lib/auth.js';
 import { profile, settings, members, memberName, money, balance, tx, invItems } from '../lib/model.js';
+import * as fiscalLib from '../lib/fiscal.js';
 import { unitList, unitEntry, isLocalUnit, saveLocalUnit, removeLocalUnit, loadRegistry, registry } from '../lib/units.js';
 import { envUnitTemplate } from '../lib/onboard.js';
 import { esc, icon, modal, confirmDlg, toast, download, copyText, fmtDate, avatar, todayISO } from '../lib/util.js';
@@ -190,6 +191,9 @@ function unitView() {
             <div class="field"><label class="label">主色（棗紅）</label><input class="input" id="u-color" value="${esc(p.theme?.brand700 || '#7B2233')}"></div>
             <div class="field"><label class="label">年度團費</label><input class="input" id="u-fee" type="number" value="${s.feePerYear || 360}"></div>
             <div class="field"><label class="label">公開網址基底（可選）</label><input class="input" id="u-public" value="${esc(s.publicBaseUrl || '')}" placeholder="https://…/constitution.html?u={u}"></div>
+            <div class="field" style="grid-column:1/-1"><label class="label">單據相片 Drive 資料夾（同「財務 → 設定」同步）</label>
+              <input class="input" id="u-receipt" value="${esc(s.receiptDrive || '')}" placeholder="https://drive.google.com/drive/folders/…">
+              <div class="hint mt-4">申報相片會存入呢個資料夾（唔係上面「團員睇到嘅公開連結」嗰個旅團 Drive —— 兩樣嘢）。留空＝用後端預設。</div></div>
           </div>
           <div id="u-err" class="err mt-8"></div>
           <button class="btn btn-primary mt-16" data-act="save-unit" ${can('admin.units') ? '' : 'disabled'}>${icon('save', 16)} 儲存旅團資料</button>
@@ -460,7 +464,13 @@ export function mount(root) {
       p.theme = { ...(p.theme || {}), brand700: v('#u-color') };
       const db = load();
       db.unit = p;
-      db.settings = { ...db.settings, feePerYear: Number(v('#u-fee')) || 360, publicBaseUrl: v('#u-public') };
+      db.settings = { ...db.settings, feePerYear: Number(v('#u-fee')) || 360, publicBaseUrl: v('#u-public'), receiptDrive: v('#u-receipt').trim() };
+      /* 年度團費：同時寫入逐年 map（本年度）—— 財務「設定」頁逐年度表用同一份 */
+      try {
+        const { scoutFYLabel } = fiscalLib;
+        const fy = scoutFYLabel(new Date().toISOString().slice(0, 10), Number(db.settings.scoutFYStartMonth) || 4);
+        db.settings.feePerYearMap = { ...(db.settings.feePerYearMap || {}), [fy]: Number(v('#u-fee')) || 360 };
+      } catch { /* 年度 tag 計唔到都唔阻住儲存 */ }
       commit();
       toast('已儲存旅團資料', 'ok'); refresh(); return;
     }

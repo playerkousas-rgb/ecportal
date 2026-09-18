@@ -471,8 +471,10 @@ section('會議模式：右上「立即儲存」掣＋自動睇隊友更新');
   ok('狀態 badge 撳擊仍去「總表同步」詳情', /tables\/sync/.test(mainSrc));
   ok('remote.js 有 uploadPhotos（相片上 Drive，db 只留連結）',
     /export async function uploadPhotos/.test(remoteSrc) && /action: 'uploadPhotos'/.test(remoteSrc));
-  ok('pushDb 有 9MB 體積預警（8.5MB 就擋，叫去體積檢查）',
-    /too_big/.test(remoteSrc) && /8500000/.test(remoteSrc) && /體積檢查/.test(remoteSrc));
+  ok('pushDb 有體積路由（<2.8MB 單件；以上自動分件；>40MB 先硬止）',
+    /too_big/.test(remoteSrc) && /CHUNKED_ABOVE/.test(remoteSrc) && /saveDbPart/.test(remoteSrc) && /40000000/.test(remoteSrc));
+  ok('大 db 對舊後端會退返單件路（唔會靜靜地死）',
+    /未知 action/.test(remoteSrc) && /改用單一件儲存/.test(remoteSrc));
   const tablesSrc = fs.readFileSync(path.join(ROOT, 'assets/js/views/tables.js'), 'utf8');
   ok('總表同步有「體積檢查」同「相片瘦身」掣',
     /size-check/.test(tablesSrc) && /size-slim/.test(tablesSrc) && /slimClaimPhotos/.test(tablesSrc));
@@ -777,6 +779,226 @@ section('舊系統遷移（一鍵搬公開網址）');
   const rec = store.find('notices', 'n_legacy1');
   ok('通告 publicUrl 用搬完之後嘅新網址',
     notices.publicUrl(rec).startsWith('http://localhost:8080/notice.html?'), notices.publicUrl(rec));
+}
+
+/* ============================================================
+   ⑧ 分件儲存（v2.4.0 長壽命架構）
+   db 大過單一請求上限：自動拆件 → 逐件 saveDbPart → commit 拼合。
+   呢度測：拆件純函數、真 HTTP 分件 e2e、舊後端退返單件路。
+   ============================================================ */
+section('分件儲存：splitDbIntoParts（純函數契約）');
+{
+  const { splitDbIntoParts, PART_MAX_BYTES } = await import('../assets/js/lib/remote.js');
+  ok('PART_MAX_BYTES < 4MB（proxy 安全線之內）', PART_MAX_BYTES < 4 * 1048576, String(PART_MAX_BYTES));
+
+  const db = {
+    schema: 2, kind: 'ecportal', unitCode: '0082',
+    settings: { groupName: '第八十二旅' },
+    members: Array.from({ length: 40 }, (_, i) => ({ id: 'm' + i, name: '團員' + i })),
+    transactions: Array.from({ length: 5000 }, (_, i) => ({ id: 't' + i, amount: i, note: 'x'.repeat(200) })),
+    blob: 'y'.repeat(3000)
+  };
+  const parts = splitDbIntoParts(db, 400000);
+  ok('細 db 唔會拆件', splitDbIntoParts({ schema: 2, members: [{ id: 1 }] }).length === 1);
+  ok('大 db 會拆做多件', parts.length > 3, String(parts.length));
+  ok('每件都細過上限', parts.every(pt => JSON.stringify(pt).length <= 420000),
+    JSON.stringify(parts.map(pt => JSON.stringify(pt).length)));
+  ok('第一件有 meta 欄（schema／unitCode）', parts[0].schema === 2 && parts[0].unitCode === '0082');
+  const merged = {};
+  parts.forEach(pt => {
+    for (const [k, v] of Object.entries(pt)) {
+      merged[k] = Array.isArray(v) && Array.isArray(merged[k]) ? merged[k].concat(v) : v;
+    }
+  });
+  ok('拼合返：大陣列一條唔少（5000 筆帳）', merged.transactions.length === 5000, String(merged.transactions.length));
+  ok('拼合返：陣列內容無走樣', JSON.stringify(merged.transactions) === JSON.stringify(db.transactions));
+  ok('拼合返：細 key 照單全收', merged.settings?.groupName === '第八十二旅' && merged.blob === 'y'.repeat(3000));
+}
+
+section('分件儲存：真 HTTP（谷大 db → 自動分件 → 另一部機讀得返）');
+{
+  const { spawn } = await import('node:child_process');
+  const net0 = await import('node:net');
+  const freePort = () => new Promise((resolve, reject) => {
+    const srv = net0.createServer();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => { const { port } = srv.address(); srv.close(() => resolve(port)); });
+  });
+  const GAS_PORT = await freePort();
+  const WEB_PORT = await freePort();
+  const BASE = `http://127.0.0.1:${WEB_PORT}`;
+  const FAKE_EXEC = `http://127.0.0.1:${GAS_PORT}/exec`;
+  const procs = [];
+  const spawnBg = (args, env = {}) => {
+    const p = spawn(process.execPath, args, { cwd: ROOT, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    procs.push(p); return p;
+  };
+  const waitPort = async (port, ms = 8000) => {
+    const net = await import('node:net');
+    const t = Date.now();
+    while (Date.now() - t < ms) {
+      const up = await new Promise(r => {
+        const s2 = net.connect(port, '127.0.0.1');
+        s2.on('connect', () => { s2.destroy(); r(true); }); s2.on('error', () => r(false));
+      });
+      if (up) return true;
+      await new Promise(r2 => setTimeout(r2, 120));
+    }
+    return false;
+  };
+  const ENV = { TROOP_0082_BACKEND: FAKE_EXEC, TROOP_0082_APIKEY: 'test_key_0082', V82_PROXY_TEST: '1', PORT: String(WEB_PORT) };
+  try {
+    spawnBg([path.join(ROOT, 'tests', '_fakegas.mjs'), String(GAS_PORT)]);
+    spawnBg([path.join(ROOT, 'dev-server.mjs')], ENV);
+    ok('假後端＋dev-server 已啟動', await waitPort(GAS_PORT) && await waitPort(WEB_PORT));
+
+    const runDevice = (plan) => new Promise((resolve) => {
+      const p = spawn(process.execPath, [path.join(ROOT, 'tests', '_device.mjs'), BASE, JSON.stringify(plan)],
+        { cwd: ROOT, env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+      let buf = '', err = '';
+      p.stdout.on('data', d => { buf += d; });
+      p.stderr.on('data', d => { err += d; });
+      const done = (r) => { try { p.kill('SIGKILL'); } catch { /* ignore */ } resolve(r); };
+      const guard = setTimeout(() => done({ ok: false, error: '裝置逾時（60 秒）' }), 60000);
+      p.on('close', () => {
+        clearTimeout(guard);
+        const m = buf.match(/@@RESULT@@([\s\S]*?)@@END@@/);
+        if (!m) return resolve({ ok: false, error: (err || buf).slice(-600) });
+        try { resolve(JSON.parse(m[1])); } catch (e) { resolve({ ok: false, error: 'parse: ' + e.message }); }
+      });
+    });
+
+    /* 裝置 A：谷 1400 個團員（每人 2KB ≈ 2.9MB > 2.8MB 閾值）→ push 走分件 */
+    const A = await runDevice({ steps: [
+      { op: 'wipe' },
+      { op: 'bulkMembers', count: 1400, kb: 2, prefix: 'Big' },
+      { op: 'push' }
+    ] });
+    const bulkA = (A.steps || []).find(s2 => s2.op === 'bulkMembers');
+    ok('db 已谷大過分件閾值（>2.8MB）', (bulkA?.bytes || 0) > 2800000, String(bulkA?.bytes));
+    const pushA = (A.steps || []).find(s2 => s2.op === 'push');
+    ok('★ 大 db 自動分件儲存成功', pushA?.ok === true, JSON.stringify(pushA).slice(0, 200));
+    ok('★ 真係行咗分件路（≥2 件）', (pushA?.parts || 0) >= 2, String(pushA?.parts));
+
+    /* 裝置 B：新機讀返 —— 1400 個團員一個唔少 */
+    const B = await runDevice({ steps: [{ op: 'info' }, { op: 'pull' }] });
+    const infoB = (B.steps || []).find(s2 => s2.op === 'info');
+    ok('後端報返 1400 個團員（分件拼合啱數）', infoB?.counts?.members === 1400, JSON.stringify(infoB?.counts));
+    const pullB = (B.steps || []).find(s2 => s2.op === 'pull');
+    ok('新機讀返分件儲存嘅資料：1400 個一個唔少', pullB?.adopted?.members === 1400, String(pullB?.adopted?.members));
+
+    /* 分件之後再細改 → 下一鋪自動儲存照行（版本鏈冇斷） */
+    const C = await runDevice({ steps: [
+      { op: 'pull' },
+      { op: 'autosave', name: '分件後新團員', ymis: '2026999999', waitMs: 6000 }
+    ] });
+    const autoC = (C.steps || []).find(s2 => s2.op === 'autosave');
+    ok('分件儲存之後自動儲存照行（唔會鎖死）', autoC?.pending === 0 && autoC?.state === 'saved', JSON.stringify(autoC));
+    const D = await runDevice({ steps: [{ op: 'pull' }] });
+    const pullD = (D.steps || []).find(s2 => s2.op === 'pull');
+    ok('分件後嘅新改動都入咗後端', pullD?.adopted?.members === 1401, String(pullD?.adopted?.members));
+  } finally {
+    procs.forEach(p => { try { p.kill('SIGKILL'); } catch { /* ignore */ } });
+  }
+}
+
+section('分件儲存：舊後端（未部署 v2.4.0）會退返單件路');
+{
+  const { spawn } = await import('node:child_process');
+  const net0 = await import('node:net');
+  const http0 = await import('node:http');
+  const freePort = () => new Promise((resolve, reject) => {
+    const srv = net0.createServer();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => { const { port } = srv.address(); srv.close(() => resolve(port)); });
+  });
+  const GAS_PORT = await freePort();
+  const STUB_PORT = await freePort();
+  const WEB_PORT = await freePort();
+  const BASE = `http://127.0.0.1:${WEB_PORT}`;
+  const procs = [];
+  const spawnBg = (args, env = {}) => {
+    const p = spawn(process.execPath, args, { cwd: ROOT, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    procs.push(p); return p;
+  };
+  const waitPort = async (port, ms = 8000) => {
+    const net = await import('node:net');
+    const t = Date.now();
+    while (Date.now() - t < ms) {
+      const up = await new Promise(r => {
+        const s2 = net.connect(port, '127.0.0.1');
+        s2.on('connect', () => { s2.destroy(); r(true); }); s2.on('error', () => r(false));
+      });
+      if (up) return true;
+      await new Promise(r2 => setTimeout(r2, 120));
+    }
+    return false;
+  };
+
+  /* 舊後端 = 真假 GAS（識 saveDb/loadDb）＋一塊擋板：saveDbPart／Commit 回「未知 action」 */
+  const stub = http0.createServer((req, res) => {
+    let raw = '';
+    req.on('data', c => { raw += c; });
+    req.on('end', () => {
+      let body = {};
+      try { body = JSON.parse(raw || '{}'); } catch { /* ignore */ }
+      const a = body.action || '';
+      if (a === 'saveDbPart' || a === 'saveDbCommit') {
+        res.setHeader('Content-Type', 'application/json');
+        return res.end(JSON.stringify({ ok: false, success: false, error: '未知 action：' + a }));
+      }
+      const fwd = http0.request({ host: '127.0.0.1', port: GAS_PORT, path: '/exec', method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(raw) } }, (fr) => {
+        res.setHeader('Content-Type', fr.headers['content-type'] || 'application/json');
+        fr.pipe(res);
+      });
+      fwd.on('error', () => { res.statusCode = 502; res.end('{}'); });
+      fwd.end(raw);
+    });
+  });
+  await new Promise(r => stub.listen(STUB_PORT, '127.0.0.1', r));
+  try {
+    spawnBg([path.join(ROOT, 'tests', '_fakegas.mjs'), String(GAS_PORT)]);
+    spawnBg([path.join(ROOT, 'dev-server.mjs')],
+      { TROOP_0082_BACKEND: `http://127.0.0.1:${STUB_PORT}/exec`, TROOP_0082_APIKEY: 'test_key_0082', V82_PROXY_TEST: '1', PORT: String(WEB_PORT) });
+    ok('舊後端模擬器已啟動', await waitPort(GAS_PORT) && await waitPort(STUB_PORT) && await waitPort(WEB_PORT));
+
+    /* db 細：直接單件（唔會行分件，梗係得）；db 大：分件失敗 → 退返單件硬送（假後端唔設 body 上限，會收到） */
+    const runDevice = (plan) => new Promise((resolve) => {
+      const p = spawn(process.execPath, [path.join(ROOT, 'tests', '_device.mjs'), BASE, JSON.stringify(plan)],
+        { cwd: ROOT, env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+      let buf = '', err = '';
+      p.stdout.on('data', d => { buf += d; });
+      p.stderr.on('data', d => { err += d; });
+      const done = (r) => { try { p.kill('SIGKILL'); } catch { /* ignore */ } resolve(r); };
+      const guard = setTimeout(() => done({ ok: false, error: '裝置逾時（60 秒）' }), 60000);
+      p.on('close', () => {
+        clearTimeout(guard);
+        const m = buf.match(/@@RESULT@@([\s\S]*?)@@END@@/);
+        if (!m) return resolve({ ok: false, error: (err || buf).slice(-600) });
+        try { resolve(JSON.parse(m[1])); } catch (e) { resolve({ ok: false, error: 'parse: ' + e.message }); }
+      });
+    });
+
+    const A = await runDevice({ steps: [
+      { op: 'wipe' },
+      { op: 'addMember', name: '陳大文', ymis: '2026000001' },
+      { op: 'push' },
+      { op: 'bulkMembers', count: 1400, kb: 2, prefix: 'Big' },
+      { op: 'push' }
+    ] });
+    const pushes = (A.steps || []).filter(s2 => s2.op === 'push');
+    ok('細 db 單件儲存成功（冇行分件）', pushes[0]?.ok === true && (pushes[0]?.parts || 0) === 0, JSON.stringify(pushes[0]));
+    ok('★ 大 db 對舊後端：分件唔通都退返單件路存到', pushes[1]?.ok === true,
+      JSON.stringify(pushes[1] || A.error || A.steps?.map(s2 => s2.op))?.slice(0, 220));
+
+    const B = await runDevice({ steps: [{ op: 'info' }] });
+    const infoB = (B.steps || []).find(s2 => s2.op === 'info');
+    ok('舊後端真係收到（1401 個團員）', infoB?.counts?.members === 1401, JSON.stringify(infoB?.counts));
+  } finally {
+    procs.forEach(p => { try { p.kill('SIGKILL'); } catch { /* ignore */ } });
+    try { stub.close(); } catch { /* ignore */ }
+  }
 }
 
 console.log(`\n──────── 後端儲存測試結果：${pass} 通過 / ${fail} 失敗（${Date.now() - t0} ms）────────\n`);
