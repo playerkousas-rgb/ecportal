@@ -615,7 +615,7 @@ export function mount(root, params = {}) {
         title: '刪除用戶', okText: '確定刪除', requireText: m.name,
         message: `確定刪除 <b>${esc(m.name)}</b>（${esc(identityLabel(m))}）？<br>
           佢嘅出席紀錄會保留但名字會顯示為「—」。<br>
-          <span class="xs faint">删除只會改呢部裝置嘅資料庫；已經同步咗去總表嘅資料要另外處理。</span>`
+          <span class="xs faint">刪除只會改呢部裝置嘅資料庫；已經同步咗去總表嘅資料要另外處理。</span>`
       });
       if (!okDel) return;
       const snapshot = { ...m };

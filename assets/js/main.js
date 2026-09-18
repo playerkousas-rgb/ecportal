@@ -823,7 +823,7 @@ function renderLogin() {
     <main class="login-panel">
       <div class="login-card">
         ${mockBanner}
-        ${units.length > 1 ? `
+        ${false && units.length > 1 ? `
         <div class="field mb-16">
           <label class="label">旅團</label>
           <select class="select" id="loginUnit">
@@ -870,9 +870,7 @@ function renderLogin() {
           <div class="row-between wrap gap-8">
             <div class="xs faint">而家嘅旅團：<b class="mono">${esc(code)}</b>${isMock() ? '（示範模式）' : ''}</div>
             <div class="row gap-8 wrap">
-              <button class="btn btn-xs" id="loginDlGs" type="button">${icon('download', 13)} 下載 Code.gs</button>
-              <button class="btn btn-xs" id="loginGuide" type="button">${icon('note', 13)} 部署指南</button>
-              <button class="btn btn-xs" id="btnGate" type="button">${icon('refresh', 13)} 更換旅團 / 示範</button>
+              <button class="btn btn-xs" id="btnGate" type="button">${icon('refresh', 13)} 返回旅團選擇</button>
             </div>
           </div>
         </div>
@@ -973,10 +971,9 @@ function render() {
       </div>
 
       <div style="padding:10px 10px 0">
-        <button class="unit-chip" id="unitSwitch" style="width:100%;justify-content:space-between">
+        <div class="unit-chip" style="width:100%;justify-content:space-between;cursor:default">
           <span>${icon('flag', 13)} ${esc(currentUnit())}</span>
-          <span class="xs" style="opacity:.8">切換 ${icon('chevronD', 12)}</span>
-        </button>
+        </div>
       </div>
 
       <div class="sb-nav">
@@ -990,6 +987,7 @@ function render() {
             <div class="n truncate">${esc(displayName())}</div>
             <div class="r truncate">${esc(displaySub())}</div>
           </div>
+          <button class="btn btn-ghost btn-xs btn-icon" id="btnPw" title="改密碼" style="color:#D3A9B2">${icon('key', 15)}</button>
           <button class="btn btn-ghost btn-xs btn-icon" id="btnLogout" title="登出" style="color:#D3A9B2">${icon('logout', 15)}</button>
         </div>
       </div>
@@ -1005,6 +1003,7 @@ function render() {
           <span id="syncChip" class="no-print"></span>
           ${mock ? `<button class="btn btn-sm no-print" id="topMockExit" title="離開示範模式">${icon('logout', 14)} 離開示範</button>` : ''}
           ${notices().length ? `<span class="badge b-warn no-print"><span class="dot"></span>${notices().length} 項提示</span>` : ''}
+          <button class="btn btn-ghost btn-sm hide-desktop" id="btnPw2" title="改密碼">${icon('key', 16)}</button>
           <button class="btn btn-ghost btn-sm hide-desktop" id="btnLogout2" title="登出">${icon('logout', 16)}</button>
         </div>
       </header>
@@ -1038,8 +1037,10 @@ function render() {
       actions: [{ label: '取消', class: 'btn', value: false }, { label: '登出', class: 'btn-primary', value: true }]
     })) { logout(); document.body.classList.add('login-body'); renderLogin(); }
   }));
-  app.querySelector('#unitSwitch')?.addEventListener('click', unitPicker);
   app.querySelector('#topMockExit')?.addEventListener('click', () => exitMock());
+  app.querySelectorAll('#btnPw, #btnPw2').forEach(el => el.addEventListener('click', async () => {
+    go('#/admin/data');
+  }));
 
   /* 示範橫額「以 XXX 身份預覽」：<select> 撳落去選值係 change 事件（唔係 click），
      以前用 document click 攞 e.target.id 永遠攞唔到 → 下拉框係壞嘅。 */

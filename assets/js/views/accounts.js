@@ -33,6 +33,7 @@ const PASSWORD_RULES = [
 
 export function render(params) {
   if (['accounts', 'perms', 'data', 'unit', 'audit', 'mock'].includes(params.id)) tab = params.id;
+  if (tab === 'mock' && !isSuper()) tab = 'accounts';
   return `
   ${pageHead({
     title: '帳號與系統',
@@ -45,7 +46,7 @@ export function render(params) {
     ['unit', '旅團設定'],
     ['data', '資料管理'],
     ['audit', '操作紀錄'],
-    ['mock', '示範資料（MOCK）']
+    ...(isSuper() ? [['mock', '示範資料（MOCK）']] : [])
   ], tab)}
   ${tab === 'perms' ? permsView()
     : tab === 'unit' ? unitView()

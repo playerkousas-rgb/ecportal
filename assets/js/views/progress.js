@@ -16,7 +16,7 @@
    ============================================================ */
 
 import { load } from '../lib/store.js';
-import { profile, members, keyCoverage } from '../lib/model.js';
+import { profile, members, keyCoverage, progressRoster, progressIgnored, identityOf } from '../lib/model.js';
 import { esc, icon, modal, toast, todayISO } from '../lib/util.js';
 import { go } from '../lib/router.js';
 import { can, current } from '../lib/auth.js';
@@ -223,14 +223,14 @@ function membersView() {
   <div class="card">
     <div class="scroll-x"><table class="table table-compact">
       <thead><tr><th>團員</th><th>YMIS</th><th class="right">已勾</th>${catalog ? '<th style="width:190px">完成率</th>' : ''}<th class="right">最近</th><th>對應名冊</th><th></th></tr></thead>
-      <tbody>${rows.map(r => `<tr>
+      <tbody>${rows.map(r => `<tr data-member="${esc(r.ymis)}" style="cursor:pointer">
         <td class="semibold sm">${esc(r.name)}</td>
         <td class="mono xs">${esc(r.ymis)}</td>
         <td class="right mono">${r.done}</td>
         ${catalog ? `<td>${r.rate === null ? '<span class="faint xs">—</span>' : progressBar(r.rate)}</td>` : ''}
         <td class="right mono xs">${esc(r.lastDate || '—')}</td>
         <td class="sm ${r.matched ? '' : 'faint'}">${r.matched ? esc(r.localName || '') : '<span style="color:var(--warn)">未對上</span>'}</td>
-        <td class="right"><button class="btn btn-xs" data-member="${esc(r.ymis)}">明細</button></td>
+        <td class="right hide-mobile"><span class="xs faint">撳入明細</span></td>
       </tr>`).join('')}</tbody>
     </table></div>
   </div>`;
@@ -464,7 +464,8 @@ function settingsView() {
       <div class="card">
         <div class="card-head"><div class="card-title">跨系統對人</div></div>
         <div style="padding:14px 16px" class="sm muted">
-          用<b>會籍編號（YMIS）</b>對同一個人。現時對得上：<b>${keyCoverage().youthPercent}%</b>（團員／執委）。
+          用<b>會籍編號（YMIS）</b>對同一個人。現時對得上：<b>${keyCoverage(members(), { youthOnly: true }).percent}%</b>
+          （${keyCoverage(members(), { youthOnly: true }).matched}／${keyCoverage(members(), { youthOnly: true }).total} 位團員／執委；領袖同管理員唔計入進度）。
           <div class="mt-8"><button class="btn btn-sm btn-block" data-go="#/members">${icon('users', 15)} 去用戶名冊填 YMIS</button></div>
         </div>
       </div>

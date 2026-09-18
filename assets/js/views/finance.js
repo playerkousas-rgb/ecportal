@@ -62,7 +62,7 @@ export function render(params) {
     ['ledger', `帳目（${fy}）`, txInYear(fy).length],
     ['history', '過往紀錄'],
     ['reports', '財政年度報告'],
-    ['fees', '團費', fees().filter(f => !f.paid).length],
+    ['fees', '團費', feeStats().unpaidCount],
     ['claims', '收支申報', pendingClaims().length],
     ['budgets', '活動預算', budgets().length],
     ['import', '匯入舊帳'],

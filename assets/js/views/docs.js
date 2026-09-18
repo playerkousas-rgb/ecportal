@@ -34,16 +34,16 @@ const NAV = [
 ];
 
 export function render(params) {
-  /* 開新旅團嘅設定只有超級管理員做到（其他人冇 Vercel 權限），所以只俾超管見到 */
-  const nav = NAV.filter(([k]) => k !== 'newunit' || isSuper());
+  /* 用戶只需日常教學；MOCK／多旅團／開新旅團／總表同步只限超管 */
+  const userOk = new Set(['start', 'accounts', 'constitution', 'finance', 'daily', 'mobile', 'inventory', 'birthday', 'progress', 'backup']);
+  const nav = NAV.filter(([k]) => isSuper() ? (k !== 'newunit' || isSuper()) : userOk.has(k));
   if (params.id === 'newunit' && !isSuper()) section = 'newunit';          // 直接打網址入嚟 → 下面會顯示「只限超管」
   else if (nav.some(([k]) => k === params.id)) section = params.id;
   return `
   ${pageHead({
     title: '使用教學',
     sub: `畀執委、領袖同新接手嘅團員睇 —— 由登入到輸出文件一步一步`,
-    actions: `<button class="btn btn-sm" data-act="print">${icon('print', 15)} 列印教學</button>
-      <button class="btn btn-sm" data-go="#/admin/mock">${icon('eye', 15)} 試示範模式</button>`
+    actions: `<button class="btn btn-sm" data-act="print">${icon('print', 15)} 列印教學</button>`
   })}
   <div class="grid g-1-2">
     <div class="card no-print" style="align-self:start">
@@ -107,8 +107,7 @@ function startDoc() {
       <tr><td>團章 / 進度 / 帳號與系統</td><td>團章編輯輸出、讀寫進度紀錄、帳戶及資料管理</td></tr>
     </tbody>
   </table>
-  ${H('3. 想試下先？')}
-  ${P('按左邊目錄最底嘅「示範資料（MOCK）」，或者喺登入頁按「試用示範」——所有操作都寫入獨立嘅示範空間，唔會搞亂真實資料。')}`;
+  ${isSuper() ? `${H('3. 想試下先？')}${P('超管可喺登入前揀「試用示範（MOCK）」。')}` : ''}`;
 }
 
 function accountsDoc() {
