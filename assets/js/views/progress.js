@@ -487,6 +487,11 @@ export function render(params) {
   if (params?.id && ['overview', 'members', 'tick', 'review', 'settings'].includes(params.id)) tab = params.id;
   else tab = 'overview';   // 由側邊欄入返嚟時，返去總覽
   const configured = progressConfigured();
+  /* 分頁數字要同「成員進度」表格一致 —— summarizeRemote 會剔走管理員／領袖，
+     以前呢度直接用後端 raw members 數，搞到「標籤 12 人、表得 11 行」。 */
+  const memberCount = configured && remote
+    ? summarizeRemote(remote.data, { catalog, roster: members() }).memberCount
+    : 0;
 
   return `
   ${pageHead({
@@ -502,7 +507,7 @@ export function render(params) {
   ${tabs([
     ['overview', '總覽'],
     ...(configured ? [
-      ['members', `成員進度${remote ? `（${(remote.data.members || []).length}）` : ''}`],
+      ['members', `成員進度${remote ? `（${memberCount}）` : ''}`],
       ['tick', can('progress.tick') ? '勾選進度' : '勾選進度（無權限）', Object.keys(pending).length || undefined],
       ['review', `審批中心${reviewCount() ? `（${reviewCount()}）` : ''}`]
     ] : []),

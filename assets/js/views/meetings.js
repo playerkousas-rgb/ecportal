@@ -13,10 +13,25 @@ import {
 } from '../lib/util.js';
 import { go, setQuery } from '../lib/router.js';
 import { can, current } from '../lib/auth.js';
+import { noteBox } from './ui.js';
 
 let viewMode = 'list';
 let filterStatus = 'all';
 let keyword = '';
+
+/* ---------- 出席點名草稿（2026-09-18 團長回報改） ----------
+   以前撳一下出席掣就即刻寫入（自動同步後端），成頁重繪又彈返上去頂。
+   而家：撳掣只記 draft（局部重繪、唔跳位），撳「確定出席」先一次過寫入。 */
+let attDraft = null;         // { [memberId]: 'present'|'late'|'apology'|'absent'|'' }
+let attDraftFor = '';        // draft 屬於邊個會議
+
+function attEff(m, mid) {
+  if (attDraftFor === m.id && attDraft && attDraft[mid] !== undefined) return attDraft[mid];
+  return (m.attendance || {})[mid] || '';
+}
+function attDirty(m) {
+  return attDraftFor === m.id && !!attDraft && Object.keys(attDraft).length > 0;
+}
 
 export function title() { return '會議'; }
 
@@ -201,6 +216,8 @@ let tab = 'agenda';
 function detail(id, query) {
   const m = find('meetings', id);
   if (!m) return `<div class="card"><div class="empty">${icon('alert', 34)}<div class="empty-title">搵唔到呢個會議</div></div></div>`;
+  /* 開另一個會議：丟埋上一個嘅未確定出席草稿（唔會帶過去第二個會議） */
+  if (attDraftFor && attDraftFor !== m.id) { attDraft = null; attDraftFor = ''; }
   tab = query.tab || 'agenda';
 
   const att = m.attendance || {};
@@ -282,34 +299,99 @@ function agendaPane(m) {
 
 /* ---------- 出席 ---------- */
 function attendPane(m) {
-  const att = m.attendance || {};
+  return `<div id="attPane">${attendInner(m)}</div>`;
+}
+
+function attendInner(m) {
   const roster = members().filter(x => x.status !== 'alumni');
-  const n = k => roster.filter(x => att[x.id] === k).length;
+  const n = k => roster.filter(x => attEff(m, x.id) === k).length;
   const editable = can('meeting.minutes') && m.status !== 'cancelled';
+  const dirty = editable && attDirty(m);
+  const nChanges = dirty ? Object.keys(attDraft).length : 0;
+  const marked = roster.filter(x => attEff(m, x.id)).length;
   return `<div class="card">
     <div class="card-head">
       <div><div class="card-title">出席點名</div>
-        <div class="card-sub">出席 ${n('present')} · 遲到 ${n('late')} · 請假 ${n('apology')} · 缺席 ${n('absent')} · 未點 ${roster.length - n('present') - n('late') - n('apology') - n('absent')}</div></div>
+        <div class="card-sub">已點 ${marked}/${roster.length} · 出席 ${n('present')} · 遲到 ${n('late')} · 請假 ${n('apology')} · 缺席 ${n('absent')}${dirty ? ` · <b style="color:var(--warn)">有 ${nChanges} 個改動未確定</b>` : ''}</div></div>
       <div class="row gap-6 no-print">
-        ${editable ? `<button class="btn btn-xs" data-act="all-present">全部出席</button>` : ''}
+        ${editable ? `<button class="btn btn-xs" data-attact="all">全部出席</button>
+        <button class="btn btn-xs" data-attact="discard" ${dirty ? '' : 'disabled'}>放棄改動</button>
+        <button class="btn btn-xs btn-primary" data-attact="commit" ${dirty ? '' : 'disabled'}>${icon('check', 13)} 確定出席${dirty ? `（${nChanges}）` : ''}</button>` : ''}
       </div>
     </div>
+    ${editable ? noteBox(dirty
+      ? `有 ${nChanges} 個改動<b>仲未儲存</b> —— 撳右上「確定出席」先會一次過寫入後端。`
+      : '撳掣點名<b>唔會即刻寫入後端</b>；點晒名先撳右上「確定出席」，一次過儲存。再撳同一格可以還原。', dirty ? 'warn' : 'brand') : ''}
     <div class="table-scroll scroll-x"><table class="table">
       <thead><tr><th>團員</th><th>職位</th><th class="center">出席</th><th class="center">遲到</th><th class="center">請假</th><th class="center">缺席</th><th class="center">清除</th></tr></thead>
-      <tbody>${roster.map(mb => `
+      <tbody>${roster.map(mb => {
+        const v = attEff(m, mb.id);
+        return `
         <tr>
           <td><div class="row gap-8">${avatar(mb.name, 'avatar-sm')}<div><div class="semibold sm">${esc(mb.name)}</div>
             <div class="xs faint">${esc(mb.role)}</div></div></div></td>
           <td class="xs muted">${esc(mb.role)}</td>
           ${['present', 'late', 'apology', 'absent'].map(k => `
-            <td class="center"><button class="btn btn-xs ${att[mb.id] === k ? (k === 'present' ? 'btn-soft' : 'btn') : 'btn-ghost'}"
+            <td class="center"><button class="btn btn-xs ${v === k ? (k === 'present' ? 'btn-soft' : 'btn') : 'btn-ghost'}"
               data-att="${mb.id}" data-val="${k}" ${editable ? '' : 'disabled'}>
-              ${att[mb.id] === k ? icon('check', 14) : ''}${ATTEND[k].label}</button></td>`).join('')}
+              ${v === k ? icon('check', 14) : ''}${ATTEND[k].label}</button></td>`).join('')}
           <td class="center"><button class="btn btn-xs btn-ghost" data-att="${mb.id}" data-val="" ${editable ? '' : 'disabled'}>${icon('x', 14)}</button></td>
-        </tr>`).join('')}
+        </tr>`;
+      }).join('')}
       </tbody>
     </table></div>
   </div>`;
+}
+
+/** 只重繪出席嗰嚿 —— 唔會成頁重繪、唔會彈返上去頂 */
+function paintAttPane(root, m) {
+  const host = root.querySelector('#mtPane');
+  if (!host || !m) return;
+  if (!host.querySelector('#attPane')) return;
+  host.innerHTML = attendPane(m);
+  bindAttendPane(root, m);
+}
+
+function bindAttendPane(root, m) {
+  const pane = root.querySelector('#attPane');
+  if (!pane || !m) return;
+  const editable = can('meeting.minutes') && m.status !== 'cancelled';
+  pane.querySelectorAll('[data-att]').forEach(btn => btn.addEventListener('click', () => {
+    if (!editable) return;
+    if (attDraftFor !== m.id || !attDraft) { attDraft = {}; attDraftFor = m.id; }
+    const mid = btn.dataset.att, v = btn.dataset.val;
+    if (v === '') {
+      /* 清除：本身有紀錄 → 確定時刪走；本身冇 → 撤返 draft */
+      if ((m.attendance || {})[mid]) attDraft[mid] = '';
+      else delete attDraft[mid];
+    } else if (attEff(m, mid) === v) delete attDraft[mid];   // 再撳同一格＝還原
+    else attDraft[mid] = v;
+    paintAttPane(root, m);
+  }));
+  pane.querySelectorAll('[data-attact]').forEach(b => b.addEventListener('click', () => {
+    if (!editable) return;
+    const act = b.dataset.attact;
+    if (act === 'all') {
+      if (attDraftFor !== m.id || !attDraft) { attDraft = {}; attDraftFor = m.id; }
+      members().filter(x => x.status !== 'alumni').forEach(x => { attDraft[x.id] = 'present'; });
+      toast('已暫存全部出席 —— 記得撳「確定出席」', 'info');
+      paintAttPane(root, m);
+    } else if (act === 'discard') {
+      attDraft = {}; attDraftFor = m.id;
+      paintAttPane(root, m);
+    } else if (act === 'commit') {
+      if (!attDirty(m)) return;
+      const att = { ...(m.attendance || {}) };
+      let on = 0, off = 0;
+      Object.entries(attDraft).forEach(([mid, v]) => {
+        if (v) { att[mid] = v; on++; } else { delete att[mid]; off++; }
+      });
+      update('meetings', m.id, { attendance: att, updatedAt: nowStamp() });
+      toast(`出席已確定：標記 ${on} 項、清除 ${off} 項，一次過寫入後端 ✓`, 'ok');
+      attDraft = {}; attDraftFor = m.id;
+      paintAttPane(root, m);
+    }
+  }));
 }
 
 /* ---------- 會議記錄 ---------- */
@@ -482,15 +564,8 @@ export function mount(root, params) {
     });
   }
 
-  // 出席點名
-  root.querySelectorAll('[data-att]').forEach(btn => btn.addEventListener('click', () => {
-    if (!m || !can('meeting.minutes')) return;
-    const att = { ...(m.attendance || {}) };
-    const v = btn.dataset.val;
-    if (v) att[btn.dataset.att] = v; else delete att[btn.dataset.att];
-    update('meetings', m.id, { attendance: att, updatedAt: nowStamp() });
-    refreshPane();
-  }));
+  // 出席點名（草稿制 —— 確定先一次過寫入；局部重繪，唔會彈上去頂）
+  bindAttendPane(root, m);
 
   // 各項動作
   root.querySelectorAll('[data-act]').forEach(btn => {
@@ -543,13 +618,6 @@ export function mount(root, params) {
           update('meetings', m.id, { agenda: m.agenda.filter(x => x.id !== btn.dataset.id), updatedAt: nowStamp() });
           toast('已刪除'); refreshPane();
         }
-      }
-
-      if (act === 'all-present') {
-        const att = {};
-        members().filter(x => x.status !== 'alumni').forEach(x => att[x.id] = 'present');
-        update('meetings', m.id, { attendance: att, updatedAt: nowStamp() });
-        toast('已標記全部出席', 'ok'); refreshPane();
       }
 
       if (act === 'edit-minutes') {

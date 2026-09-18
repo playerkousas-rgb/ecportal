@@ -4,10 +4,26 @@ import { memberName, RSVP, rsvpCounts, attendanceStats, activeMembers } from '..
 import { esc, icon, uid, todayISO, toast, modal, confirmDlg } from '../lib/util.js';
 import { go } from '../lib/router.js';
 import { can } from '../lib/auth.js';
-import { pageHead, tabs, stat, empty } from './ui.js';
+import { pageHead, tabs, stat, empty, noteBox } from './ui.js';
 
 let tab = 'cal';
 let cursor = todayISO().slice(0, 7);
+
+/* ---------- 點名草稿（2026-09-18 團長回報改） ----------
+   以前撳一下就寫入資料庫（跟住仲自動同步去後端），而且成頁重繪彈返上去頂。
+   而家：撳掣只係記喺 draft，改到啱為止；撳「確定點名」先一次過寫入
+   （一次 persist ＝ 一次後端同步），期間只係局部重繪點名嗰嚿，唔會跳位。 */
+let rollDraft = null;        // { [memberId]: status }
+let rollDraftFor = '';       // draft 屬於邊個活動
+
+function rollEff(e, mid) {
+  if (rollDraftFor === String(e.id) && rollDraft && rollDraft[mid] !== undefined) return rollDraft[mid];
+  const base = (e.rollcall || {})[mid];
+  return (base && typeof base === 'object' ? base.status : base) || '';
+}
+function rollDirty(e) {
+  return rollDraftFor === String(e.id) && !!rollDraft && Object.keys(rollDraft).length > 0;
+}
 
 export function title() { return '行事曆'; }
 export function refresh() { window.dispatchEvent(new CustomEvent('v82:refresh')); }
@@ -123,9 +139,90 @@ function peopleOf(ev, key) {
   return groups;
 }
 
+/* ---------- 點名 pane（草稿制：確定先寫入） ---------- */
+function rollPaneInner(e, roster) {
+  const dirty = rollDirty(e);
+  const marked = roster.filter(m => rollEff(e, m.id)).length;
+  const nChanges = dirty ? Object.keys(rollDraft).length : 0;
+  return `<div class="card">
+    <div class="card-head"><div><div class="card-title">執委點名</div>
+      <div class="card-sub">已點 ${marked} / ${roster.length} · 點名結果會計入出席統計${dirty ? ` · <b style="color:var(--warn)">有 ${nChanges} 個改動未確定</b>` : ''}</div></div>
+      <div class="row gap-6 wrap">
+        <button class="btn btn-xs" data-attact="all">全部出席</button>
+        <button class="btn btn-xs" data-attact="discard" ${dirty ? '' : 'disabled'}>放棄改動</button>
+        <button class="btn btn-xs btn-primary" data-attact="commit" ${dirty ? '' : 'disabled'}>${icon('check', 13)} 確定點名${dirty ? `（${nChanges}）` : ''}</button>
+      </div></div>
+    ${noteBox(dirty
+      ? `有 ${nChanges} 個改動<b>仲未儲存</b> —— 撳右上「確定點名」先會一次過寫入後端。`
+      : '撳掣點名<b>唔會即刻寫入後端</b>；點晒全團先撳右上「確定點名」，一次過儲存。中途撳錯可以「放棄改動」或者再撳同一個掣還原。', dirty ? 'warn' : 'brand')}
+    <div class="scroll-x"><table class="table table-compact">
+      <thead><tr><th>成員</th><th>回覆</th><th>點名</th></tr></thead>
+      <tbody>${roster.map(m => {
+        const r = (e.rsvp || {})[m.id];
+        const rst = r?.status || r || '';
+        const cst = rollEff(e, m.id);
+        return `<tr>
+          <td class="semibold sm">${esc(m.name)}</td>
+          <td class="xs">${rst ? RSVP[rst]?.label : '—'}</td>
+          <td>${['present','absent','late','early'].map(k =>
+            `<button class="btn btn-xs ${cst === k ? 'btn-primary' : 'btn-ghost'}" data-roll="${m.id}" data-val="${k}">${RSVP[k].label}</button>`).join(' ')}</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table></div>
+  </div>`;
+}
+
+/** 只重繪點名嗰嚿 —— 唔會成頁重繪、唔會彈返上去頂 */
+function paintRollPane(root, params) {
+  const host = root.querySelector('#rollPane');
+  const e = find('events', params.id);
+  if (!host || !e) return;
+  host.innerHTML = rollPaneInner(e, activeMembers());
+  bindRollPane(root, params);
+}
+
+function bindRollPane(root, params) {
+  const pane = root.querySelector('#rollPane');
+  if (!pane) return;
+  pane.querySelectorAll('[data-roll]').forEach(b => b.addEventListener('click', () => {
+    const e = find('events', params.id);
+    if (!e) return;
+    if (rollDraftFor !== String(e.id) || !rollDraft) { rollDraft = {}; rollDraftFor = String(e.id); }
+    const mid = b.dataset.roll, v = b.dataset.val;
+    if (rollEff(e, mid) === v) delete rollDraft[mid];       // 再撳同一個＝還原
+    else rollDraft[mid] = v;
+    paintRollPane(root, params);
+  }));
+  pane.querySelectorAll('[data-attact]').forEach(b => b.addEventListener('click', async () => {
+    const e = find('events', params.id);
+    if (!e) return;
+    const act = b.dataset.attact;
+    if (act === 'all') {
+      if (rollDraftFor !== String(e.id) || !rollDraft) { rollDraft = {}; rollDraftFor = String(e.id); }
+      activeMembers().forEach(m => { rollDraft[m.id] = 'present'; });
+      toast('已暫存全部出席 —— 記得撳「確定點名」', 'info');
+      paintRollPane(root, params);
+    } else if (act === 'discard') {
+      rollDraft = {}; rollDraftFor = String(e.id);
+      paintRollPane(root, params);
+    } else if (act === 'commit') {
+      if (!rollDirty(e)) return;
+      const roll = { ...(e.rollcall || {}) };
+      let n = 0;
+      Object.entries(rollDraft).forEach(([mid, st]) => { roll[mid] = { status: st, at: todayISO() }; n++; });
+      update('events', e.id, { rollcall: roll });
+      toast(`已點名 ${n} 個改動，一次過寫入後端 ✓`, 'ok');
+      rollDraft = {}; rollDraftFor = String(e.id);
+      paintRollPane(root, params);
+    }
+  }));
+}
+
 function detail(id, query) {
   const e = find('events', id);
   if (!e) return empty('alert', '搵唔到呢個活動');
+  /* 開另一個活動：丟埋上一個嘅未確定點名草稿（唔會帶過去第二個活動） */
+  if (rollDraftFor && rollDraftFor !== String(id)) { rollDraft = null; rollDraftFor = ''; }
   const pane = query.tab || 'info';
   const c = rsvpCounts(e);
   const rsvp = peopleOf(e, 'rsvp');
@@ -152,26 +249,7 @@ function detail(id, query) {
   ${pane === 'who' ? `<div class="grid g-2">${['present','absent','late','early'].map(k => `
     <div class="card"><div class="card-head"><div class="card-title">${RSVP[k].label}（${rsvp[k].length}）</div></div>
       <div style="padding:12px 16px" class="sm">${rsvp[k].length ? rsvp[k].map(esc).join('、') : '<span class="faint">未有</span>'}</div></div>`).join('')}</div>`
-  : pane === 'roll' ? `<div class="card">
-      <div class="card-head"><div><div class="card-title">執委點名</div>
-        <div class="card-sub">點名結果會計入出席統計。已點 ${c.rollTotal} / ${roster.length}</div></div>
-        <button class="btn btn-xs" data-act="all-present">全部出席</button></div>
-      <div class="scroll-x"><table class="table table-compact">
-        <thead><tr><th>成員</th><th>回覆</th><th>點名</th></tr></thead>
-        <tbody>${roster.map(m => {
-          const r = (e.rsvp || {})[m.id];
-          const rc = (e.rollcall || {})[m.id];
-          const rst = r?.status || r || '';
-          const cst = rc?.status || rc || '';
-          return `<tr>
-            <td class="semibold sm">${esc(m.name)}</td>
-            <td class="xs">${rst ? RSVP[rst]?.label : '—'}</td>
-            <td>${['present','absent','late','early'].map(k =>
-              `<button class="btn btn-xs ${cst === k ? 'btn-primary' : 'btn-ghost'}" data-roll="${m.id}" data-val="${k}">${RSVP[k].label}</button>`).join(' ')}</td>
-          </tr>`;
-        }).join('')}</tbody>
-      </table></div>
-    </div>`
+  : pane === 'roll' ? `<div id="rollPane">${rollPaneInner(e, roster)}</div>`
   : `<div class="card card-pad"><div class="sm" style="white-space:pre-wrap">${esc(e.detail || '未有詳細內容')}</div>
       ${e.fee ? `<div class="mt-12 xs">費用：${esc(e.fee)}</div>` : ''}
       ${e.deadline ? `<div class="xs">回覆截止：${esc(e.deadline)}</div>` : ''}</div>`}`;
@@ -231,22 +309,8 @@ export function mount(root, params) {
   root.querySelectorAll('[data-dtab]').forEach(b => b.addEventListener('click', () => {
     go('#/calendar/' + params.id + '?tab=' + b.dataset.dtab);
   }));
-  root.querySelectorAll('[data-roll]').forEach(b => b.addEventListener('click', () => {
-    const e = find('events', params.id);
-    if (!e) return;
-    const roll = { ...(e.rollcall || {}) };
-    roll[b.dataset.roll] = { status: b.dataset.val, at: todayISO() };
-    update('events', e.id, { rollcall: roll });
-    refresh();
-  }));
-  root.querySelector('[data-act="all-present"]')?.addEventListener('click', () => {
-    const e = find('events', params.id);
-    if (!e) return;
-    const roll = { ...(e.rollcall || {}) };
-    activeMembers().forEach(m => { roll[m.id] = { status: 'present', at: todayISO() }; });
-    update('events', e.id, { rollcall: roll });
-    toast('已全部點出席', 'ok'); refresh();
-  });
+  /* 點名（草稿制 —— 確定先一次過寫入；局部重繪，唔會彈上去頂） */
+  bindRollPane(root, params);
   root.querySelector('[data-act="edit"]')?.addEventListener('click', () => go('#/calendar/' + params.id + '/edit'));
   if (params.action === 'edit' && params.id) {
     /* fall through save on editor if we rendered editor via id/edit — handled below if render used editor */

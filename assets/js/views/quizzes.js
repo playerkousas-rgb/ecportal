@@ -11,15 +11,24 @@ let tab = 'list';
 export function title() { return '試卷'; }
 export function refresh() { window.dispatchEvent(new CustomEvent('v82:refresh')); }
 
+/* ---------- 題目文字解析 ----------
+   三種食法：
+   ① Google Form 列印 PDF 抽出嚟嘅文字（pdftext.js 會將選項行加兩格縮排）
+   ② 人手貼嘅「1. 題目」＋「A. 選項」
+   ③ CSV／TSV：題目,類型,選項（用 | 分隔）,必填 */
+const QUIZ_JUNK = /^(?:[＊*]+\s*必填|必填|required|[＊*]+|提交|submit|清除表單|重新填寫|重新整理|取得連結|google[\s\S]{0,24}forms?|google[\s\S]{0,24}表單|docs\.google\.com\S*|\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}日?)\s*$/i;
+const isNumberedQ = t => /^(?:\d+[.、)]|Q\d+[:：]?|題目[:：])/i.test(t);
+const endsQuestion = t => /[?？]\s*$/.test(t);
+const stripOptBullet = t => t.replace(/^(?:[([]?[A-Da-d][)\].、]\s*|[-•●○◯□■▪·◇◆]\s*)/, '').trim();
+
 export function parseQuizImport(text) {
   const raw = String(text || '').replace(/^\uFEFF/, '').trim();
   if (!raw) return { title: '', questions: [], error: '空白內容' };
-  const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-  const questions = [];
-  let title = '';
-  const isCsv = lines[0] && (lines[0].includes(',') || lines[0].includes('\t'))
-    && /題|question|title|類型|type/i.test(lines[0]);
+  const allLines = raw.split(/\r?\n/);
+  const first = (allLines.find(l => l.trim()) || '').trim();
+  const isCsv = (first.includes(',') || first.includes('\t')) && /題|question|title|類型|type/i.test(first);
   if (isCsv) {
+    const lines = allLines.map(l => l.trim()).filter(Boolean);
     const delim = lines[0].includes('\t') ? '\t' : ',';
     const split = row => {
       const out = []; let cur = '', q = false;
@@ -37,42 +46,104 @@ export function parseQuizImport(text) {
     const iType = head.findIndex(h => /類型|type/.test(h));
     const iOpts = head.findIndex(h => /選|option|choices/.test(h));
     const iReq = head.findIndex(h => /必|required/.test(h));
+    const questions = [];
     lines.slice(1).forEach(row => {
       const cols = split(row);
       const prompt = cols[iTitle >= 0 ? iTitle : 0] || '';
       if (!prompt) return;
       const typeRaw = (cols[iType] || 'short').toLowerCase();
       let type = 'short';
-      if (/多選|checkbox|multi/.test(typeRaw)) type = 'multi';
-      else if (/單選|choice|radio|select/.test(typeRaw)) type = 'single';
-      else if (/段落|para|long/.test(typeRaw)) type = 'para';
+      if (/多選|複選|核取|checkbox|multi/.test(typeRaw)) type = 'multi';
+      else if (/單選|single|choice|radio|select/.test(typeRaw)) type = 'single';
+      else if (/段落|長答|para|long/.test(typeRaw)) type = 'para';
       const opts = (cols[iOpts] || '').split(/[|;／、]/).map(s => s.trim()).filter(Boolean);
       questions.push({ id: uid('qq'), prompt, type, options: opts, required: /是|yes|1|true/i.test(cols[iReq] || '') });
     });
-  } else {
-    let cur = null;
-    lines.forEach(line => {
-      const t = line.match(/^(?:標題|試卷)[:：]\s*(.+)/);
-      if (t) { title = t[1]; return; }
-      const q = line.match(/^(?:\d+[\.\)、]|Q\d+[:：]?|題目[:：])\s*(.+)/i);
-      if (q) {
-        if (cur) questions.push(cur);
-        cur = { id: uid('qq'), prompt: q[1], type: 'short', options: [], required: true };
-        return;
-      }
-      const opt = line.match(/^(?:[\(\[]?[A-Da-d][\)\].、]|[-•●])\s*(.+)/);
-      if (opt && cur) {
-        cur.options.push(opt[1]);
-        cur.type = cur.options.length > 1 ? 'single' : cur.type;
-        return;
-      }
-      if (cur && !cur.options.length) cur.prompt += ' ' + line;
-      else if (!cur) title = title || line;
-    });
-    if (cur) questions.push(cur);
+    if (!questions.length) return { title: '', questions, error: 'CSV 讀唔到題目（欄：題目,類型,選項,必填）' };
+    return { title: '', questions, error: '' };
   }
-  if (!questions.length) return { title, questions, error: '讀唔到題目。請用「1. 題目」加 A/B 選項，或 CSV（題目,類型,選項）。' };
-  return { title, questions, error: '' };
+
+  /* ---------- 純文字（PDF 抽出 或 人手貼） ---------- */
+  const lines = allLines.map(l => {
+    const m = l.match(/^\s+/);
+    const indent = m && m[0].includes('\t') ? '  ' : (m ? ' '.repeat(Math.min(2, Math.ceil(m[0].length / 2) * 2)) : '');
+    /* Forms 嘅必填星標：行頭／行尾嘅 * 都丟走 */
+    return indent + l.trim().replace(/^[＊*]{1,2}\s*/, '').replace(/\s*[＊*]{1,2}$/, '');
+  });
+  const hasIndent = lines.some(l => /^ {2}\S/.test(l));
+
+  const questions = [];
+  let title = '';
+  let cur = null;
+  let pending = '';   // 題目斷行：等埋下一截
+
+  const startQ = t => {
+    /* 斷開嘅題目前半（pending）接返埋 —— 但如果前半以句號收尾，多數係描述，唔好黐埋 */
+    const merged = pending && !/[。！？；;!?]$/.test(pending) && (pending + ' ' + t).length <= 120
+      ? pending + ' ' + t : t;
+    cur = { id: uid('qq'), prompt: merged, type: 'short', options: [], required: true };
+    if (/核取|複選|多選|checkbox/i.test(cur.prompt)) cur.type = 'multi';
+    questions.push(cur);
+    pending = '';
+  };
+  const addOpt = t => {
+    if (!cur) return;
+    const clean = stripOptBullet(t);
+    if (!clean) return;
+    cur.options.push(clean);
+    if (cur.type !== 'multi' && (/核取|複選|多選|checkbox/i.test(t) || /核取|複選|多選|checkbox/i.test(cur.prompt))) cur.type = 'multi';
+    else if (cur.type === 'short' && cur.options.length > 1) cur.type = 'single';
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const t = line.trim();
+    if (!t) continue;
+    /* 「標題：xxx」／「試卷：xxx」直接入標題 */
+    const tm = t.match(/^(?:標題|試卷)[:：]\s*(.+)/);
+    if (tm) { if (!title) title = tm[1]; continue; }
+    /* 垃圾行（必填／頁碼／提交／Google Forms 版尾…）；問號結尾嘅照當題目 */
+    if (!endsQuestion(t) && (QUIZ_JUNK.test(t) || /^\d{1,3}$/.test(t))) continue;
+    const indented = hasIndent && /^ {2}\S/.test(line);
+
+    /* PDF 抽出：縮排行＝揀緊嗰條題目嘅選項 */
+    if (indented) {
+      if (cur) addOpt(t);
+      continue;
+    }
+
+    if (isNumberedQ(t) || endsQuestion(t)) { startQ(t); continue; }
+
+    if (hasIndent) {
+      const next = lines.slice(i + 1).find(x => x.trim());
+      if (next && /^ {2}\S/.test(next)) { startQ(t); continue; }   // 下一行係選項 → 呢行係題目（可能冇問號）
+      if (cur && !cur.options.length) { cur.prompt += ' ' + t; continue; }   // 題目斷行
+      if (!cur && !title) { title = t; pending = ''; continue; }    // 第一段 body 行＝標題
+      pending = t;                                                  // 可能係斷咗嘅題目前半，交畀 startQ 接
+      continue;
+    }
+
+    /* 冇縮排資訊（人手貼）：一條題目後面跟住嘅連續短行當選項 */
+    if (!cur) { if (!title) title = t; continue; }
+    let j = i;
+    const body = [];
+    while (j < lines.length) {
+      const x = lines[j].trim();
+      if (!x || QUIZ_JUNK.test(x) || isNumberedQ(x) || endsQuestion(x)) break;
+      body.push(x);
+      j++;
+    }
+    if (body.length >= 2) { body.forEach(addOpt); i = j - 1; continue; }
+    if (body.length === 1 && /^[([]?[A-Da-d][)\].、]\s*|^[-•●○◯□■▪·]/.test(body[0])) { addOpt(body[0]); i = j - 1; continue; }
+    if (!cur.options.length && cur.prompt.length + t.length < 120) { cur.prompt += ' ' + t; continue; }
+    /* 唔識分類嘅行（分節標題等）：略過 */
+  }
+
+  const qs = questions.filter(q => q.prompt.trim());
+  if (!qs.length) {
+    return { title, questions: qs, error: '讀唔到題目。可以：① 上載 Google Form 列印 PDF；② 貼「1. 題目」加「A. 選項」；③ 貼 CSV（題目,類型,選項,必填）。' };
+  }
+  return { title, questions: qs, error: '' };
 }
 
 export function render(params) {
@@ -103,14 +174,41 @@ function listView() {
     </tr>`).join('')}</tbody></table></div></div>`;
 }
 
+const TYPE_LABEL = { short: '短答', para: '段落', single: '單選', multi: '多選' };
+
 function importView() {
   return `<div class="card card-pad" style="max-width:760px">
-    ${noteBox('瀏覽器通常<b>拉唔到</b> Google Form 網址（CORS）。請喺 Google 表單 → 回應 → 試算表，複製題目欄，或者用下面格式貼題目。', 'warn')}
-    <div class="field mt-12"><label class="label">貼題目／CSV</label>
+    ${noteBox('<b>最方便：</b>喺 Google 表單右上 ⋮ →「列印」→ 另存 PDF，跟住喺下面<b>上載個 PDF</b>，'
+      + '系統會自動抽出題目同選項（認唔出單選／多選會當「單選」，匯入後喺編輯器逐題改就得）。'
+      + '亦可以貼 CSV／文字。', 'brand')}
+    <div class="row gap-8 wrap mt-12">
+      <label class="btn btn-primary" style="cursor:pointer">${icon('upload', 15)} 上載 Google Form PDF（或 .txt／.csv）
+        <input type="file" accept=".pdf,.txt,.csv,text/plain,application/pdf" style="display:none" data-qz-upload></label>
+      <span class="xs faint">唔会上載去邊度 —— PDF 喺你自己部機入面解析，只有抽出嘅文字會變成試卷。</span>
+    </div>
+    <div class="field mt-12"><label class="label">題目文字（可以改完再匯入）</label>
       <textarea class="textarea" id="qz-import" rows="12" placeholder="標題：週會小測&#10;1. 旅團格言係？&#10;A. 準備&#10;B. 日行一善&#10;2. 你嘅小隊？"></textarea>
       <div class="hint">CSV 欄：題目,類型（short／single／multi／para）,選項（用 | 分隔）,必填</div></div>
+    <div id="qz-preview" class="mt-12"></div>
     <button class="btn btn-primary mt-12" data-act="do-import">${icon('upload', 15)} 匯入成新試卷</button>
   </div>`;
+}
+
+/** 匯入預覽：即時話畀你知會匯出幾多題、乜類型 */
+function refreshImportPreview(root) {
+  const box = root.querySelector('#qz-preview');
+  if (!box) return;
+  const parsed = parseQuizImport(root.querySelector('#qz-import')?.value || '');
+  if (parsed.error) {
+    box.innerHTML = `<div class="hint" style="color:var(--warn)">${icon('alert', 14)} ${esc(parsed.error)}</div>`;
+    return;
+  }
+  box.innerHTML = `
+    <div class="note-box ok">${icon('check', 15)}<div>讀到 <b>${parsed.questions.length}</b> 題${parsed.title ? ` · 標題：<b>${esc(parsed.title)}</b>` : ''}。撳「匯入成新試卷」就開得一張，入到去仲可以逐題改。</div></div>
+    <ol class="sm mt-8" style="padding-left:20px;line-height:1.9">
+      ${parsed.questions.map(q => `<li>${esc(q.prompt)}
+        <span class="faint xs">（${TYPE_LABEL[q.type] || q.type}${q.options.length ? ` · ${q.options.length} 個選項：${q.options.join('／')}` : ''}）</span></li>`).join('')}
+    </ol>`;
 }
 
 function editor(q) {
@@ -230,12 +328,45 @@ export function mount(root, params) {
     const parsed = parseQuizImport(root.querySelector('#qz-import')?.value || '');
     if (parsed.error) { toast(parsed.error, 'err'); return; }
     const rec = add('quizzes', {
-      id: uid('qz'), title: parsed.title || '匯入試卷', note: '由文字／CSV 匯入',
+      id: uid('qz'), title: parsed.title || '匯入試卷', note: '由 PDF／文字／CSV 匯入',
       status: 'open', questions: parsed.questions, responses: {}, createdAt: todayISO()
     });
     toast(`已匯入 ${parsed.questions.length} 題`, 'ok');
     go('#/quizzes/' + rec.id);
   });
+
+  /* 上載 Google Form PDF／文字檔 —— 全部喺瀏覽器入面解析（零依賴，唔會傳去第二度） */
+  root.querySelector('[data-qz-upload]')?.addEventListener('change', async e => {
+    const input = e.target;
+    const f = input.files && input.files[0];
+    if (!f) return;
+    try {
+      let text = '';
+      if (/\.pdf$/i.test(f.name || '') || f.type === 'application/pdf') {
+        const { pdfFileToQuizText } = await import('../lib/pdftext.js');
+        const r = await pdfFileToQuizText(f);
+        if (!r.ok) { toast(r.error || '讀唔到個 PDF', 'err'); input.value = ''; return; }
+        text = r.text;
+      } else {
+        text = await f.text();
+      }
+      const ta = root.querySelector('#qz-import');
+      if (ta) ta.value = text;
+      refreshImportPreview(root);
+      toast(`已讀取「${f.name}」，檢查下下面預覽啱唔啱`, 'ok');
+    } catch (err) {
+      toast('讀唔到檔案：' + (err?.message || err), 'err');
+    }
+    input.value = '';
+  });
+
+  /* 貼／改文字 → 即時更新預覽 */
+  const ta = root.querySelector('#qz-import');
+  if (ta) {
+    let deb = null;
+    ta.addEventListener('input', () => { clearTimeout(deb); deb = setTimeout(() => refreshImportPreview(root), 250); });
+    refreshImportPreview(root);
+  }
 }
 
 function bindDel(root) {

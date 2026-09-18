@@ -842,8 +842,8 @@ function renderLogin() {
         <p class="sub">${loginDoor === 'pick'
           ? '團員同執委同一個入口（YMIS）。執委身份跟名冊，換屆改名冊就換權限。領袖用電郵。'
           : loginDoor === 'member'
-            ? `YMIS＋密碼。未開戶可以申請。首次密碼 ${TEMP_PASSWORD}，入去要改。執委入管理系統，團員入團員頁。`
-            : '領袖用電郵＋密碼。新旅團：喺 Apps Script 執行 issueSetupKey()，貼 72 小時 KEY 入下面。'}</p>
+            ? `YMIS＋密碼。名冊有個名＝用首次密碼 ${TEMP_PASSWORD} 入（入去要改）。執委入管理系統，團員入團員頁。`
+            : '領袖用電郵＋密碼（「用戶」頁加嘅領袖：填咗電郵＋入口密碼就喺呢度入）。新旅團：喺 Apps Script 執行 issueSetupKey()，貼 72 小時 KEY 入下面。'}</p>
 
         ${loginDoor === 'pick' ? `
         <div class="role-grid">
