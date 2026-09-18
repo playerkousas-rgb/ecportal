@@ -323,6 +323,77 @@ export async function testConnection() {
   return r;
 }
 
+/* ============================================================
+   多人同時用（2026-09-18 團長要求：一齊開 APP 一齊做嘢）
+   ============================================================ */
+let checkBusy = false;
+let pollTimer = null;
+
+/**
+ * 「立即同步」：問後端有冇隊友寫入嘅新版本 → 有就拉落嚟。
+ * 本機有未同步改動 → 自動合併（聯集＋逐格深層合併，唔會盲蓋），
+ * 合併完會照樣排隊存返上去。
+ * 回 { updated:true } 表示有拉新嘢；{ upToDate:true } 表示已經係最新。
+ */
+export async function checkRemote({ silent = false } = {}) {
+  if (isMock()) return { ok: false, reason: 'mock' };
+  if (!remoteConfigured()) return { ok: false, reason: 'not_configured' };
+  if (checkBusy || inFlight) return { ok: false, reason: 'busy' };
+  checkBusy = true;
+  try {
+    const store = await import('./store.js');
+    const info = await remoteInfo();
+    if (!info?.ok) {
+      if (!silent) { try { (await import('./util.js')).toast(info?.error || '問唔到後端', 'err'); } catch { /* */ } }
+      return { ok: false, error: info?.error || '問唔到後端' };
+    }
+    if (!info.found) return { ok: true, found: false };
+    const remoteAt = String(info.version || info.at || '');
+    if (!remoteAt || remoteAt === store.lastSyncedVersion()) {
+      return { ok: true, upToDate: true };
+    }
+    const got = await pullDb();
+    if (got?.ok && got.found && got.db) {
+      const merged = Number(store.tryLoad()?.sync?.pending || 0) > 0;
+      store.adoptRemote(got.db, { version: String(got.version || ''), merge: merged });
+      if (merged) scheduleSave();          // 本機改動仲喺度 → 繼續排隊存
+      return { ok: true, updated: true, merged, version: remoteAt };
+    }
+    return { ok: false, error: got?.error || '拉唔到後端資料' };
+  } finally {
+    checkBusy = false;
+  }
+}
+
+/**
+ * 會議模式：每 60 秒（有開住、冇收埋）靜靜問一次後端有冇隊友更新。
+ * 有 → 拉落嚟；如果用家**唔係打緊字**（冇 input／textarea focus）
+ * 就即刻重繪畫面 —— 一齊睇嗰陣大家都會見到對方嘅最新改動。
+ * 用家打緊字就只彈提示，唔會炸走佢個表單。
+ */
+export function startPolling(intervalMs = 60000) {
+  if (pollTimer) return;
+  pollTimer = setInterval(async () => {
+    try {
+      if (!armed || isMock() || !remoteConfigured()) return;
+      if (inFlight || checkBusy || hasPending()) return;     // 自己未存好就唔好撈亂
+      if (typeof document !== 'undefined' && document.hidden) return;
+      const r = await checkRemote({ silent: true });
+      if (!r?.updated) return;
+      const util = await import('./util.js').catch(() => null);
+      const tag = typeof document !== 'undefined' ? String(document.activeElement?.tagName || '').toUpperCase() : '';
+      const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+      if (typing) {
+        try { util?.toast?.('隊友更新咗後端 —— 撳右上「立即同步」就見到最新', 'info'); } catch { /* */ }
+        return;
+      }
+      try { window.dispatchEvent(new CustomEvent('v82:refresh')); } catch { /* */ }
+      try { util?.toast?.('已載入隊友嘅最新改動', 'ok'); } catch { /* */ }
+    } catch { /* 靜靜地失敗，下次再試 */ }
+  }, Math.max(20000, intervalMs));
+}
+export function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+
 /* ---------------- 自動儲存 ---------------- */
 
 /**

@@ -630,32 +630,61 @@ export function adoptRemote(remoteDb, { version = '', merge = false } = {}) {
 
 /**
  * 聯集合併（2026-09-18 同步事故修復）：
- *   · 陣列紀錄（團員／帳目／通告…）：按 id 合併 —— 兩邊都有嘅以 remote 為準
- *     （remote 啱啱先成功寫入後端），只有本機有嘅（未同步嘅新增）保留。
+ *   · 陣列紀錄（團員／帳目／通告…）：按 id 合併 —— 兩邊都有嘅**逐格深層合併**，
+ *     只有一邊有嘅保留。呢個係「一齊開 APP 一齊做嘢」嘅關鍵：
+ *     例：同一個活動，A 點名陳大文出席、B 點名李小明出席 —— 深層合併後
+ *     兩個人都喺度（盲蓋或者「成條以後端為準」都會蝕一邊）。
+ *     同一條紀錄嘅同一個純值格（例如同一個成員嘅電話）兩邊都改咗
+ *     → 以「未存落後端嗰部機」為準（同用家螢幕一致）；地圖格
+ *     （rsvp／rollcall／responses 等人名→狀態）做併集。
  *   · 物件／標量（settings、constitution…）：以 remote 為準；本機 sync/backend
  *     連線設定同 meta 由 adoptRemote 之後再補返。
  *   · 已知取捨：本機離線刪除嘅紀錄，如果另一部機未見過，合併後會「翻生」
  *     —— 總好過成個資料庫被盲蓋清空。刪多一次就得。
  * @returns {object} 合併後嘅新 db（唔會改動傳入嘅兩個物件）
  */
-function mergeDbs(remote, local) {
+
+/** 兩條同 id 紀錄逐格合併：地圖格併集（本機細格贏）、陣列格遞迴、純值本機贏 */
+function mergeRec(rv, lv) {
+  const out = { ...rv };
+  Object.keys(lv).forEach(k => {
+    const b = lv[k];
+    if (b === undefined) return;
+    const a = out[k];
+    if (a === undefined) { out[k] = b; return; }
+    const aMap = a && typeof a === 'object' && !Array.isArray(a);
+    const bMap = b && typeof b === 'object' && !Array.isArray(b);
+    if (aMap && bMap) { out[k] = { ...a, ...b }; return; }            // rsvp／rollcall／responses／title：併集
+    if (Array.isArray(a) && Array.isArray(b)) { out[k] = mergeArrayById(a, b); return; }
+    out[k] = b;                                                       // 純值：以未存嗰邊為準
+  });
+  return out;
+}
+
+/** 陣列合併：有 id 嘅物件按 id 合（同 id 遞迴 mergeRec）、冇 id 嘅去重加入 */
+function mergeArrayById(rv, lv) {
+  const base = (Array.isArray(rv) ? rv : []).slice();
+  const index = new Map();
+  base.forEach((x, i) => { if (x && typeof x === 'object' && x.id !== undefined) index.set(String(x.id), i); });
+  (Array.isArray(lv) ? lv : []).forEach(item => {
+    if (item && typeof item === 'object' && item.id !== undefined) {
+      const key = String(item.id);
+      if (index.has(key)) base[index.get(key)] = mergeRec(base[index.get(key)], item);
+      else { index.set(key, base.length); base.push(item); }
+    } else if (!base.includes(item)) base.push(item);
+  });
+  return base;
+}
+
+/** 匯出畀測試等需要合併語意嘅地方用（純函數，唔會寫入） */
+export function mergeDbs(remote, local) {
   const out = { ...remote };
   Object.keys(local).forEach(key => {
     if (key === 'sync' || key === 'meta' || key === 'backend' || key === 'unitCode') return;
     const lv = local[key];
     const rv = remote[key];
     if (Array.isArray(lv) && (Array.isArray(rv) || rv === undefined)) {
-      /* 聯集合併：remote 為主，local 多出嘅 id 加返入去 */
-      const base = Array.isArray(rv) ? rv.slice() : [];
-      const seen = new Set(base.filter(x => x && typeof x === 'object' && x.id).map(x => String(x.id)));
-      lv.forEach(item => {
-        if (item && typeof item === 'object' && item.id) {
-          if (!seen.has(String(item.id))) { base.push(item); seen.add(String(item.id)); }
-        } else if (!base.includes(item)) {
-          base.push(item);      // 冇 id 嘅元素（例如 methods 字串陣列）：去重加入
-        }
-      });
-      out[key] = base;
+      out[key] = mergeArrayById(rv || [], lv);
     } else if (lv !== undefined && rv === undefined) {
       out[key] = lv;            // 後端完全冇呢個 key（舊版後端）→ 用本機
     }

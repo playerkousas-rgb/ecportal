@@ -715,3 +715,7 @@ pre.code { background:#2A1015; color:#F6E7EA; padding:14px 16px; border-radius:1
 /* ---------- 財務報告：上年度結餘 vs 本年度收支（分開列示） ---------- */
 .table tbody tr.row-sep td{ background:#FBF6F7; border-top:1.5px solid var(--line-2); }
 .doc table tbody tr.row-sep td{ background:#FBF6F7; font-weight:700; }
+
+/* 頂欄右上：狀態 badge ＋「立即儲存／立即同步」掣（2026-09-18 團長要求） */
+#syncChip{ display:inline-flex; align-items:center; gap:6px; }
+#syncChip .badge{ cursor:pointer; }

@@ -115,6 +115,29 @@ try {
       fs.writeFileSync(step.file, store.exportAll(), 'utf8');
       out.steps.push({ op: 'export', file: step.file, members: store.load().members.length });
     }
+    /* 模擬「隊友喺另一部機儲存」：直接經 proxy 用正確 baseVersion 寫入後端 */
+    if (step.op === 'teammatePush') {
+      const got = await remote.pullDb();
+      if (!got.ok || !got.db) { out.steps.push({ op: 'teammatePush', ok: false, error: got.error || '後端空' }); continue; }
+      const db = JSON.parse(JSON.stringify(got.db));
+      db.members = [...(db.members || []), { id: 'm8' + Date.now(), name: step.name, ymis: step.ymis, identity: 'member' }];
+      db.meta = { ...(db.meta || {}), updatedAt: '2026-09-18T20:00:00.000Z' };
+      const r = await (await fetch(`${BASE}/api/proxy`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'saveDb', unit: '0082', db, baseVersion: String(got.version || '') })
+      })).json();
+      out.steps.push({ op: 'teammatePush', ok: r.ok === true, version: String(r.version || '') });
+    }
+    /* 「立即同步」：問後端有冇隊友新版本，有就拉（本機有 pending 就會合併） */
+    if (step.op === 'checksync') {
+      const r = await remote.checkRemote({ silent: true });
+      const db = store.tryLoad();
+      out.steps.push({
+        op: 'checksync', ok: !!r?.ok, updated: !!r?.updated, merged: !!r?.merged, upToDate: !!r?.upToDate,
+        members: (db?.members || []).length, names: (db?.members || []).map(m => m.name),
+        pending: Number(db?.sync?.pending || 0)
+      });
+    }
     if (step.op === 'import') {
       store.importAll(fs.readFileSync(step.file, 'utf8'));
       const db = store.load();
