@@ -211,7 +211,7 @@ export function render() {
         <div style="padding:14px 16px" class="col gap-8">
           <button class="btn btn-block btn-soft" data-go="#/constitution">${icon('book', 16)} 團章（雙語／輸出）</button>
           <button class="btn btn-block btn-soft" data-go="#/progress">${icon('chart', 16)} 進度紀錄系統</button>
-          <button class="btn btn-block btn-soft" data-go="#/docs">${icon('note', 16)} 使用教學 / 多旅團</button>
+          <button class="btn btn-block btn-soft" data-go="#/docs">${icon('note', 16)} 使用教學</button>
         </div>
       </div>
     </div>

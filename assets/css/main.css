@@ -341,6 +341,16 @@ svg{ display:block; }
 .tabbar{ display:none; }
 .hide-desktop{ display:none; }
 
+.cal-grid{ display:grid; grid-template-columns:repeat(7,1fr); gap:4px; padding:10px; }
+.cal-dow{ font-size:11px; font-weight:700; color:var(--faint); text-align:center; padding:6px 0; }
+.cal-cell{ min-height:72px; border:1px solid var(--line-2); border-radius:10px; padding:6px; background:#fff; cursor:pointer; }
+.cal-cell.empty{ background:transparent; border-color:transparent; cursor:default; }
+.cal-n{ font-size:12px; font-weight:700; margin-bottom:4px; }
+.cal-ev{ display:block; width:100%; text-align:left; border:none; background:var(--brand-50); color:var(--brand-800);
+  font-size:11px; font-weight:600; padding:3px 6px; border-radius:6px; margin-bottom:3px; cursor:pointer; }
+.cal-ev.exco{ background:transparent; border:1px dashed var(--warn); color:var(--warn); }
+@media (max-width:760px){ .cal-cell{ min-height:56px; } .cal-ev{ font-size:10px; } }
+
 @media (max-width:1023px){
   .sidebar{ display:none; }
   .main{ margin-left:0; padding-bottom:calc(64px + env(safe-area-inset-bottom)); }
@@ -364,6 +374,19 @@ svg{ display:block; }
   .login-wrap{ grid-template-columns:1fr; }
   .login-hero{ display:none; }
   .login-panel{ padding:28px 18px; align-items:flex-start; padding-top:44px; }
+}
+@media (max-width:760px){
+  .page-head{ align-items:stretch; }
+  .page-head .row, .card-head{ flex-wrap:wrap; }
+  .page-head .btn, .card-head .btn{ flex:1 1 auto; }
+  .table .row-actions, .table th:last-child, td.right .btn-xs{ display:none; }
+  .table tbody tr[data-open], .table tbody tr[data-member], .table tbody tr[style*="cursor"]{ cursor:pointer; }
+  .hide-mobile{ display:none !important; }
+  .show-mobile{ display:block !important; }
+  .toolbar{ width:100%; }
+  .toolbar .input, .toolbar .select{ min-width:0; width:100%; }
+  .link-card{ flex-wrap:wrap; }
+  .link-card .row{ width:100%; justify-content:flex-start; }
 }
 @media (max-width:560px){
   .g-5,.g-4{ grid-template-columns:repeat(2,1fr); }

@@ -23,6 +23,22 @@ export function money(n) {
    notice.html     通告 + 回覆出席與否
    constitution.html 團章
    全部都可以喺「帳號與系統 → 旅團設定」或者「成員連結」頁改做自己嘅網址。 */
+/** 旅團公開連結（Drive／相簿／IG／FB／網頁），團員登入後先見到 */
+export function troopPublicLinks() {
+  const L = settings().troopLinks || {};
+  const rows = [
+    ['drive', 'Google Drive', '雲端硬碟／共用資料夾'],
+    ['album', '相簿', '活動相／相簿連結'],
+    ['instagram', 'Instagram', '旅團 IG'],
+    ['facebook', 'Facebook', '旅團專頁'],
+    ['website', '網頁', '旅團／主辦機構網站'],
+    ['whatsapp', 'WhatsApp', '聯絡／群組連結']
+  ];
+  return rows.map(([id, label, desc]) => ({
+    id, label, desc, url: String(L[id] || '').trim()
+  })).filter(x => x.url);
+}
+
 export function publicPageUrl(file, params = {}) {
   const s = settings().publicLinks || {};
   const origin = (typeof location !== 'undefined' && location.origin && location.origin !== 'null')
@@ -41,6 +57,11 @@ export function publicPageUrl(file, params = {}) {
 export function memberLinks() {
   const code = load().unitCode;
   const out = [
+    {
+      id: 'hub', icon: 'home', label: '團員入口（掃一次就齊）',
+      desc: '只需派呢一條：行事曆、回覆出席、試卷、影單據、借物資、團章、通告。QR／WhatsApp 都用呢條。',
+      url: publicPageUrl('members.html', { u: code })
+    },
     {
       id: 'entry', icon: 'camera', label: '收支申報（手機記一筆）',
       desc: '成員影相 → 揀欄目 → 金額 → 送出，司庫批核後自動入帳（取代 Google Form）',
@@ -239,7 +260,8 @@ export function memberKey(m) {
  * 「對得上」＝有對方認得嘅 key（團員有 YMIS / 領袖有 Email）。
  * systemId 只係本系統 fallback，對方認唔到，所以唔算「對得上」。
  */
-export function keyCoverage(list = members()) {
+export function keyCoverage(list = members(), { youthOnly = false } = {}) {
+  if (youthOnly) list = list.filter(m => !progressIgnored(m));
   const total = list.length;
   const leaders = list.filter(m => identityOf(m) === 'leader');
   const youth = list.filter(m => identityOf(m) !== 'leader');
@@ -289,19 +311,45 @@ export function memberBirthdayText(m) {
   return p.hasYear ? `${p.iso}（${p.m} 月 ${p.d} 日）` : `${p.m} 月 ${p.d} 日（年份待補）`;
 }
 
-export function attendanceStats(memberId) {
-  const ms = collection('meetings').filter(m => m.status === 'done');
-  let present = 0, late = 0, apology = 0, absent = 0;
-  ms.forEach(m => {
-    const s = (m.attendance || {})[memberId];
-    if (s === 'present') present++;
-    else if (s === 'late') { late++; present++; }
-    else if (s === 'apology') apology++;
-    else if (s === 'absent') absent++;
-  });
-  const total = Math.max(ms.length, 1);
-  return { present, late, apology, absent, total: ms.length, rate: Math.round(present / total * 100) };
+export const RSVP = {
+  present: { label: '出席', cls: 'b-ok' },
+  absent:  { label: '不出席', cls: 'b-danger' },
+  late:    { label: '遲到', cls: 'b-warn' },
+  early:   { label: '早走', cls: 'b-info' }
+};
+export function events() { return collection('events'); }
+export function eventOf(id) { return find('events', id); }
+export function publicEvents() {
+  return events().filter(e => e.visibility !== 'exco' && e.status !== 'cancelled')
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
 }
+export function rsvpCounts(ev) {
+  const map = ev?.rsvp || {};
+  const roll = ev?.rollcall || {};
+  const n = k => Object.values(map).filter(x => (x.status || x) === k).length;
+  const rn = k => Object.values(roll).filter(x => (x.status || x) === k).length;
+  return {
+    present: n('present'), absent: n('absent'), late: n('late'), early: n('early'),
+    rollPresent: rn('present'), rollAbsent: rn('absent'), rollLate: rn('late'), rollEarly: rn('early'),
+    rsvpTotal: Object.keys(map).length, rollTotal: Object.keys(roll).length
+  };
+}
+export function attendanceStats(memberId) {
+  const list = events().filter(e => e.status !== 'cancelled');
+  let present = 0, late = 0, early = 0, absent = 0;
+  list.forEach(e => {
+    const s = (e.rollcall || {})[memberId];
+    const st = s?.status || s;
+    if (st === 'present') present++;
+    else if (st === 'late') late++;
+    else if (st === 'early') early++;
+    else if (st === 'absent') absent++;
+  });
+  const marked = present + late + early + absent;
+  return { present, late, early, absent, total: list.length, marked,
+    rate: marked ? Math.round((present + late + early) / marked * 100) : 0 };
+}
+export function quizzes() { return collection('quizzes'); }
 
 /* ---------------- 生日 ---------------- */
 /** 所有團員依「距離下次生日」排序 */
@@ -528,15 +576,24 @@ export function refYearKey(ref = load().reference || {}) {
 export function pendingClaims() { return claims().filter(c => (c.status || 'pending') === 'pending'); }
 
 /* 團費 */
-export function feeSummary(list = fees()) {
-  const paid = list.filter(f => f.paid);
-  const unpaid = list.filter(f => !f.paid);
+export function feeSummary(list) {
+  /* 預設用收款表（排除領袖／免收），唔好用 raw fees 筆數（會把領袖都計入） */
+  if (!list) {
+    const st = feeStats();
+    return {
+      total: st.total, paidCount: st.paidCount, unpaidCount: st.unpaidCount,
+      collected: st.collected, outstanding: st.outstanding, expected: st.expected, rate: st.rate
+    };
+  }
+  const paid = list.filter(f => f.paid && !feeExempt(member(f.memberId)));
+  const unpaid = list.filter(f => !f.paid && !feeExempt(member(f.memberId)));
+  const n = paid.length + unpaid.length;
   return {
-    total: list.length, paidCount: paid.length, unpaidCount: unpaid.length,
+    total: n, paidCount: paid.length, unpaidCount: unpaid.length,
     collected: paid.reduce((s, f) => s + (Number(f.amount) || 0), 0),
     outstanding: unpaid.reduce((s, f) => s + (Number(f.amount) || 0), 0),
-    expected: list.reduce((s, f) => s + (Number(f.amount) || 0), 0),
-    rate: list.length ? Math.round(paid.length / list.length * 100) : 0
+    expected: [...paid, ...unpaid].reduce((s, f) => s + (Number(f.amount) || 0), 0),
+    rate: n ? Math.round(paid.length / n * 100) : 0
   };
 }
 /**
@@ -559,6 +616,18 @@ export function feeExemptList() {
 export function overdueFees() {
   const today = todayISO();
   return fees().filter(f => !f.paid && f.due && f.due < today && !feeExempt(member(f.memberId)));
+}
+
+/** 進度系統唔計：領袖、管理員、舊團員 */
+export function progressIgnored(m) {
+  if (!m) return true;
+  if (m.status === 'alumni') return true;
+  if (identityOf(m) === 'leader') return true;
+  const t = `${m.role || ''} ${m.name || ''} ${(m.tags || []).join(' ')}`;
+  return /管理員|超管|admin|系統管理員/i.test(t);
+}
+export function progressRoster(list = members()) {
+  return list.filter(m => !progressIgnored(m));
 }
 
 /* ---------- 團費（金額可改，唔係寫死） ---------- */

@@ -11,7 +11,7 @@ import { load, commit, collection, add, update, remove, exportAll, importAll, re
 import {
   ROLES, PERMS, PERM_GROUPS, accounts, accountById, can, canChangePasswordOf, canManageRole,
   createAccount, changePassword, changeUsername, changeOwnPassword, setAccountActive, deleteAccount,
-  current, currentRole, isSuper, isMe, displayName, RESERVED_USERNAMES
+  current, currentRole, isSuper, isMe, displayName, RESERVED_USERNAMES, TEMP_PASSWORD
 } from '../lib/auth.js';
 import { profile, settings, members, memberName, money, balance, tx, invItems } from '../lib/model.js';
 import { unitList, unitEntry, isLocalUnit, saveLocalUnit, removeLocalUnit, loadRegistry, registry } from '../lib/units.js';
@@ -33,6 +33,7 @@ const PASSWORD_RULES = [
 
 export function render(params) {
   if (['accounts', 'perms', 'data', 'unit', 'audit', 'mock'].includes(params.id)) tab = params.id;
+  if (tab === 'mock' && !isSuper()) tab = 'accounts';
   return `
   ${pageHead({
     title: '帳號與系統',
@@ -45,7 +46,7 @@ export function render(params) {
     ['unit', '旅團設定'],
     ['data', '資料管理'],
     ['audit', '操作紀錄'],
-    ['mock', '示範資料（MOCK）']
+    ...(isSuper() ? [['mock', '示範資料（MOCK）']] : [])
   ], tab)}
   ${tab === 'perms' ? permsView()
     : tab === 'unit' ? unitView()
@@ -118,8 +119,8 @@ function accountRow(a) {
     <span class="avatar avatar-sm" style="background:${ROLES[a.role]?.color || '#7B2233'}">${esc(a.name.slice(-2))}</span>
     <div class="li-main">
       <div class="li-t">${esc(a.name)} ${me ? '<span class="tag">你</span>' : ''} ${a.active === false ? '<span class="tag" style="background:var(--danger-bg);color:var(--danger)">已停用</span>' : ''}</div>
-      <div class="li-s">帳號 <b class="mono">${esc(a.username)}</b>${a.title ? ` · ${esc(a.title)}` : ''}${a.memberId ? ` · 對應 ${esc(memberName(a.memberId))}` : ''}
-        ${a.pwUpdatedAt ? ` · ${esc(a.pwUpdatedAt)} 改過密碼` : ''}</div>
+      <div class="li-s">登入 <b class="mono">${esc(a.email || a.username)}</b>${a.title ? ` · ${esc(a.title)}` : ''}${a.memberId ? ` · 對應 ${esc(memberName(a.memberId))}` : ''}
+        ${a.mustChangePw || a.defaultPw ? ` · <span class="tag">要改密碼</span>` : ''}${a.pwUpdatedAt ? ` · ${esc(a.pwUpdatedAt)} 改過密碼` : ''}</div>
     </div>
     <div class="row gap-4">
       ${editable ? `<button class="btn btn-xs" data-pw="${a.id}">${icon('key', 13)} 密碼</button>
@@ -192,6 +193,18 @@ function unitView() {
           </div>
           <div id="u-err" class="err mt-8"></div>
           <button class="btn btn-primary mt-16" data-act="save-unit" ${can('admin.units') ? '' : 'disabled'}>${icon('save', 16)} 儲存旅團資料</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><div><div class="card-title">團員睇到嘅公開連結</div>
+          <div class="card-sub">團員用 YMIS＋密碼入入口之後先見到（Drive、相簿、IG、FB、網頁）</div></div></div>
+        <div style="padding:18px">
+          ${[['drive', 'Google Drive'], ['album', '相簿'], ['instagram', 'Instagram'], ['facebook', 'Facebook'], ['website', '網頁'], ['whatsapp', 'WhatsApp']].map(([k, l]) => `
+            <div class="field mt-8"><label class="label">${esc(l)}</label>
+              <input class="input" id="tl-${k}" value="${esc((s.troopLinks || {})[k] || '')}" placeholder="https://…"></div>`).join('')}
+          <button class="btn btn-primary mt-16" data-act="save-links">${icon('save', 16)} 儲存公開連結</button>
+          <div class="hint mt-8">留空就唔顯示嗰項。連結只喺團員登入後出現，外人掃 QR 未入密碼睇唔到。</div>
         </div>
       </div>
 
@@ -451,6 +464,19 @@ export function mount(root) {
       commit();
       toast('已儲存旅團資料', 'ok'); refresh(); return;
     }
+    if (act === 'save-links') {
+      const v = k => root.querySelector(k)?.value.trim() || '';
+      const db = load();
+      db.settings = {
+        ...(db.settings || {}),
+        troopLinks: {
+          drive: v('#tl-drive'), album: v('#tl-album'), instagram: v('#tl-instagram'),
+          facebook: v('#tl-facebook'), website: v('#tl-website'), whatsapp: v('#tl-whatsapp')
+        }
+      };
+      commit();
+      toast('已儲存團員公開連結', 'ok'); refresh(); return;
+    }
     if (act === 'env-template') {
       if (!isSuper()) { toast('只有超級管理員可以開新旅團（要改 Vercel 設定）', 'err'); return; }
       const r = await modal({
@@ -625,10 +651,10 @@ async function addAccountForm(role) {
           <input class="input" id="q-name" placeholder="例：陳大文"></div>
         <div class="field"><label class="label">職位</label>
           <input class="input" id="q-title" placeholder="例：司庫"></div>
-        <div class="field"><label class="label">登入帳號 <span class="req">*</span></label>
-          <input class="input" id="q-user" placeholder="英文／數字，例：taiman"></div>
-        <div class="field"><label class="label">密碼 <span class="req">*</span></label>
-          <input class="input" id="q-pass" placeholder="至少 4 個字元"></div>
+        <div class="field"><label class="label">${role === 'leader' ? '電郵（登入用）' : '電郵／帳號'} <span class="req">*</span></label>
+          <input class="input" id="q-user" placeholder="${role === 'leader' ? '例：scouter@example.com' : '電郵或帳號'}"></div>
+        <div class="field"><label class="label">密碼（留空＝${TEMP_PASSWORD}）</label>
+          <input class="input" id="q-pass" placeholder="留空＝首次 ${TEMP_PASSWORD}，要改"></div>
         <div class="field" style="grid-column:1/-1"><label class="label">對應團員（可選）</label>
           <select class="select" id="q-member"><option value="">— 唔關聯 —</option>
             ${list.map(m => `<option value="${m.id}">${esc(m.name)}${m.role ? `（${esc(m.role)}）` : ''}</option>`).join('')}</select></div>

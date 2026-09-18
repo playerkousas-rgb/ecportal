@@ -9,7 +9,7 @@ import { esc, icon, modal, confirmDlg, toast, toastAction, uid, fmtDate, todayIS
 import { toWord, printDoc, toCSV, toMarkdown, toStandaloneHtml, download as dlFile, downloadQrImage, downloadQrSvg, stamp } from '../lib/exporter.js';
 import { go, parse, setQuery } from '../lib/router.js';
 import { can, current } from '../lib/auth.js';
-import { profile, settings, members, isLegacyUrl } from '../lib/model.js';
+import { profile, settings, members, isLegacyUrl, publicPageUrl } from '../lib/model.js';
 import { pageHead, tabs, stat, empty, noteBox, photoPicker, photoStrip, bindPhotoPicker } from './ui.js';
 import { compressImage, formatBytes } from '../lib/files.js';
 import { NOTICE_INFO_FIELDS, noticeInfoRows } from '../lib/notice-fields.js';
@@ -661,7 +661,7 @@ export function shareText(n) {
     const lines = body.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
     L.push('', lines.slice(0, 6).join('\n') + (lines.length > 6 ? '…' : ''));
   }
-  L.push('', n.needSignup ? `👉 報名（免登入）：${publicUrl(n)}` : `👉 詳情（免登入）：${publicUrl(n)}`);
+  L.push('', `👉 團員入口（掃一次齊晒）：${publicPageUrl('members.html', { u: load().unitCode })}`);
   if (n.needSignup && n.deadline) L.push(`（截止 ${n.deadline} 前）`);
   return L.join('\n');
 }

@@ -10,6 +10,7 @@
    ============================================================ */
 
 import { esc, icon, uid, todayISO, toast, copyText } from './lib/util.js';
+import { loadMe, saveMe } from './lib/member-me.js';
 
 const q = new URLSearchParams(location.search);
 const app = document.getElementById('app');
@@ -22,7 +23,8 @@ let audits = [];
 
 const OPEN = ['approved', 'out'];
 const state = {
-  itemId: '', qty: 1, fromDate: todayISO(), toDate: '', purpose: '', byName: '', contact: ''
+  itemId: '', qty: 1, fromDate: todayISO(), toDate: '', purpose: '',
+  byName: (new URLSearchParams(location.search).get('name') || loadMe().name || ''), contact: ''
 };
 
 const localKey = () => `venture82.borrow.${unitCode}`;
@@ -230,6 +232,7 @@ function validate() {
 async function submit(e) {
   e.preventDefault();
   if (!validate()) return;
+  saveMe({ id: loadMe().id || q.get('mid') || '', name: String(state.byName).trim() });
   const btn = app.querySelector('button[type="submit"]');
   btn.disabled = true; btn.textContent = '送出中…';
 

@@ -16,8 +16,9 @@ import {
 } from './lib/onboard.js';
 import { applyTheme, MAROON } from './lib/theme.js';
 import {
-  login, logout, current, currentRole, ROLES, displayName, displaySub,
-  loginAsMock, accounts, isSuper, can
+  login, loginMember, logout, current, currentRole, ROLES, displayName, displaySub,
+  loginAsMock, accounts, isSuper, can, changeOwnPassword, TEMP_PASSWORD,
+  loginSetupKey, applyAccount
 } from './lib/auth.js';
 import { pendingMeetings, overdueFees, pendingClaims, pendingLoans, profile, notices, onLegacyHost, canonicalUrl } from './lib/model.js';
 import { esc, icon, toast, modal, confirmDlg } from './lib/util.js';
@@ -36,15 +37,20 @@ import * as noticesView from './views/notices.js';
 import * as tables from './views/tables.js';
 import { openFieldDesigner } from './views/tables.js';
 import * as linksView from './views/links.js';
+import * as calendar from './views/calendar.js';
+import * as quizzes from './views/quizzes.js';
 
 const VIEWS = {
   dashboard, meetings, finance, members, inventory, progress,
-  constitution, notices: noticesView, tables, admin: accountsView, docs, links: linksView
+  constitution, notices: noticesView, tables, admin: accountsView, docs, links: linksView,
+  calendar, quizzes
 };
 
 const NAV = [
   { id: 'dashboard', label: '儀表板', icon: 'home' },
-  { id: 'meetings', label: '會議', icon: 'calendar', badge: () => pendingMeetings().length },
+  { id: 'calendar', label: '行事曆', icon: 'calendar' },
+  { id: 'quizzes', label: '試卷', icon: 'note' },
+  { id: 'meetings', label: '會議', icon: 'clock', badge: () => pendingMeetings().length },
   { id: 'finance', label: '財務', icon: 'wallet', badge: () => overdueFees().length + pendingClaims().length },
   { id: 'members', label: '用戶', icon: 'users' },
   { id: 'inventory', label: '物資', icon: 'grid', badge: () => pendingLoans().length },
@@ -55,7 +61,7 @@ const NAV = [
   { id: 'docs', label: '教學', icon: 'note' },
   { id: 'admin', label: '帳號與系統', icon: 'shield' }
 ];
-const MOBILE_MAIN = ['dashboard', 'meetings', 'finance', 'inventory'];
+const MOBILE_MAIN = ['dashboard', 'calendar', 'finance', 'inventory'];
 
 const app = document.getElementById('app');
 let bootError = null;
@@ -92,7 +98,7 @@ async function boot() {
   if (!isMock() && current()?.mock) logout();
   if (isMock() && !current()) loginAsMock('leader');
   if (!current()) renderLogin();
-  else render();
+  else { render(); maybeForceChangePw(); }
 }
 
 /* ============================================================
@@ -768,8 +774,9 @@ function renderFatal(e) {
 /* ============================================================
    登入
    ============================================================ */
-let selectedRole = 'exco';
+let selectedRole = 'staff';
 let pickedUnit = null;
+let loginDoor = 'pick'; /* pick | staff | member */
 
 function renderLogin() {
   document.body.classList.add('login-body');
@@ -823,7 +830,7 @@ function renderLogin() {
     <main class="login-panel">
       <div class="login-card">
         ${mockBanner}
-        ${units.length > 1 ? `
+        ${false && units.length > 1 ? `
         <div class="field mb-16">
           <label class="label">旅團</label>
           <select class="select" id="loginUnit">
@@ -831,27 +838,48 @@ function renderLogin() {
           </select>
         </div>` : ''}
 
-        <h1>登入</h1>
-        <p class="sub">請揀你嘅身份，再輸入帳號同密碼</p>
+        <h1>${loginDoor === 'member' ? '團員／執委登入' : loginDoor === 'staff' ? '領袖登入' : '你係邊個？'}</h1>
+        <p class="sub">${loginDoor === 'pick'
+          ? '團員同執委同一個入口（YMIS）。執委身份跟名冊，換屆改名冊就換權限。領袖用電郵。'
+          : loginDoor === 'member'
+            ? `YMIS＋密碼。未開戶可以申請。首次密碼 ${TEMP_PASSWORD}，入去要改。執委入管理系統，團員入團員頁。`
+            : '領袖用電郵＋密碼。新旅團：喺 Apps Script 執行 issueSetupKey()，貼 72 小時 KEY 入下面。'}</p>
 
-        <div class="role-grid" id="roleGrid">
-          ${['leader', 'exco'].map(r => {
-            const R = ROLES[r];
-            return `<button class="role-card" data-role="${r}" aria-pressed="${selectedRole === r}">
-              <span class="role-ic">${r === 'leader' ? icon('flag', 19) : icon('users', 19)}</span>
-              <span class="grow">
-                <span class="role-name" style="display:block">${R.name}</span>
-                <span class="role-desc" style="display:block">${R.desc}</span>
-              </span>
-              ${selectedRole === r ? icon('check', 17) : ''}
-            </button>`;
-          }).join('')}
-        </div>
-
+        ${loginDoor === 'pick' ? `
+        <div class="role-grid">
+          <button class="role-card" type="button" id="doorExco">
+            <span class="role-ic">${icon('flag', 19)}</span>
+            <span class="grow"><span class="role-name" style="display:block">領袖</span>
+            <span class="role-desc" style="display:block">電郵＋密碼（或開團 KEY）</span></span>
+            ${icon('chevronR', 17)}
+          </button>
+          <button class="role-card" type="button" id="doorMember">
+            <span class="role-ic">${icon('users', 19)}</span>
+            <span class="grow"><span class="role-name" style="display:block">團員／執委</span>
+            <span class="role-desc" style="display:block">同一個門：YMIS＋密碼</span></span>
+            ${icon('chevronR', 17)}
+          </button>
+        </div>` : loginDoor === 'member' ? `
+        <button class="btn btn-ghost btn-sm mb-12" type="button" id="doorBack">${icon('chevronL', 14)} 返回</button>
+        <form id="memberLoginForm" autocomplete="off">
+          <div class="field mt-8">
+            <label class="label">YMIS 會籍編號</label>
+            <input class="input" id="liYmis" inputmode="numeric" placeholder="10 位數字" autocomplete="username">
+          </div>
+          <div class="field mt-12">
+            <label class="label">密碼</label>
+            <input class="input" id="liMemPass" type="password" placeholder="首次：${TEMP_PASSWORD}" autocomplete="current-password">
+          </div>
+          <div id="liMemErr" class="err mt-8"></div>
+          <button type="submit" class="btn btn-primary btn-lg btn-block mt-16">${icon('key', 17)} 登入</button>
+        </form>
+        <button class="btn btn-block mt-12" type="button" id="btnApply">${icon('plus', 16)} 未開戶？申請開戶</button>
+        ` : `
+        <button class="btn btn-ghost btn-sm mb-12" type="button" id="doorBack">${icon('chevronL', 14)} 返回選擇入口</button>
         <form id="loginForm" autocomplete="off">
-          <div class="field mt-16">
-            <label class="label">登入帳號</label>
-            <input class="input" id="liUser" autocomplete="username" placeholder="輸入你嘅帳號">
+          <div class="field mt-8">
+            <label class="label">電郵</label>
+            <input class="input" id="liUser" autocomplete="username" placeholder="例：scouter@example.com">
           </div>
           <div class="field mt-12">
             <label class="label">密碼</label>
@@ -860,39 +888,43 @@ function renderLogin() {
           <div id="liErr" class="err mt-8"></div>
           <button type="submit" class="btn btn-primary btn-lg btn-block mt-16">${icon('key', 17)} 進入系統</button>
         </form>
+        <form id="setupKeyForm" class="mt-16" autocomplete="off" style="border-top:1px solid var(--line-2);padding-top:14px">
+          <div class="semibold sm mb-8">新旅團開團 KEY</div>
+          <div class="hint mb-8">喺 Google 試算表 → Apps Script 執行 <code>issueSetupKey()</code>（每次 72 小時；過期再執行一次）。</div>
+          <input class="input" id="liSetupKey" placeholder="貼上 EC72-… KEY">
+          <div id="liKeyErr" class="err mt-8"></div>
+          <button type="submit" class="btn btn-block mt-12">用 KEY 進入開戶</button>
+        </form>
 
         <div class="mt-16">
           <button class="btn btn-block" id="btnMock">${icon('eye', 16)} 試用示範（MOCK）</button>
-          <div class="hint mt-8">示範模式用假資料，同真實資料完全分開，隨便試都唔會影響真數據。</div>
+          <div class="hint mt-8">示範模式用假資料，同真實資料完全分開。</div>
         </div>
-
         <div class="mt-16" style="border-top:1px solid var(--line-2);padding-top:12px">
-          <div class="row-between wrap gap-8">
-            <div class="xs faint">而家嘅旅團：<b class="mono">${esc(code)}</b>${isMock() ? '（示範模式）' : ''}</div>
-            <div class="row gap-8 wrap">
-              <button class="btn btn-xs" id="loginDlGs" type="button">${icon('download', 13)} 下載 Code.gs</button>
-              <button class="btn btn-xs" id="loginGuide" type="button">${icon('note', 13)} 部署指南</button>
-              <button class="btn btn-xs" id="btnGate" type="button">${icon('refresh', 13)} 更換旅團 / 示範</button>
-            </div>
-          </div>
+          <div class="xs faint">而家嘅旅團：<b class="mono">${esc(code)}</b>${isMock() ? '（示範模式）' : ''}</div>
+          <button class="btn btn-xs mt-8" id="btnGate" type="button">${icon('refresh', 13)} 返回旅團選擇</button>
         </div>
+        `}
 
-        ${showDefaultHint ? `
+        ${loginDoor === 'staff' && showDefaultHint ? `
         <div class="demo-hint mt-16">
           <b>首次使用（預設帳戶）</b><br>
-          領袖：<code>leader</code> / <code>8202</code>　執委：<code>exco</code> / <code>8203</code><br>
-          <span class="xs">登入後請到「帳號與系統 → 帳戶」改密碼，並為每位執委開自己嘅帳戶。改完之後呢個提示會自動消失。</span>
+          新帳戶同團員首次密碼都係 <code>${TEMP_PASSWORD}</code>（同進度追蹤一致）。<br>
+          領袖請用電郵開帳戶。登入後系統會要求即刻改密碼。
         </div>` : ''}
       </div>
     </main>
   </div>`;
 
+  app.querySelector('#doorExco')?.addEventListener('click', () => { loginDoor = 'staff'; renderLogin(); });
+  app.querySelector('#doorMember')?.addEventListener('click', () => { loginDoor = 'member'; renderLogin(); });
+  app.querySelector('#doorBack')?.addEventListener('click', () => { loginDoor = 'pick'; renderLogin(); });
   const grid = app.querySelector('#roleGrid');
   const userInput = app.querySelector('#liUser');
   const passInput = app.querySelector('#liPass');
   const err = app.querySelector('#liErr');
 
-  grid.querySelectorAll('[data-role]').forEach(btn => btn.addEventListener('click', () => {
+  grid?.querySelectorAll('[data-role]').forEach(btn => btn.addEventListener('click', () => {
     selectedRole = btn.dataset.role;
     renderLogin();
     app.querySelector('#liPass')?.focus();
@@ -914,13 +946,82 @@ function renderLogin() {
   app.querySelector('#btnExitMock')?.addEventListener('click', () => exitMock());
   app.querySelector('#btnBackReal')?.addEventListener('click', () => exitMockToUnit());
 
-  app.querySelector('#loginForm').addEventListener('submit', async e => {
+  app.querySelector('#memberLoginForm')?.addEventListener('submit', async e => {
+    e.preventDefault();
+    const box = app.querySelector('#liMemErr');
+    if (box) { box.textContent = ''; box.style.display = 'none'; }
+    const btn = app.querySelector('#memberLoginForm button[type=submit]');
+    if (btn) btn.disabled = true;
+    const { saveHubAuth } = await import('./lib/hub-session.js');
+    const { saveMe } = await import('./lib/member-me.js');
+    const { identityOf } = await import('./lib/model.js');
+    const res = await loginMember(app.querySelector('#liYmis')?.value, app.querySelector('#liMemPass')?.value);
+    if (btn) btn.disabled = false;
+    if (!res.ok) {
+      if (box) { box.textContent = res.msg; box.style.display = 'block'; }
+      return;
+    }
+    const m = res.member;
+    saveHubAuth(code, { id: m.id, name: m.name, ymis: m.ymis, identity: identityOf(m), mustChangePw: !!res.mustChangePw });
+    saveMe({ id: m.id, name: m.name });
+    if (res.dest === 'staff') {
+      document.body.classList.remove('login-body');
+      applyTheme(load()?.unit?.theme);
+      location.hash = '#/dashboard';
+      render();
+      if (res.mustChangePw) maybeForceChangePw();
+      return;
+    }
+    location.href = `./members.html?u=${encodeURIComponent(code)}${res.mustChangePw ? '#forcepw' : ''}`;
+  });
+
+  app.querySelector('#btnApply')?.addEventListener('click', async () => {
+    const r = await modal({
+      title: '申請開戶',
+      sub: '批核後首次密碼係 1234',
+      body: `<div class="field"><label class="label">YMIS（10 位）</label>
+          <input class="input" id="apY" inputmode="numeric"></div>
+        <div class="field mt-12"><label class="label">姓名（同名冊）</label>
+          <input class="input" id="apN"></div>
+        <div class="field mt-12"><label class="label">電郵（可選）</label>
+          <input class="input" id="apE"></div>
+        <div id="apErr" class="err mt-8"></div>`,
+      actions: [
+        { label: '取消', class: 'btn', value: null },
+        { label: '送出申請', class: 'btn-primary', onClick: el => {
+          const ymis = el.querySelector('#apY').value, name = el.querySelector('#apN').value, email = el.querySelector('#apE').value;
+          const res = applyAccount({ ymis, name, email });
+          if (!res.ok) { el.querySelector('#apErr').textContent = res.msg; el.querySelector('#apErr').style.display = 'block'; return false; }
+          return true;
+        } }
+      ]
+    });
+    if (r) toast('已送出，等執委／領袖批准', 'ok');
+  });
+
+  app.querySelector('#setupKeyForm')?.addEventListener('submit', async e => {
+    e.preventDefault();
+    const box = app.querySelector('#liKeyErr');
+    if (box) { box.textContent = ''; box.style.display = 'none'; }
+    const res = await loginSetupKey(app.querySelector('#liSetupKey')?.value);
+    if (!res.ok) {
+      if (box) { box.textContent = res.msg; box.style.display = 'block'; }
+      return;
+    }
+    document.body.classList.remove('login-body');
+    applyTheme(load()?.unit?.theme);
+    location.hash = '#/admin';
+    render();
+    toast('已用開團 KEY 進入。請即刻新增領袖電郵帳戶。', 'ok');
+  });
+
+  app.querySelector('#loginForm')?.addEventListener('submit', async e => {
     e.preventDefault();
     err.textContent = '';
     err.style.display = 'none';
     const btn = app.querySelector('#loginForm button[type=submit]');
     btn.disabled = true;
-    const res = await login(selectedRole, userInput.value, passInput.value);
+    const res = await login('staff', userInput.value, passInput.value);
     btn.disabled = false;
     if (!res.ok) {
       err.textContent = res.msg;
@@ -933,7 +1034,37 @@ function renderLogin() {
     applyTheme(load()?.unit?.theme);
     location.hash = '#/dashboard';
     render();
+    if (res.mustChangePw) maybeForceChangePw();
   });
+}
+
+async function maybeForceChangePw() {
+  const s = current();
+  if (!s?.mustChangePw || s.role === 'super' || s.mock) return;
+  const r = await modal({
+    title: '首次登入：請改密碼',
+    sub: `唔可以繼續用預設密碼 ${TEMP_PASSWORD}`,
+    body: `<p class="sm mb-12">為安全起見，第一次登入要設自己嘅密碼（至少 4 個字，唔可以係 ${TEMP_PASSWORD}）。</p>
+      <div class="field"><label class="label">新密碼</label>
+        <input class="input" id="fp1" type="password" autocomplete="new-password"></div>
+      <div class="field mt-12"><label class="label">再輸入一次</label>
+        <input class="input" id="fp2" type="password" autocomplete="new-password"></div>
+      <div id="fpErr" class="err mt-8"></div>`,
+    actions: [
+      { label: '稍後', class: 'btn', value: null },
+      { label: '儲存新密碼', class: 'btn-primary', onClick: el => {
+        const p1 = el.querySelector('#fp1').value, p2 = el.querySelector('#fp2').value;
+        const err = el.querySelector('#fpErr');
+        if (p1.length < 4) { err.textContent = '至少 4 個字元'; err.style.display = 'block'; return false; }
+        if (p1 === TEMP_PASSWORD) { err.textContent = '唔可以繼續用預設密碼'; err.style.display = 'block'; return false; }
+        if (p1 !== p2) { err.textContent = '兩次輸入唔一樣'; err.style.display = 'block'; return false; }
+        return p1;
+      } }
+    ]
+  });
+  if (!r) return;
+  const res = await changeOwnPassword('', r);
+  toast(res.ok ? '密碼已更改，下次請用新密碼登入' : (res.msg || '改唔到'), res.ok ? 'ok' : 'err');
 }
 
 /* 撳分頁去邊個 hash。
@@ -973,10 +1104,9 @@ function render() {
       </div>
 
       <div style="padding:10px 10px 0">
-        <button class="unit-chip" id="unitSwitch" style="width:100%;justify-content:space-between">
+        <div class="unit-chip" style="width:100%;justify-content:space-between;cursor:default">
           <span>${icon('flag', 13)} ${esc(currentUnit())}</span>
-          <span class="xs" style="opacity:.8">切換 ${icon('chevronD', 12)}</span>
-        </button>
+        </div>
       </div>
 
       <div class="sb-nav">
@@ -990,6 +1120,7 @@ function render() {
             <div class="n truncate">${esc(displayName())}</div>
             <div class="r truncate">${esc(displaySub())}</div>
           </div>
+          <button class="btn btn-ghost btn-xs btn-icon" id="btnPw" title="改密碼" style="color:#D3A9B2">${icon('key', 15)}</button>
           <button class="btn btn-ghost btn-xs btn-icon" id="btnLogout" title="登出" style="color:#D3A9B2">${icon('logout', 15)}</button>
         </div>
       </div>
@@ -1005,6 +1136,7 @@ function render() {
           <span id="syncChip" class="no-print"></span>
           ${mock ? `<button class="btn btn-sm no-print" id="topMockExit" title="離開示範模式">${icon('logout', 14)} 離開示範</button>` : ''}
           ${notices().length ? `<span class="badge b-warn no-print"><span class="dot"></span>${notices().length} 項提示</span>` : ''}
+          <button class="btn btn-ghost btn-sm hide-desktop" id="btnPw2" title="改密碼">${icon('key', 16)}</button>
           <button class="btn btn-ghost btn-sm hide-desktop" id="btnLogout2" title="登出">${icon('logout', 16)}</button>
         </div>
       </header>
@@ -1038,8 +1170,10 @@ function render() {
       actions: [{ label: '取消', class: 'btn', value: false }, { label: '登出', class: 'btn-primary', value: true }]
     })) { logout(); document.body.classList.add('login-body'); renderLogin(); }
   }));
-  app.querySelector('#unitSwitch')?.addEventListener('click', unitPicker);
   app.querySelector('#topMockExit')?.addEventListener('click', () => exitMock());
+  app.querySelectorAll('#btnPw, #btnPw2').forEach(el => el.addEventListener('click', async () => {
+    go('#/admin/data');
+  }));
 
   /* 示範橫額「以 XXX 身份預覽」：<select> 撳落去選值係 change 事件（唔係 click），
      以前用 document click 攞 e.target.id 永遠攞唔到 → 下拉框係壞嘅。 */

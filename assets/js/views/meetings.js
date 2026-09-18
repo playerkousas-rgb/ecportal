@@ -46,6 +46,7 @@ export function render(params) {
     <div class="row gap-8 wrap no-print">
       <div class="seg" role="tablist">
         <button role="tab" aria-selected="${viewMode === 'list'}" data-mode="list">清單</button>
+        <button role="tab" aria-selected="${viewMode === 'cal'}" data-mode="cal">行事曆</button>
         <button role="tab" aria-selected="${viewMode === 'board'}" data-mode="board">看板</button>
       </div>
       <button class="btn" data-fields="meetings">${icon('table', 15)} 欄位</button>
@@ -64,7 +65,7 @@ export function render(params) {
     </div>
   </div>
 
-  ${viewMode === 'board' ? board(list) : listView(list)}`;
+  ${viewMode === 'board' ? board(list) : viewMode === 'cal' ? calView(all) : listView(list)}`;
 }
 
 function filter(all) {
@@ -129,6 +130,59 @@ function board(list) {
         </div>`).join('') || `<div class="xs faint center" style="padding:14px 4px">—</div>`}
     </div>`;
   }).join('')}</div>`;
+}
+
+let calCursor = todayISO().slice(0, 7);
+
+function calView(all) {
+  const [yy, mm] = calCursor.split('-').map(Number);
+  const first = new Date(yy, mm - 1, 1);
+  const startDow = (first.getDay() + 6) % 7; // Mon=0
+  const days = new Date(yy, mm, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < startDow; i++) cells.push(null);
+  for (let d = 1; d <= days; d++) cells.push(d);
+  while (cells.length % 7) cells.push(null);
+  const byDay = {};
+  all.forEach(m => {
+    const ds = String(m.date || '').slice(0, 10);
+    if (!ds.startsWith(calCursor)) return;
+    const d = Number(ds.slice(8, 10));
+    (byDay[d] = byDay[d] || []).push(m);
+  });
+  const prev = () => {
+    const d = new Date(yy, mm - 2, 1);
+    calCursor = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  };
+  const next = () => {
+    const d = new Date(yy, mm, 1);
+    calCursor = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  };
+  void prev; void next;
+  return `
+  <div class="card">
+    <div class="card-head">
+      <div class="row gap-8">
+        <button class="btn btn-sm" data-cal="prev">${icon('chevronL', 14)}</button>
+        <div class="card-title">${yy} 年 ${mm} 月</div>
+        <button class="btn btn-sm" data-cal="next">${icon('chevronR', 14)}</button>
+      </div>
+      <button class="btn btn-sm btn-primary" data-act="new">${icon('plus', 14)} 新活動／會議</button>
+    </div>
+    <div class="cal-grid">
+      ${['一','二','三','四','五','六','日'].map(w => `<div class="cal-dow">${w}</div>`).join('')}
+      ${cells.map(d => {
+        if (!d) return '<div class="cal-cell empty"></div>';
+        const iso = `${calCursor}-${String(d).padStart(2, '0')}`;
+        const items = byDay[d] || [];
+        return `<div class="cal-cell" data-calday="${iso}">
+          <div class="cal-n">${d}</div>
+          ${items.map(m => `<button class="cal-ev" data-open="${m.id}">${esc((m.title || '').slice(0, 16))}</button>`).join('')}
+        </div>`;
+      }).join('')}
+    </div>
+    <div class="hint" style="padding:10px 14px">撳日子可以新增活動（用嚟點名）；撳活動名入去出席表。</div>
+  </div>`;
 }
 
 function emptyState() {
@@ -391,6 +445,22 @@ export function mount(root, params) {
 
   // 列表：模式 / 篩選 / 搜尋
   root.querySelectorAll('[data-mode]').forEach(el => el.addEventListener('click', () => { viewMode = el.dataset.mode; refresh(); }));
+  root.querySelector('[data-cal="prev"]')?.addEventListener('click', () => {
+    const [yy, mm] = calCursor.split('-').map(Number);
+    const d = new Date(yy, mm - 2, 1);
+    calCursor = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    refresh();
+  });
+  root.querySelector('[data-cal="next"]')?.addEventListener('click', () => {
+    const [yy, mm] = calCursor.split('-').map(Number);
+    const d = new Date(yy, mm, 1);
+    calCursor = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    refresh();
+  });
+  root.querySelectorAll('[data-calday]').forEach(el => el.addEventListener('click', (e) => {
+    if (e.target.closest('[data-open]')) return;
+    go('#/meetings/new?date=' + el.dataset.calday);
+  }));
   root.querySelectorAll('[data-filter]').forEach(el => el.addEventListener('click', () => { filterStatus = el.dataset.filter; refresh(); }));
   const search = root.querySelector('#mtSearch');
   if (search) {

@@ -17,7 +17,8 @@ export function title() { return '成員連結'; }
 
 export function render() {
   const list = memberLinks();
-  const core = list.filter(l => !l.id.startsWith('notice:'));
+  const hub = list.find(l => l.id === 'hub');
+  const core = list.filter(l => l.id !== 'hub' && !l.id.startsWith('notice:'));
   const noticesList = list.filter(l => l.id.startsWith('notice:'));
   const backend = load().backend;
   const s = settings().publicLinks || {};
@@ -25,25 +26,38 @@ export function render() {
   return `
   ${pageHead({
     title: '成員連結',
-    sub: '免登入公開頁 —— 團員／家長用手機開就用得，唔使執委帳戶',
+    sub: '只需派一條團員入口 —— 掃一次就齊（記帳、借用、團章、通告、行事曆、試卷）',
     actions: `
-      <button class="btn btn-sm" data-act="print-all">${icon('print', 15)} 列印全部 QR 海報</button>
-      <button class="btn btn-sm" data-act="copy-all">${icon('copy', 15)} 複製全部連結</button>
+      <button class="btn btn-sm" data-act="print-hub">${icon('print', 15)} 列印團員 QR</button>
+      <button class="btn btn-sm" data-act="copy-hub">${icon('copy', 15)} 複製團員入口</button>
       <button class="btn btn-sm" data-act="settings">${icon('settings', 15)} 公開頁網址</button>`
   })}
 
-  ${noteBox(`<b>點解要有呢一頁？</b>申報、物資借用、通告報名都係<b>成員自己</b>用嘅嘢，
-    唔應該只限執委登入先用得。呢度每一條連結都<b>免登入</b>，
-    貼落 WhatsApp 群／印出 QR 貼喺旅部就得。${backend
+  ${noteBox(`<b>掃一次就齊。</b>WhatsApp／海報只派<b>團員入口</b>（members.html）。
+    入去之後影單據、借物資、睇團章、通告、行事曆回覆、試卷全部喺同一頁。
+    團員可以登記自己叫咩名（瀏覽器記住），唔填都得，入去先打。${backend
       ? '<br><span class="xs">已連接總表：成員一送出就會寫入你嘅 Google Sheet（待批核）。</span>'
-      : '<br><span class="xs" style="color:var(--warn)">未設定 Apps Script：成員送出嘅內容會存喺佢哋自己部手機，可以「複製內容」傳畀司庫。</span>'}`, 'brand')}
+      : ''}`, 'brand')}
+
+  ${hub ? `<div class="card mb-16">
+    <div class="card-head"><div><div class="card-title">團員入口 QR（請只派呢一張）</div>
+      <div class="card-sub">${esc(hub.url)}</div></div></div>
+    <div class="center" style="padding:18px">
+      <div class="qr-box" style="width:220px;margin:0 auto">${qrSvg(hub.url, 6, 2)}</div>
+      <div class="row gap-8 wrap center mt-12" style="justify-content:center">
+        <button class="btn btn-sm" data-copy="${esc(hub.url)}">${icon('copy', 14)} 複製</button>
+        <button class="btn btn-sm btn-primary" data-act="print-hub">${icon('print', 14)} 列印海報</button>
+        <button class="btn btn-sm" data-open="${esc(hub.url)}">${icon('external', 14)} 預覽</button>
+      </div>
+    </div>
+  </div>` : ''}
   <div class="mb-16"></div>
 
   ${legacyBanner()}
 
   <div class="card mb-16">
-    <div class="card-head"><div><div class="card-title">成員系統</div>
-      <div class="card-sub">申報 · 物資 · 團章</div></div></div>
+    <div class="card-head"><div><div class="card-title">已包喺團員入口入面</div>
+      <div class="card-sub">唔使再分開派 QR —— 下面只係方便核對</div></div></div>
     <div style="padding:14px 16px" class="col gap-10">
       ${core.map(linkCard).join('')}
     </div>
@@ -51,7 +65,7 @@ export function render() {
 
   <div class="card mb-16">
     <div class="card-head"><div><div class="card-title">通告報名連結</div>
-      <div class="card-sub">已發布嘅通告，每張一條獨立連結（可以逐張派）</div></div>
+      <div class="card-sub">亦會出現喺團員入口；獨立連結只係備用</div></div>
       <button class="btn btn-sm" data-go="#/notices/new">${icon('plus', 14)} 開新通告</button></div>
     <div style="padding:14px 16px" class="col gap-10">
       ${noticesList.length ? noticesList.map(linkCard).join('')
@@ -147,11 +161,12 @@ export function mount(root) {
   }));
   root.querySelectorAll('[data-poster]').forEach(b => b.addEventListener('click', () => poster(b.dataset.poster, b.dataset.qrt)));
 
-  root.querySelector('[data-act="copy-all"]')?.addEventListener('click', async () => {
-    const text = memberLinks().map(l => `${l.label}\n${l.url}`).join('\n\n');
-    if (await copyText(`【${profile().name || ''}】成員連結\n\n${text}`)) toast('已複製全部連結', 'ok');
+  const hubUrl = memberLinks().find(l => l.id === 'hub')?.url;
+  root.querySelector('[data-act="copy-hub"]')?.addEventListener('click', async () => {
+    if (hubUrl && await copyText(`【${profile().name || ''}】團員入口（掃一次齊晒）
+${hubUrl}`)) toast('已複製團員入口', 'ok');
   });
-  root.querySelector('[data-act="print-all"]')?.addEventListener('click', () => printAllPosters());
+  root.querySelector('[data-act="print-hub"]')?.addEventListener('click', () => hubUrl && poster(hubUrl, '團員入口（掃一次齊晒）'));
   root.querySelector('[data-act="settings"]')?.addEventListener('click', () => settingsDialog());
   root.querySelector('[data-act="migrate-urls"]')?.addEventListener('click', () => {
     const n = migrateLegacyPublicUrls();

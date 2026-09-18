@@ -206,8 +206,25 @@ export function matchLocalMember(members, remote) {
  * @param {object} catalog flattenItems() 結果（可選，只影響「完成率」）
  * @param {number} totalItems 項目總數（冇 catalog 時用）
  */
+function progressIgnoredSafe(m) {
+  if (!m) return false;
+  if (m.status === 'alumni') return true;
+  if (m.identity === 'leader') return true;
+  const t = `${m.role || ''} ${m.name || ''} ${(m.tags || []).join(' ')}`;
+  return /管理員|超管|admin|系統管理員/i.test(t);
+}
+function remoteIsAdmin(m) {
+  const t = `${m?.name || ''} ${m?.role || ''} ${m?.ymis || ''}`;
+  return /管理員|超管|admin|系統管理員/i.test(t);
+}
+
 export function summarizeRemote(data, { catalog = null, roster = [] } = {}) {
-  const members = data?.members || [];
+  const members = (data?.members || []).filter(m => {
+    if (remoteIsAdmin(m)) return false;
+    const local = matchLocalMember(roster, m);
+    if (local && (local.identity === 'leader' || progressIgnoredSafe(local))) return false;
+    return true;
+  });
   const progress = data?.progress || {};
   const totalItems = catalog ? Object.keys(catalog).length : 0;
   const rows = members.map(m => {

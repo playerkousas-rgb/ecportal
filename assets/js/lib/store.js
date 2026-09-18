@@ -173,7 +173,7 @@ function blankDb(mode, code, entry = {}) {
     },
     accounts: mode === 'mock' ? SEED_ACCOUNTS_MOCK : SEED_ACCOUNTS,
     constitution: { version: '0.1', status: 'draft', title: { zh: '團章', en: 'Constitution' }, preamble: { zh: '', en: '' }, chapters: [], appendices: [], history: [] },
-    members: [], meetings: [], notices: [],
+    members: [], meetings: [], notices: [], events: [], quizzes: [],
     tableSchema: {}, tableSources: [], sync: null, backend: null,
     transactions: [], claims: [], fees: [], budgets: [],
     categories: {
@@ -606,6 +606,7 @@ export function hasLocalContent() {
     (db.members || []).length || (db.transactions || []).length ||
     (db.meetings || []).length || (db.notices || []).length ||
     (db.invItems || []).length || (db.fees || []).length ||
+    (db.events || []).length || (db.quizzes || []).length ||
     (db.constitution?.chapters || []).length
   );
 }

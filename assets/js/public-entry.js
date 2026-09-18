@@ -10,6 +10,7 @@
 
 import { esc, icon, uid, todayISO, toast, copyText } from './lib/util.js';
 import { photoPicker, bindPhotoPicker } from './views/ui.js';
+import { loadMe, saveMe } from './lib/member-me.js';
 
 const q = new URLSearchParams(location.search);
 const app = document.getElementById('app');
@@ -28,7 +29,7 @@ const state = {
   date: todayISO(),
   amount: '',
   item: '',
-  byName: '',
+  byName: (new URLSearchParams(location.search).get('name') || loadMe().name || ''),
   note: '',
   photos: []
 };
@@ -132,7 +133,7 @@ function render() {
 
       <div class="row gap-10" style="align-items:flex-start">
         <div class="pe-field grow">
-          <label>你嘅姓名 <span class="req">*</span></label>
+          <label>你嘅姓名（可喺團員入口先登記） <span class="req">*</span></label>
           <input class="input" id="pe-name" placeholder="例：陳大文" value="${esc(state.byName)}">
           <div class="pe-err" data-err="byName">請填姓名（方便司庫跟進）</div>
         </div>
@@ -217,6 +218,7 @@ function validate() {
 async function submit(e) {
   e.preventDefault();
   if (!validate()) return;
+  saveMe({ id: loadMe().id || q.get('mid') || '', name: String(state.byName).trim() });
   const btn = app.querySelector('button[type="submit"]');
   btn.disabled = true; btn.textContent = '送出中…';
 
@@ -228,6 +230,7 @@ async function submit(e) {
     amount: Number(state.amount),
     date: state.date || todayISO(),
     byName: String(state.byName).trim(),
+    memberId: loadMe().id || q.get('mid') || '',
     note: String(state.note).trim(),
     photos: state.photos.map(p => ({ name: p.name, type: p.type, dataUrl: p.dataUrl })),
     receipt: state.photos.length > 0,

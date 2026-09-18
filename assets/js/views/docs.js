@@ -34,16 +34,16 @@ const NAV = [
 ];
 
 export function render(params) {
-  /* 開新旅團嘅設定只有超級管理員做到（其他人冇 Vercel 權限），所以只俾超管見到 */
-  const nav = NAV.filter(([k]) => k !== 'newunit' || isSuper());
+  /* 用戶只需日常教學；MOCK／多旅團／開新旅團／總表同步只限超管 */
+  const userOk = new Set(['start', 'accounts', 'constitution', 'finance', 'daily', 'mobile', 'inventory', 'birthday', 'progress', 'backup']);
+  const nav = NAV.filter(([k]) => isSuper() ? (k !== 'newunit' || isSuper()) : userOk.has(k));
   if (params.id === 'newunit' && !isSuper()) section = 'newunit';          // 直接打網址入嚟 → 下面會顯示「只限超管」
   else if (nav.some(([k]) => k === params.id)) section = params.id;
   return `
   ${pageHead({
     title: '使用教學',
     sub: `畀執委、領袖同新接手嘅團員睇 —— 由登入到輸出文件一步一步`,
-    actions: `<button class="btn btn-sm" data-act="print">${icon('print', 15)} 列印教學</button>
-      <button class="btn btn-sm" data-go="#/admin/mock">${icon('eye', 15)} 試示範模式</button>`
+    actions: `<button class="btn btn-sm" data-act="print">${icon('print', 15)} 列印教學</button>`
   })}
   <div class="grid g-1-2">
     <div class="card no-print" style="align-self:start">
@@ -87,13 +87,15 @@ const P = (t) => `<p>${t}</p>`;
 
 function startDoc() {
   return `
-  ${H('1. 登入')}
-  ${P('登入頁只可以揀兩種身份：<b>領袖</b> 或 <b>執行委員會</b>。輸入你嘅帳號同密碼就可以進入。')}
-  ${P('<b>超級管理員</b>係隱藏帳戶：喺「登入帳號」直接輸入指定帳號同密碼，系統就會自動以超管身份登入，唔會喺任何名單出現，亦冇人可以改佢密碼。')}
+  ${H('1. 登入（兩個入口）')}
+  ${P('<b>團員同執委同一個門</b>：YMIS（10 位）＋密碼。系統睇名冊身份 —— 執委入管理系統，團員入團員頁。換屆只要改名冊「身份」，唔使另開帳戶。')}
+  ${P('<b>領袖</b>用另一個門：電郵＋密碼。新旅團未有領袖帳戶：喺 Apps Script 執行 <code>issueSetupKey()</code>，把 72 小時 KEY 貼上領袖登入頁。')}
+  ${P('開戶：團員可以喺登入頁申請（要執委／領袖批准），或者後台單個／批量開戶。首次密碼一律 <code>1234</code>，入去要改。')}
+  ${isSuper() ? P('<b>超級管理員</b>係隱藏帳戶，唔會出現喺任何旅團名單。') : ''}
   <div class="steps">
-    <div class="step"><div>揀「領袖」或「執行委員會」</div></div>
-    <div class="step"><div>輸入帳號 + 密碼 → 進入系統</div></div>
-    <div class="step"><div>第一次用，去「帳號與系統 → 帳戶」新增每位執委嘅帳戶</div></div>
+    <div class="step"><div>揀「領袖」或「團員／執委」</div></div>
+    <div class="step"><div>領袖填電郵；團員／執委填 YMIS ＋ 密碼</div></div>
+    <div class="step"><div>未開戶 → 申請，或者「用戶」頁批准／批量開戶</div></div>
   </div>
   ${H('2. 六個模組')}
   <table class="table table-compact">
@@ -107,31 +109,30 @@ function startDoc() {
       <tr><td>團章 / 進度 / 帳號與系統</td><td>團章編輯輸出、讀寫進度紀錄、帳戶及資料管理</td></tr>
     </tbody>
   </table>
-  ${H('3. 想試下先？')}
-  ${P('按左邊目錄最底嘅「示範資料（MOCK）」，或者喺登入頁按「試用示範」——所有操作都寫入獨立嘅示範空間，唔會搞亂真實資料。')}`;
+  ${isSuper() ? `${H('3. 想試下先？')}${P('超管可喺登入前揀「試用示範（MOCK）」。')}` : ''}`;
 }
 
 function accountsDoc() {
   return `
   ${H('帳戶層級')}
   <table class="table table-compact">
-    <thead><tr><th>身份</th><th>可以改邊個嘅密碼</th><th>可以開／刪帳戶</th></tr></thead>
+    <thead><tr><th>身份</th><th>點登入</th><th>權限跟邊度</th></tr></thead>
     <tbody>
-      <tr><td>超級管理員（隱藏）</td><td>領袖、執委全部</td><td>領袖、執委</td></tr>
-      <tr><td>領袖</td><td>自己 ＋ 執委</td><td>執委</td></tr>
-      <tr><td>執委會</td><td>只可以改自己</td><td>—</td></tr>
+      ${isSuper() ? '<tr><td>超級管理員（隱藏）</td><td>（唔顯示）</td><td>平台維護</td></tr>' : ''}
+      <tr><td>領袖</td><td>電郵＋密碼（或開團 KEY）</td><td>領袖帳戶</td></tr>
+      <tr><td>執委</td><td>YMIS＋密碼（同團員一個門）</td><td><b>名冊身份</b>（換屆改名冊）</td></tr>
+      <tr><td>團員</td><td>YMIS＋密碼</td><td>團員頁（自己進度、連結）</td></tr>
     </tbody>
   </table>
-  ${noteBox('超管帳戶唔會顯示喺帳戶名單，任何人都改唔到佢個密碼；密碼以雜湊（SHA-256 + 鹽）儲存，唔會以明文寫入資料。', 'brand')}
-  ${H('新增執委帳戶（領袖做）')}
+  ${noteBox('執委唔使每人開「執委帳戶」。名冊剔做執委，下次用同一個 YMIS 入就係管理系統。', 'brand')}
+  ${H('開戶')}
   <div class="steps">
-    <div class="step"><div>去「帳號與系統 → 帳戶」</div></div>
-    <div class="step"><div>喺「執行委員會」卡片按「新增」</div></div>
-    <div class="step"><div>填姓名、職位、登入帳號、密碼 → 新增</div></div>
-    <div class="step"><div>把帳號密碼交畀該位執委（提醒佢自己改密碼）</div></div>
+    <div class="step"><div>「用戶」新增／批量開戶，或批准登入頁嘅申請</div></div>
+    <div class="step"><div>首次密碼 <code>1234</code>，第一次登入要改</div></div>
+    <div class="step"><div>領袖電郵帳戶喺「帳號與系統 → 帳戶」新增（密碼可留空＝1234）</div></div>
   </div>
   ${H('改密碼')}
-  ${P('喺帳戶卡片按「密碼」：你只會見到你有權改嘅帳戶可以按。執委登入後只會見到自己嘅「密碼」按鈕可用。')}`;
+  ${P('登入後頂部鎖匙，或者「帳號與系統 → 自己改密碼」。')}`;
 }
 
 function constitutionDoc() {
@@ -349,7 +350,8 @@ function tablesDoc() {
   <div class="steps">
     <div class="step"><div>開你旅團嘅專屬 Google Sheet → <b>擴充功能 → Apps Script</b></div></div>
     <div class="step"><div>APP 內免登入或於「總表同步 → <b>下載 Code.gs</b>」→ 貼上去（全部取代）</div></div>
-    <div class="step"><div>執行 <code>initializeSheets</code> 建立 9 個棗紅工作表並取得專屬 API Key</div></div>
+    <div class="step"><div>第一次：執行 <code>initializeSheets</code> 建分頁＋API Key。之後只更新程式：貼上 → 儲存 → 部署「新版本」，<b>唔使再 initialize</b></div></div>
+    <div class="step"><div>開團 KEY：執行 <code>issueSetupKey()</code>（72 小時；過期再執行）</div></div>
     <div class="step"><div><b>部署 → 新增部署作業 → 網頁應用程式</b>；執行身分：我；存取權：任何人</div></div>
     <div class="step"><div>複製 <code>/exec</code> 網址，貼返「Apps Script 網址」，填旅團編號與 API Key</div></div>
     <div class="step"><div>按「<b>測試連線</b>」→ 成功後按「<b>立即同步全部</b>」（或者開「每次改動後自動同步」）</div></div>
@@ -490,8 +492,10 @@ function mockDoc() {
   </ul>
   ${H('點進入示範模式')}
   <ul>
-    <li>登入頁 → 「試用示範（MOCK）」</li>
-    <li>或「帳號與系統 → 示範資料」→ 進入示範模式</li>
+    <li>旅團選擇閘 → 「試用示範（MOCK）」—— 未加入嘅旅團都可以入嚟睇齊最新流程</li>
+    <li>入去會以示範領袖身份睇管理系統。想試兩個入口：撳登出</li>
+    <li>團員／執委示範：YMIS <code>1000000001</code>（執委）或 <code>1000000006</code>（團員），密碼 <code>1234</code></li>
+    <li>如果示範資料好舊：橫額「重設示範」會重新載入 <code>data/mock/</code></li>
   </ul>
   ${H('點做自己旅團嘅示範資料')}
   ${P('複製 <code>data/mock/</code> 資料夾，照以下格式改內容（用假名！）：')}
@@ -641,7 +645,7 @@ function newUnitDoc() {
     <li>□ 收到旅團嘅 <code>/exec</code> 網址 ＋ API Key</li>
     <li>□ Vercel 加咗 5 個 <code>TROOP_&lt;編號&gt;_*</code> 變數</li>
     <li>□ Redeploy 完成，旅團清單見到新編號</li>
-    <li>□ 旅團更新咗 Code.gs ＋ 執行 <code>initializeSheets</code></li>
+    <li>□ 旅團更新咗 Code.gs ＋ 部署新版本（第一次先要 initializeSheets）</li>
     <li>□ 實測：登入 → 開一張測試通告 → 用 QR／連結報名 → Sheet「報名」分頁見到紀錄</li>
     <li>□ 實測：進度頁見到成員（或者顯示「伺服器端已設定」）</li>
     <li>□ 通知旅團：以後自己入「進度 → 設定」可以覆蓋 <code>/exec</code> ＋ Key</li>
