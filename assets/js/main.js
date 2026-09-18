@@ -36,15 +36,20 @@ import * as noticesView from './views/notices.js';
 import * as tables from './views/tables.js';
 import { openFieldDesigner } from './views/tables.js';
 import * as linksView from './views/links.js';
+import * as calendar from './views/calendar.js';
+import * as quizzes from './views/quizzes.js';
 
 const VIEWS = {
   dashboard, meetings, finance, members, inventory, progress,
-  constitution, notices: noticesView, tables, admin: accountsView, docs, links: linksView
+  constitution, notices: noticesView, tables, admin: accountsView, docs, links: linksView,
+  calendar, quizzes
 };
 
 const NAV = [
   { id: 'dashboard', label: '儀表板', icon: 'home' },
-  { id: 'meetings', label: '會議', icon: 'calendar', badge: () => pendingMeetings().length },
+  { id: 'calendar', label: '行事曆', icon: 'calendar' },
+  { id: 'quizzes', label: '試卷', icon: 'note' },
+  { id: 'meetings', label: '會議', icon: 'clock', badge: () => pendingMeetings().length },
   { id: 'finance', label: '財務', icon: 'wallet', badge: () => overdueFees().length + pendingClaims().length },
   { id: 'members', label: '用戶', icon: 'users' },
   { id: 'inventory', label: '物資', icon: 'grid', badge: () => pendingLoans().length },
@@ -55,7 +60,7 @@ const NAV = [
   { id: 'docs', label: '教學', icon: 'note' },
   { id: 'admin', label: '帳號與系統', icon: 'shield' }
 ];
-const MOBILE_MAIN = ['dashboard', 'meetings', 'finance', 'inventory'];
+const MOBILE_MAIN = ['dashboard', 'calendar', 'finance', 'inventory'];
 
 const app = document.getElementById('app');
 let bootError = null;
@@ -770,6 +775,7 @@ function renderFatal(e) {
    ============================================================ */
 let selectedRole = 'exco';
 let pickedUnit = null;
+let loginDoor = 'pick'; /* pick | exco | member */
 
 function renderLogin() {
   document.body.classList.add('login-body');
@@ -831,9 +837,32 @@ function renderLogin() {
           </select>
         </div>` : ''}
 
-        <h1>登入</h1>
-        <p class="sub">請揀你嘅身份，再輸入帳號同密碼</p>
+        <h1>${loginDoor === 'member' ? '團員入口' : loginDoor === 'exco' ? '執委／領袖登入' : '你係邊個？'}</h1>
+        <p class="sub">${loginDoor === 'pick'
+          ? '執委／領袖用帳號密碼；團員用簡單入口（行事曆、回覆、試卷），唔使密碼。'
+          : loginDoor === 'member'
+            ? '團員唔使帳號。撳下面入團員頁：睇活動、回覆出席、填試卷。'
+            : '請揀身份，再輸入帳號同密碼。'}</p>
 
+        ${loginDoor === 'pick' ? `
+        <div class="role-grid">
+          <button class="role-card" type="button" id="doorExco">
+            <span class="role-ic">${icon('key', 19)}</span>
+            <span class="grow"><span class="role-name" style="display:block">執委／領袖</span>
+            <span class="role-desc" style="display:block">帳號＋密碼 → 管理介面</span></span>
+            ${icon('chevronR', 17)}
+          </button>
+          <button class="role-card" type="button" id="doorMember">
+            <span class="role-ic">${icon('users', 19)}</span>
+            <span class="grow"><span class="role-name" style="display:block">團員</span>
+            <span class="role-desc" style="display:block">免密碼：活動行事曆、出席回覆、試卷</span></span>
+            ${icon('chevronR', 17)}
+          </button>
+        </div>` : loginDoor === 'member' ? `
+        <a class="btn btn-primary btn-lg btn-block mt-16" href="./members.html?u=${encodeURIComponent(code)}">${icon('users', 17)} 進入團員頁</a>
+        <button class="btn btn-block mt-12" type="button" id="doorBack">${icon('chevronL', 15)} 返回</button>
+        ` : `
+        <button class="btn btn-ghost btn-sm mb-12" type="button" id="doorBack">${icon('chevronL', 14)} 返回選擇入口</button>
         <div class="role-grid" id="roleGrid">
           ${['leader', 'exco'].map(r => {
             const R = ROLES[r];
@@ -875,7 +904,9 @@ function renderLogin() {
           </div>
         </div>
 
-        ${showDefaultHint ? `
+        `}
+
+        ${loginDoor === 'exco' && showDefaultHint ? `
         <div class="demo-hint mt-16">
           <b>首次使用（預設帳戶）</b><br>
           領袖：<code>leader</code> / <code>8202</code>　執委：<code>exco</code> / <code>8203</code><br>
@@ -885,12 +916,15 @@ function renderLogin() {
     </main>
   </div>`;
 
+  app.querySelector('#doorExco')?.addEventListener('click', () => { loginDoor = 'exco'; renderLogin(); });
+  app.querySelector('#doorMember')?.addEventListener('click', () => { loginDoor = 'member'; renderLogin(); });
+  app.querySelector('#doorBack')?.addEventListener('click', () => { loginDoor = 'pick'; renderLogin(); });
   const grid = app.querySelector('#roleGrid');
   const userInput = app.querySelector('#liUser');
   const passInput = app.querySelector('#liPass');
   const err = app.querySelector('#liErr');
 
-  grid.querySelectorAll('[data-role]').forEach(btn => btn.addEventListener('click', () => {
+  grid?.querySelectorAll('[data-role]').forEach(btn => btn.addEventListener('click', () => {
     selectedRole = btn.dataset.role;
     renderLogin();
     app.querySelector('#liPass')?.focus();
@@ -912,7 +946,7 @@ function renderLogin() {
   app.querySelector('#btnExitMock')?.addEventListener('click', () => exitMock());
   app.querySelector('#btnBackReal')?.addEventListener('click', () => exitMockToUnit());
 
-  app.querySelector('#loginForm').addEventListener('submit', async e => {
+  app.querySelector('#loginForm')?.addEventListener('submit', async e => {
     e.preventDefault();
     err.textContent = '';
     err.style.display = 'none';

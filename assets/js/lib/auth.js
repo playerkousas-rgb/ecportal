@@ -86,6 +86,12 @@ export const PERMS = {
   'inv.approve':    { super: 1, leader: 1, exco: 1 },
   'inv.audit':      { super: 1, leader: 1, exco: 1 },
 
+  /* 行事曆／試卷 */
+  'calendar.view':  { super: 1, leader: 1, exco: 1 },
+  'calendar.edit':  { super: 1, leader: 1, exco: 1 },
+  'quiz.view':      { super: 1, leader: 1, exco: 1 },
+  'quiz.edit':      { super: 1, leader: 1, exco: 1 },
+
   /* 進度系統 */
   'progress.view':  { super: 1, leader: 1, exco: 1 },
   'progress.tick':  { super: 1, leader: 1, exco: 1 },   // 直接勾進度（寫入旅團自己嘅後端）
@@ -128,6 +134,7 @@ export const PERM_GROUPS = [
   { title: '物資', items: [['inv.view', '查看物資'], ['inv.manage', '新增 / 修改物資'], ['inv.borrow', '申請借用'], ['inv.approve', '批核借用 / 歸還'], ['inv.audit', '盤點調整庫存']] },
   { title: '通告', items: [['notice.view', '查看通告'], ['notice.create', '開新通告'], ['notice.edit', '編輯通告'], ['notice.publish', '發布 / 分享'], ['notice.signup', '睇報名紀錄']] },
   { title: '欄位與同步', items: [['table.view', '查看欄位設計'], ['table.design', '改欄位 / 加欄位（各分頁「欄位」掣）'], ['table.sync', '設定總表同步（帳號與系統 → 資料管理）']] },
+  { title: '行事曆／試卷', items: [['calendar.view', '查看活動行事曆'], ['calendar.edit', '新增／編輯活動同點名'], ['quiz.view', '查看試卷'], ['quiz.edit', '新設／匯入試卷']] },
   { title: '進度系統', items: [['progress.view', '睇團員進度（直接讀取）'], ['progress.tick', '勾選 / 取消進度'], ['progress.config', '設定後端網址同 API Key']] },
   { title: '團章', items: [['constitution.view', '閱讀團章'], ['constitution.edit', '編輯條文'], ['constitution.publish', '發布新版本 / 輸出']] },
   { title: '系統', items: [['admin.view', '開啟管理頁'], ['admin.accounts', '新增 / 刪除帳戶'], ['admin.pw.self', '改自己密碼'], ['admin.pw.leader', '改領袖密碼'], ['admin.pw.exco', '改執委密碼'], ['admin.pw.super', '改超管密碼（一律禁止）'], ['admin.data', '備份 / 還原資料'], ['admin.units', '旅團設定']] }

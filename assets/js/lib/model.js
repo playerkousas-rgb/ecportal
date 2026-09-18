@@ -43,7 +43,7 @@ export function memberLinks() {
   const out = [
     {
       id: 'hub', icon: 'home', label: '團員入口（全部公開頁）',
-      desc: '一條網址：記帳、借用、團章、通告。請把 members.html 派畀團員記住。',
+      desc: '一條網址：行事曆回覆、試卷、記帳、借用、團章、通告。請把 members.html 派畀團員記住。',
       url: publicPageUrl('members.html', { u: code })
     },
     {
@@ -295,19 +295,45 @@ export function memberBirthdayText(m) {
   return p.hasYear ? `${p.iso}（${p.m} 月 ${p.d} 日）` : `${p.m} 月 ${p.d} 日（年份待補）`;
 }
 
-export function attendanceStats(memberId) {
-  const ms = collection('meetings').filter(m => m.status === 'done');
-  let present = 0, late = 0, apology = 0, absent = 0;
-  ms.forEach(m => {
-    const s = (m.attendance || {})[memberId];
-    if (s === 'present') present++;
-    else if (s === 'late') { late++; present++; }
-    else if (s === 'apology') apology++;
-    else if (s === 'absent') absent++;
-  });
-  const total = Math.max(ms.length, 1);
-  return { present, late, apology, absent, total: ms.length, rate: Math.round(present / total * 100) };
+export const RSVP = {
+  present: { label: '出席', cls: 'b-ok' },
+  absent:  { label: '不出席', cls: 'b-danger' },
+  late:    { label: '遲到', cls: 'b-warn' },
+  early:   { label: '早走', cls: 'b-info' }
+};
+export function events() { return collection('events'); }
+export function eventOf(id) { return find('events', id); }
+export function publicEvents() {
+  return events().filter(e => e.visibility !== 'exco' && e.status !== 'cancelled')
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
 }
+export function rsvpCounts(ev) {
+  const map = ev?.rsvp || {};
+  const roll = ev?.rollcall || {};
+  const n = k => Object.values(map).filter(x => (x.status || x) === k).length;
+  const rn = k => Object.values(roll).filter(x => (x.status || x) === k).length;
+  return {
+    present: n('present'), absent: n('absent'), late: n('late'), early: n('early'),
+    rollPresent: rn('present'), rollAbsent: rn('absent'), rollLate: rn('late'), rollEarly: rn('early'),
+    rsvpTotal: Object.keys(map).length, rollTotal: Object.keys(roll).length
+  };
+}
+export function attendanceStats(memberId) {
+  const list = events().filter(e => e.status !== 'cancelled');
+  let present = 0, late = 0, early = 0, absent = 0;
+  list.forEach(e => {
+    const s = (e.rollcall || {})[memberId];
+    const st = s?.status || s;
+    if (st === 'present') present++;
+    else if (st === 'late') late++;
+    else if (st === 'early') early++;
+    else if (st === 'absent') absent++;
+  });
+  const marked = present + late + early + absent;
+  return { present, late, early, absent, total: list.length, marked,
+    rate: marked ? Math.round((present + late + early) / marked * 100) : 0 };
+}
+export function quizzes() { return collection('quizzes'); }
 
 /* ---------------- 生日 ---------------- */
 /** 所有團員依「距離下次生日」排序 */
