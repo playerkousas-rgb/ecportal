@@ -42,8 +42,8 @@ export function memberLinks() {
   const code = load().unitCode;
   const out = [
     {
-      id: 'hub', icon: 'home', label: '團員入口（全部公開頁）',
-      desc: '一條網址：行事曆回覆、試卷、記帳、借用、團章、通告。請把 members.html 派畀團員記住。',
+      id: 'hub', icon: 'home', label: '團員入口（掃一次就齊）',
+      desc: '只需派呢一條：行事曆、回覆出席、試卷、影單據、借物資、團章、通告。QR／WhatsApp 都用呢條。',
       url: publicPageUrl('members.html', { u: code })
     },
     {

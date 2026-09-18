@@ -8,7 +8,7 @@ import { collection, add, update, remove, commit, load, find } from '../lib/stor
 import {
   tx, claims, fees, budgets, categories, methods, money, sumBy, balance, balanceAt,
   feeSummary, overdueFees, pendingClaims, monthStats, allMonths, memberName, member,
-  activeMembers, members, settings, profile, listYears, scoutFYRange, unitFYRange, unitFYOf,
+  activeMembers, members, settings, profile, publicPageUrl, listYears, scoutFYRange, unitFYRange, unitFYOf,
   summarize, openingBalance, currentBalance, balanceBreakdown, currency, agmIsDefault, setAgmDate, lastSaturdayOfAugust,
   openingOf, openingBalances, legacyOpening, currentFY, currentFYRange, prevFYKey, yearRange, refYearKey, carriedForward,
   feePeriodOf, feePeriods, feeOf, feeGrid, feeStats, matchMemberByName,
@@ -648,7 +648,7 @@ function claimsView() {
   <div class="note-box mb-16">${icon('note', 15)}<div>
     呢個「收支申報」取代原本嘅 Google Form：團員／執委喺呢度填墊支或收入，
     司庫或領袖批核後<b>自動寫入帳目</b>，唔使再 copy 資料。<br>
-    <span class="xs">成員唔想登入？按右上「<b>畀成員自己填（QR）</b>」，佢哋用手機影相＋揀欄目就交得（<code>entry.html?u=${esc(load().unitCode)}</code>）。</span></div></div>
+    <span class="xs">成員唔想登入？派<b>團員入口</b> QR（掃一次齊晒）。按右上「<b>畀成員自己填（QR）</b>」會顯示團員入口。</span></div></div>
 
   <div class="row-between wrap gap-12 mb-16">
     ${chipbar([['pending', '待批核', all.filter(c => (c.status || 'pending') === 'pending').length],
@@ -2091,11 +2091,11 @@ export async function entryShareDialog() {
   const db = load();
   const code = db.unitCode;
   const cur = db.settings?.publicEntry?.submitUrl || db.sync?.url || '';
-  const url = new URL(`entry.html?u=${encodeURIComponent(code)}`, location.href).href;
+  const url = publicPageUrl('members.html', { u: code });
 
   const r = await modal({
-    title: '畀成員自己填（手機影相＋揀欄目）',
-    sub: '免登入公開收集頁：取代 Google Form',
+    title: '團員入口（掃一次齊晒）',
+    sub: '請只派呢一條。入去可以影單據、借物資、睇通告／行事曆／試卷',
     wide: true,
     body: `
       <div class="grid g-2" style="gap:16px">

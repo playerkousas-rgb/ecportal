@@ -1,14 +1,12 @@
-/* 團員入口：行事曆、RSVP、試卷、其他公開頁 */
+/* 團員入口：掃一次見到全部公開功能。名可選填，存瀏覽器。 */
 import { loadRegistry, defaultUnitCode } from './lib/units.js';
-import { init, load, update, commit } from './lib/store.js';
-import { memberLinks, profile, publicEvents, RSVP, quizzes, activeMembers } from './lib/model.js';
+import { init, load, update } from './lib/store.js';
+import { memberLinks, profile, publicEvents, RSVP, quizzes, activeMembers, publicPageUrl } from './lib/model.js';
+import { loadMe, saveMe, identityForSubmit } from './lib/member-me.js';
 import { esc, icon, toast, todayISO } from './lib/util.js';
 
 const app = document.getElementById('app');
-const ME_KEY = 'v82.hub.me';
-
-function meId() { try { return localStorage.getItem(ME_KEY) || ''; } catch { return ''; } }
-function setMe(id) { try { localStorage.setItem(ME_KEY, id); } catch { /* */ } }
+let pending = null; /* { kind, id, extra } 等填完名再做 */
 
 async function boot() {
   const u = new URLSearchParams(location.search);
@@ -22,115 +20,153 @@ async function boot() {
       store.setSaveHook(() => remoteApi.scheduleSave());
       remoteApi.arm?.();
     }
-  } catch { /* 公開頁冇後端都得 */ }
+  } catch { /* */ }
   paint();
 }
 
+function code() { return load().unitCode; }
+
 function paint() {
   const p = profile();
-  const hash = location.hash.replace(/^#\/?/, '') || 'cal';
+  const hash = location.hash.replace(/^#\/?/, '') || 'home';
   const [sec, id] = hash.split('/');
+  const me = loadMe();
   app.innerHTML = `
   <div class="hub-top">
     <div class="hub-wrap">
-      <div class="xs" style="opacity:.8">團員入口 · 免登入</div>
+      <div class="xs" style="opacity:.8">團員入口 · 免登入 · 掃一次齊晒</div>
       <div style="font-size:22px;font-weight:800;margin-top:4px">${esc(p.name || '深資童軍團')}</div>
+      <div class="xs" style="opacity:.85;margin-top:6px">${me.name
+        ? `呢部機記住你係 <b>${esc(me.name)}</b>`
+        : '可以而家登記自己叫咩名（呢部機記住），或者入去先再填。'}</div>
     </div>
   </div>
   <div class="hub-wrap">
-    <div class="seg mb-16" style="width:100%">
-      ${[['cal', '行事曆'], ['quiz', '試卷'], ['more', '其他']].map(([k, l]) =>
-        `<button type="button" data-hub="${k}" aria-selected="${sec === k || (k === 'cal' && !['quiz','more'].includes(sec))}">${l}</button>`).join('')}
-    </div>
-    ${whoBar()}
-    ${sec === 'quiz' ? (id ? quizFill(id) : quizList()) : sec === 'more' ? moreList() : (id ? eventDetail(id) : calList())}
+    ${idBar()}
+    ${sec === 'cal' && id ? eventDetail(id)
+      : sec === 'quiz' && id ? quizFill(id)
+      : home()}
   </div>`;
-  app.querySelectorAll('[data-hub]').forEach(b => b.addEventListener('click', () => { location.hash = '#/' + b.dataset.hub; paint(); }));
-  app.querySelector('#hubMe')?.addEventListener('change', e => { setMe(e.target.value); paint(); });
-  app.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => { location.hash = b.dataset.open; paint(); }));
-  app.querySelectorAll('[data-rsvp]').forEach(b => b.addEventListener('click', () => rsvp(b.dataset.eid, b.dataset.rsvp)));
-  app.querySelector('[data-quiz-submit]')?.addEventListener('click', () => submitQuiz(id));
+  bind();
 }
 
-function whoBar() {
+function idBar() {
+  const me = loadMe();
   const roster = activeMembers();
-  const cur = meId();
   return `<div class="card card-pad mb-16">
-    <div class="field"><label class="label">我係邊個（回覆／交卷用）</label>
-      <select class="select" id="hubMe">
-        <option value="">— 請揀名冊上嘅名 —</option>
-        ${roster.map(m => `<option value="${esc(m.id)}" ${m.id === cur ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}
+    <div class="semibold sm mb-8">我叫咩名？（可留空，入去先填都得）</div>
+    <div class="field">
+      <select class="select" id="hubPick">
+        <option value="">— 名冊上嘅名 —</option>
+        ${roster.map(m => `<option value="${esc(m.id)}" ${m.id === me.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}
       </select>
-      <div class="hint">揀一次之後會記住喺呢部手機。</div>
-    </div></div>`;
+    </div>
+    <div class="field mt-8"><label class="label">或者自己打（唔喺名冊都得）</label>
+      <input class="input" id="hubName" placeholder="例：陳大文" value="${esc(me.name)}">
+    </div>
+    <button class="btn btn-sm mt-10" type="button" id="hubSaveName">${icon('save', 14)} 記住喺呢部機</button>
+    ${me.name ? `<button class="btn btn-xs btn-ghost mt-8" type="button" id="hubClearName">清除記住嘅名</button>` : ''}
+  </div>`;
 }
 
-function calList() {
-  const list = publicEvents();
-  if (!list.length) return '<div class="card card-pad muted">暫時未有團員可見嘅活動。</div>';
-  const mid = meId();
-  return list.map(e => {
-    const mine = mid ? (e.rsvp || {})[mid] : null;
-    const st = mine?.status || mine || '';
-    return `<button class="hub-card" type="button" data-open="#/cal/${e.id}" style="width:100%;text-align:left">
-      <span class="stat-ic">${icon('calendar', 18)}</span>
-      <div class="grow"><div class="semibold">${esc(e.title)}</div>
-        <div class="xs muted mt-4">${esc(e.date)} ${esc(e.time || '')} · ${esc(e.venue || '')}</div>
-        ${st ? `<div class="xs mt-4"><span class="badge ${RSVP[st]?.cls || ''}">已回覆：${esc(RSVP[st]?.label || st)}</span></div>` : ''}</div>
-    </button>`;
-  }).join('');
+function home() {
+  const evs = publicEvents();
+  const qz = quizzes().filter(q => q.status !== 'closed');
+  const notices = (load().notices || []).filter(n => n.status === 'published');
+  const u = code();
+  const tools = [
+    { href: publicPageUrl('entry.html', { u }), icon: 'camera', title: '影單據／記一筆', desc: '墊支或代收，影相交司庫' },
+    { href: publicPageUrl('borrow.html', { u }), icon: 'grid', title: '借物資', desc: '申請借用旅團物資' },
+    { href: publicPageUrl('constitution.html', { u }), icon: 'book', title: '團章', desc: '免登入閱讀' }
+  ];
+  return `
+    <div class="semibold mb-8">我要做</div>
+    ${tools.map(t => `<a class="hub-card" href="${esc(withName(t.href))}">
+      <span class="stat-ic">${icon(t.icon, 18)}</span>
+      <div class="grow"><div class="semibold">${esc(t.title)}</div><div class="xs muted mt-4">${esc(t.desc)}</div></div>
+    </a>`).join('')}
+
+    <div class="semibold mt-24 mb-8">活動行事曆</div>
+    ${evs.length ? evs.map(e => {
+      const st = myRsvp(e);
+      return `<button class="hub-card" type="button" data-open="#/cal/${e.id}" style="width:100%;text-align:left">
+        <span class="stat-ic">${icon('calendar', 18)}</span>
+        <div class="grow"><div class="semibold">${esc(e.title)}</div>
+          <div class="xs muted mt-4">${esc(e.date)} ${esc(e.time || '')} · ${esc(e.venue || '')}</div>
+          ${st ? `<div class="xs mt-4"><span class="badge ${RSVP[st]?.cls || ''}">已回覆：${esc(RSVP[st]?.label)}</span></div>` : ''}</div>
+      </button>`;
+    }).join('') : '<div class="card card-pad muted">暫時未有團員可見活動。</div>'}
+
+    <div class="semibold mt-24 mb-8">試卷</div>
+    ${qz.length ? qz.map(q => `<button class="hub-card" type="button" data-open="#/quiz/${q.id}" style="width:100%;text-align:left">
+      <span class="stat-ic">${icon('note', 18)}</span>
+      <div class="grow"><div class="semibold">${esc(q.title)}</div>
+        <div class="xs muted mt-4">${(q.questions || []).length} 題</div></div>
+    </button>`).join('') : '<div class="card card-pad muted">暫時未有開放試卷。</div>'}
+
+    <div class="semibold mt-24 mb-8">通告</div>
+    ${notices.length ? notices.map(n => {
+      const href = publicPageUrl('notice.html', { u, n: n.id });
+      return `<a class="hub-card" href="${esc(withName(href))}">
+        <span class="stat-ic">${icon('megaphone', 18)}</span>
+        <div class="grow"><div class="semibold">${esc(n.title?.zh || n.id)}</div>
+          <div class="xs muted mt-4">${esc(n.eventDate || '')} ${n.needSignup ? '· 可回覆出席' : ''}</div></div>
+      </a>`;
+    }).join('') : '<div class="card card-pad muted">暫時未有已發布通告。</div>'}
+  `;
+}
+
+function withName(url) {
+  const me = loadMe();
+  if (!me.name) return url;
+  try {
+    const u = new URL(url, location.href);
+    u.searchParams.set('name', me.name);
+    if (me.id) u.searchParams.set('mid', me.id);
+    return u.toString();
+  } catch { return url; }
+}
+
+function myRsvp(e) {
+  const ident = identityForSubmit(activeMembers());
+  if (!ident.id) return '';
+  const v = (e.rsvp || {})[ident.id];
+  return v?.status || v || '';
+}
+
+function needName(kind, id, extra) {
+  persistNameFromBar();
+  const ident = identityForSubmit(activeMembers());
+  if (ident.name) return ident;
+  pending = { kind, id, extra };
+  toast('請喺上面填／揀你嘅名，再撳「記住」', 'warn');
+  app.querySelector('#hubName')?.focus();
+  return null;
 }
 
 function eventDetail(id) {
   const e = (load().events || []).find(x => x.id === id);
-  if (!e || e.visibility === 'exco') return '<div class="card card-pad">搵唔到呢個活動（可能只限執委）。</div>';
-  const mid = meId();
-  const mine = mid ? (e.rsvp || {})[mid] : null;
-  const st = mine?.status || mine || '';
-  return `<button class="btn btn-ghost btn-sm mb-12" type="button" data-open="#/cal">${icon('chevronL', 14)} 返回</button>
+  if (!e || e.visibility === 'exco') return '<div class="card card-pad">搵唔到呢個活動。</div>';
+  const st = myRsvp(e);
+  return `<button class="btn btn-ghost btn-sm mb-12" type="button" data-open="#/home">${icon('chevronL', 14)} 返回</button>
     <div class="card card-pad">
       <div class="page-title" style="font-size:20px">${esc(e.title)}</div>
       <div class="sm muted mt-4">${esc(e.date)} ${esc(e.time || '')} · ${esc(e.venue || '')}</div>
       <div class="sm mt-12" style="white-space:pre-wrap">${esc(e.detail || '未有詳細內容')}</div>
-      ${e.fee ? `<div class="xs mt-8">費用：${esc(e.fee)}</div>` : ''}
-      ${e.deadline ? `<div class="xs">回覆截止：${esc(e.deadline)}</div>` : ''}
-      <div class="semibold sm mt-16">我會…</div>
+      <div class="semibold sm mt-16">我會…（未填名都可以先睇；回覆先要名）</div>
       <div class="row wrap gap-8 mt-8">
         ${Object.entries(RSVP).map(([k, v]) =>
           `<button class="btn btn-sm ${st === k ? 'btn-primary' : ''}" type="button" data-eid="${e.id}" data-rsvp="${k}">${v.label}</button>`).join('')}
       </div>
-      ${!mid ? '<div class="hint mt-8">請先喺上面揀你嘅名。</div>' : ''}
     </div>`;
-}
-
-function rsvp(eid, status) {
-  const mid = meId();
-  if (!mid) { toast('請先揀你嘅名', 'err'); return; }
-  const e = (load().events || []).find(x => x.id === eid);
-  if (!e) return;
-  const map = { ...(e.rsvp || {}) };
-  map[mid] = { status, at: todayISO() };
-  update('events', eid, { rsvp: map });
-  toast('已回覆：' + RSVP[status].label, 'ok');
-  paint();
-}
-
-function quizList() {
-  const list = quizzes().filter(q => q.status !== 'closed');
-  if (!list.length) return '<div class="card card-pad muted">暫時未有開放試卷。</div>';
-  return list.map(q => `<button class="hub-card" type="button" data-open="#/quiz/${q.id}" style="width:100%;text-align:left">
-    <span class="stat-ic">${icon('note', 18)}</span>
-    <div class="grow"><div class="semibold">${esc(q.title)}</div>
-      <div class="xs muted mt-4">${(q.questions || []).length} 題 · ${esc(q.note || '')}</div></div>
-  </button>`).join('');
 }
 
 function quizFill(id) {
   const q = quizzes().find(x => x.id === id);
   if (!q) return '<div class="card card-pad">搵唔到試卷</div>';
-  const mid = meId();
-  const prev = mid ? (q.responses || {})[mid] : null;
-  return `<button class="btn btn-ghost btn-sm mb-12" type="button" data-open="#/quiz">${icon('chevronL', 14)} 返回</button>
+  const ident = identityForSubmit(activeMembers());
+  const prev = ident.id ? (q.responses || {})[ident.id] : null;
+  return `<button class="btn btn-ghost btn-sm mb-12" type="button" data-open="#/home">${icon('chevronL', 14)} 返回</button>
     <div class="card card-pad">
       <div class="page-title" style="font-size:20px">${esc(q.title)}</div>
       <div class="sm muted mt-4">${esc(q.note || '')}</div>
@@ -149,43 +185,75 @@ function quizFill(id) {
     </div>`;
 }
 
+function persistNameFromBar() {
+  const pick = app.querySelector('#hubPick')?.value || '';
+  let name = app.querySelector('#hubName')?.value.trim() || '';
+  if (pick) {
+    const m = activeMembers().find(x => x.id === pick);
+    name = m?.name || name;
+    saveMe({ id: pick, name });
+  } else {
+    saveMe({ id: '', name });
+  }
+}
+
+function bind() {
+  app.querySelector('#hubPick')?.addEventListener('change', e => {
+    const m = activeMembers().find(x => x.id === e.target.value);
+    if (m) {
+      const inp = app.querySelector('#hubName');
+      if (inp) inp.value = m.name;
+    }
+  });
+  app.querySelector('#hubSaveName')?.addEventListener('click', () => {
+    persistNameFromBar();
+    toast(loadMe().name ? '已記住：' + loadMe().name : '已清除名', 'ok');
+    if (pending) {
+      const p = pending; pending = null;
+      if (p.kind === 'rsvp') rsvp(p.id, p.extra);
+      if (p.kind === 'quiz') submitQuiz(p.id);
+    } else paint();
+  });
+  app.querySelector('#hubClearName')?.addEventListener('click', () => { saveMe({}); paint(); });
+  app.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => { location.hash = b.dataset.open; paint(); }));
+  app.querySelectorAll('[data-rsvp]').forEach(b => b.addEventListener('click', () => rsvp(b.dataset.eid, b.dataset.rsvp)));
+  app.querySelector('[data-quiz-submit]')?.addEventListener('click', () => submitQuiz(location.hash.split('/')[2] || location.hash.split('/')[1]));
+}
+
+function rsvp(eid, status) {
+  const ident = needName('rsvp', eid, status);
+  if (!ident) return;
+  const e = (load().events || []).find(x => x.id === eid);
+  if (!e) return;
+  const map = { ...(e.rsvp || {}) };
+  map[ident.id] = { status, at: todayISO(), name: ident.name };
+  update('events', eid, { rsvp: map });
+  toast('已回覆：' + RSVP[status].label, 'ok');
+  paint();
+}
+
 function submitQuiz(id) {
-  const mid = meId();
-  if (!mid) { toast('請先揀你嘅名', 'err'); return; }
+  const ident = needName('quiz', id);
+  if (!ident) return;
   const q = quizzes().find(x => x.id === id);
   if (!q) return;
   const answers = {};
   (q.questions || []).forEach(item => {
-    if (item.type === 'multi') {
-      answers[item.id] = [...app.querySelectorAll(`[data-ans="${item.id}"]:checked`)].map(el => el.value);
-    } else if (item.type === 'single') {
-      answers[item.id] = app.querySelector(`[data-ans="${item.id}"]:checked`)?.value || '';
-    } else {
-      answers[item.id] = app.querySelector(`[data-ans="${item.id}"]`)?.value.trim() || '';
-    }
+    if (item.type === 'multi') answers[item.id] = [...app.querySelectorAll(`[data-ans="${item.id}"]:checked`)].map(el => el.value);
+    else if (item.type === 'single') answers[item.id] = app.querySelector(`[data-ans="${item.id}"]:checked`)?.value || '';
+    else answers[item.id] = app.querySelector(`[data-ans="${item.id}"]`)?.value.trim() || '';
     if (item.required && (!answers[item.id] || (Array.isArray(answers[item.id]) && !answers[item.id].length))) {
-      toast('請填：' + item.prompt, 'err');
-      answers._bad = true;
+      toast('請填：' + item.prompt, 'err'); answers._bad = true;
     }
   });
   if (answers._bad) return;
   delete answers._bad;
-  const m = activeMembers().find(x => x.id === mid);
   const responses = { ...(q.responses || {}) };
-  responses[mid] = { name: m?.name || '', at: todayISO(), answers };
+  responses[ident.id] = { name: ident.name, at: todayISO(), answers };
   update('quizzes', id, { responses });
   toast('已交卷', 'ok');
-  location.hash = '#/quiz';
+  location.hash = '#/home';
   paint();
-}
-
-function moreList() {
-  const links = memberLinks().filter(l => l.id !== 'hub');
-  return links.map(l => `<a class="hub-card" href="${esc(l.url)}">
-    <span class="stat-ic">${icon(l.icon, 18)}</span>
-    <div class="grow"><div class="semibold">${esc(l.label)}</div>
-      <div class="xs muted mt-4">${esc(l.desc)}</div></div>
-  </a>`).join('') || '<p class="muted">暫時未有其他連結</p>';
 }
 
 window.addEventListener('hashchange', () => { try { paint(); } catch { /* */ } });
