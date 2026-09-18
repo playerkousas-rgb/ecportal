@@ -15,7 +15,7 @@
    ============================================================ */
 
 import {
-  load, commit, collection, find, add, remove, getSession, setSession, audit, isMock
+  load, commit, collection, find, add, remove, getSession, setSession, audit, isMock, currentUnit
 } from './store.js';
 
 export const ROLES = {
@@ -207,29 +207,129 @@ export async function verifyPwRecord(rec, password, { role = 'member', username 
   return verifyPassword({ pw: rec?.pw || rec?.hubPw, password: rec?.password || rec?.hubPassword, role, username }, password);
 }
 
-/** 團員入口：YMIS + 密碼（未設＝預設 1234，首次登入要改） */
+function memberByYmis(ymis) {
+  const y = String(ymis || '').trim();
+  return collection('members').find(x => String(x.ymis || '').trim() === y && x.status !== 'alumni') || null;
+}
+
+/**
+ * 團員／執委同一個入口：YMIS＋密碼。
+ * 權限只跟名冊 identity（換屆改名冊就換權限），唔跟獨立「執委帳戶」。
+ * 領袖請用電郵入口。
+ */
 export async function loginMember(ymis, password) {
   const y = String(ymis || '').trim();
   const p = String(password || '');
   if (!y) return { ok: false, msg: '請輸入 YMIS 會籍編號' };
   if (!p) return { ok: false, msg: '請輸入密碼' };
-  const m = collection('members').find(x => String(x.ymis || '').trim() === y && x.status !== 'alumni');
+  const m = memberByYmis(y);
   if (!m) return { ok: false, msg: '會籍編號或密碼不正確' };
+  const ident = m.identity === 'leader' ? 'leader' : (m.identity === 'exco' ? 'exco' : 'member');
+  if (ident === 'leader') {
+    return { ok: false, msg: '領袖請用「領袖」入口（電郵＋密碼）登入' };
+  }
+  if (!m.hubOpened && !m.hubPw?.hash && !m.hubPassword) {
+    return { ok: false, msg: '未開戶。可以喺登入頁申請，或請執委／領袖喺後台開戶（首次密碼 1234）' };
+  }
   if (!m.hubPw?.hash && !m.hubPassword) {
     if (p !== TEMP_PASSWORD) return { ok: false, msg: '會籍編號或密碼不正確' };
     m.hubMustChangePw = true;
     commit();
-    return { ok: true, member: m, mustChangePw: true };
-  }
-  const fake = { pw: m.hubPw, password: m.hubPassword, role: 'member', username: y };
-  if (!(await verifyPassword(fake, p))) return { ok: false, msg: '會籍編號或密碼不正確' };
-  if (fake.pw && m.hubPassword) {
-    m.hubPw = fake.pw;
-    delete m.hubPassword;
-    commit();
+  } else {
+    const fake = { pw: m.hubPw, password: m.hubPassword, role: 'member', username: y };
+    if (!(await verifyPassword(fake, p))) return { ok: false, msg: '會籍編號或密碼不正確' };
+    if (fake.pw && m.hubPassword) {
+      m.hubPw = fake.pw;
+      delete m.hubPassword;
+      commit();
+    }
   }
   const mustChangePw = !!m.hubMustChangePw || p === TEMP_PASSWORD;
-  return { ok: true, member: m, mustChangePw };
+  if (ident === 'exco') {
+    setSession({
+      role: 'exco', accountId: 'member:' + m.id, username: m.ymis, name: m.name,
+      memberId: m.id, via: 'ymis', at: Date.now(), mustChangePw
+    });
+    auditLogin(m.ymis, '執委（YMIS）登入');
+    return { ok: true, member: m, mustChangePw, dest: 'staff', role: 'exco' };
+  }
+  return { ok: true, member: m, mustChangePw, dest: 'hub', role: 'member' };
+}
+
+/** 後台開戶（單個／批量）：設首次密碼 1234，要改 */
+export async function openMemberAccount(memberId) {
+  return setMemberHubPassword(memberId, TEMP_PASSWORD, { mustChange: true });
+}
+
+export function applyAccount({ ymis, name, email = '', note = '' }) {
+  const y = String(ymis || '').trim();
+  const n = String(name || '').trim();
+  if (!/^\d{10}$/.test(y)) return { ok: false, msg: 'YMIS 須為 10 位數字' };
+  if (!n) return { ok: false, msg: '請填姓名' };
+  const roster = memberByYmis(y);
+  if (roster && String(roster.name || '').replace(/\s/g, '') !== n.replace(/\s/g, '') &&
+      String(roster.name || '') !== n) {
+    /* 名冊有人但姓名唔對 —— 仍然收申請，批核時見到兩邊 */
+  }
+  if (roster?.hubOpened || roster?.hubPw?.hash) return { ok: false, msg: '呢個 YMIS 已經開咗戶，請直接登入' };
+  if (collection('accountApps').some(a => a.ymis === y && a.status === 'pending')) {
+    return { ok: false, msg: '已經有待批申請' };
+  }
+  add('accountApps', {
+    ymis: y, name: n, email: String(email || '').trim(), note: String(note || '').trim(),
+    rosterId: roster?.id || '', rosterName: roster?.name || '',
+    status: 'pending', at: new Date().toISOString()
+  });
+  audit('申請開戶', y + ' ' + n);
+  return { ok: true };
+}
+
+export async function reviewAccountApp(appId, { decision, reviewer = '' } = {}) {
+  const rec = find('accountApps', appId);
+  if (!rec || rec.status !== 'pending') return { ok: false, msg: '搵唔到待批申請' };
+  rec.status = decision === 'approved' ? 'approved' : 'rejected';
+  rec.reviewedAt = new Date().toISOString();
+  rec.reviewedBy = reviewer;
+  commit();
+  if (rec.status !== 'approved') {
+    audit('拒絕開戶申請', rec.ymis);
+    return { ok: true };
+  }
+  let m = rec.rosterId ? find('members', rec.rosterId) : memberByYmis(rec.ymis);
+  if (!m) {
+    m = add('members', {
+      name: rec.name, ymis: rec.ymis, email: rec.email || '', identity: 'member', status: 'active'
+    });
+  }
+  const pw = await setMemberHubPassword(m.id, TEMP_PASSWORD, { mustChange: true });
+  if (!pw.ok) return pw;
+  audit('批准開戶', rec.ymis);
+  return { ok: true, member: m, tempPassword: TEMP_PASSWORD };
+}
+
+/** 開團 KEY：由旅團 Apps Script 執行 issueSetupKey() 產生，72 小時有效 */
+export async function loginSetupKey(key) {
+  const k = String(key || '').trim();
+  if (!k) return { ok: false, msg: '請貼上開團 KEY' };
+  const unit = (await import('./store.js')).currentUnit?.() || '';
+  let json = null;
+  try {
+    const res = await fetch('./api/proxy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'verifySetupKey', unit, key: k })
+    });
+    json = await res.json();
+  } catch {
+    return { ok: false, msg: '連唔到後端。請確認旅團已登記，同埋 Apps Script 已更新（有 issueSetupKey）' };
+  }
+  if (!(json?.ok || json?.success)) return { ok: false, msg: json?.error || 'KEY 無效或已過期' };
+  setSession({
+    role: 'leader', accountId: 'setup', username: '', name: '開團設定',
+    at: Date.now(), setupKey: true, mustChangePw: false
+  });
+  auditLogin('setup-key', '開團 KEY 登入');
+  return { ok: true, role: 'leader', setup: true };
 }
 
 export async function setMemberHubPassword(memberId, newPassword, { mustChange = null } = {}) {
@@ -242,6 +342,7 @@ export async function setMemberHubPassword(memberId, newPassword, { mustChange =
   delete m.hubPassword;
   m.hubPwUpdatedAt = new Date().toISOString().slice(0, 10);
   m.hubMustChangePw = force;
+  m.hubOpened = true;
   commit();
   audit('設定團員入口密碼', m.name || memberId);
   return { ok: true };

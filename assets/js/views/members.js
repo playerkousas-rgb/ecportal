@@ -18,7 +18,7 @@ import {
 } from '../lib/util.js';
 import { toCSV, toWord, printDoc, download as dlFile, stamp } from '../lib/exporter.js';
 import { go, parse } from '../lib/router.js';
-import { can, setMemberHubPassword, TEMP_PASSWORD } from '../lib/auth.js';
+import { can, setMemberHubPassword, TEMP_PASSWORD, openMemberAccount, reviewAccountApp } from '../lib/auth.js';
 import { pageHead, tabs, empty, kv, chipbar, progressBar, noteBox } from './ui.js';
 
 let kw = '';
@@ -63,13 +63,26 @@ function listView() {
       <button class="btn btn-sm" data-act="exp-word">${icon('download', 15)} Word</button>
       <button class="btn btn-sm" data-act="exp-bday">${icon('sparkle', 15)} 生日表</button>` : ''}
       <button class="btn btn-sm" data-fields="members" title="改名／加欄位（例：小隊、收據編號）">${icon('table', 15)} 欄位</button>
-      ${can('member.create') ? `<button class="btn btn-sm btn-primary" data-act="new">${icon('plus', 15)} 新增用戶</button>` : ''}`
+      ${can('member.create') ? `<button class="btn btn-sm" data-act="bulk-open">${icon('users', 15)} 批量開戶</button>
+      <button class="btn btn-sm btn-primary" data-act="new">${icon('plus', 15)} 新增用戶</button>` : ''}`
   })}
 
   <div class="note-box mb-16">${icon('users', 15)}<div>
     呢度係<b>用戶名冊</b> —— 領袖、執委同團員都會列喺呢度。
     每一行都可以撳「<b>編輯</b>」改資料同<b>身份</b>（領袖 / 執委 / 團員）。
-    <div class="xs faint mt-4">改動會先暫存喺呢部裝置，撳「儲存」先寫入；撳「同步」先送去總表。</div></div></div>
+    <div class="xs faint mt-4">改動會先暫存喺呢部裝置，撳「儲存」先寫入；撳「同步」先送去總表。執委身份跟名冊，換屆改身份就換權限。</div></div></div>
+
+  ${(() => {
+    const apps = collection('accountApps').filter(a => a.status === 'pending');
+    if (!apps.length || !can('member.create')) return '';
+    return `<div class="card mb-16"><div class="card-head"><div class="card-title">待批開戶</div></div>
+      ${apps.map(a => `<div class="list-item">
+        <div class="li-main"><div class="li-t">${esc(a.name)} · ${esc(a.ymis)}</div>
+          <div class="li-s">${esc(a.rosterName ? '名冊：' + a.rosterName : '名冊未有此人')}${a.email ? ' · ' + esc(a.email) : ''}</div></div>
+        <button class="btn btn-xs btn-primary" data-act="approve-app" data-id="${a.id}">批准（密碼 ${TEMP_PASSWORD}）</button>
+        <button class="btn btn-xs" data-act="reject-app" data-id="${a.id}">拒絕</button>
+      </div>`).join('')}</div>`;
+  })()}
 
   ${(() => {
     const kc = keyCoverage(all);

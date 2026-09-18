@@ -17,7 +17,8 @@ import {
 import { applyTheme, MAROON } from './lib/theme.js';
 import {
   login, loginMember, logout, current, currentRole, ROLES, displayName, displaySub,
-  loginAsMock, accounts, isSuper, can, changeOwnPassword, TEMP_PASSWORD
+  loginAsMock, accounts, isSuper, can, changeOwnPassword, TEMP_PASSWORD,
+  loginSetupKey, applyAccount
 } from './lib/auth.js';
 import { pendingMeetings, overdueFees, pendingClaims, pendingLoans, profile, notices, onLegacyHost, canonicalUrl } from './lib/model.js';
 import { esc, icon, toast, modal, confirmDlg } from './lib/util.js';
@@ -837,25 +838,25 @@ function renderLogin() {
           </select>
         </div>` : ''}
 
-        <h1>${loginDoor === 'member' ? '團員入口' : loginDoor === 'staff' ? '領袖／執委登入' : '你係邊個？'}</h1>
+        <h1>${loginDoor === 'member' ? '團員／執委登入' : loginDoor === 'staff' ? '領袖登入' : '你係邊個？'}</h1>
         <p class="sub">${loginDoor === 'pick'
-          ? '兩個入口：領袖／執委用電郵（或帳號）＋密碼入管理系統；團員用 YMIS＋密碼入團員頁（自己進度、Drive、相簿…）。'
+          ? '團員同執委同一個入口（YMIS）。執委身份跟名冊，換屆改名冊就換權限。領袖用電郵。'
           : loginDoor === 'member'
-            ? `輸入 10 位 YMIS 同密碼。首次登入預設密碼係 ${TEMP_PASSWORD}，入去之後要即刻改。`
-            : '領袖用電郵登入；執委可以用電郵或帳號。系統會跟帳戶身份決定你係領袖定執委。'}</p>
+            ? `YMIS＋密碼。未開戶可以申請。首次密碼 ${TEMP_PASSWORD}，入去要改。執委入管理系統，團員入團員頁。`
+            : '領袖用電郵＋密碼。新旅團：喺 Apps Script 執行 issueSetupKey()，貼 72 小時 KEY 入下面。'}</p>
 
         ${loginDoor === 'pick' ? `
         <div class="role-grid">
           <button class="role-card" type="button" id="doorExco">
-            <span class="role-ic">${icon('key', 19)}</span>
-            <span class="grow"><span class="role-name" style="display:block">領袖／執委</span>
-            <span class="role-desc" style="display:block">電郵＋密碼 → 管理系統</span></span>
+            <span class="role-ic">${icon('flag', 19)}</span>
+            <span class="grow"><span class="role-name" style="display:block">領袖</span>
+            <span class="role-desc" style="display:block">電郵＋密碼（或開團 KEY）</span></span>
             ${icon('chevronR', 17)}
           </button>
           <button class="role-card" type="button" id="doorMember">
             <span class="role-ic">${icon('users', 19)}</span>
-            <span class="grow"><span class="role-name" style="display:block">團員</span>
-            <span class="role-desc" style="display:block">YMIS＋密碼 → 團員入口</span></span>
+            <span class="grow"><span class="role-name" style="display:block">團員／執委</span>
+            <span class="role-desc" style="display:block">同一個門：YMIS＋密碼</span></span>
             ${icon('chevronR', 17)}
           </button>
         </div>` : loginDoor === 'member' ? `
@@ -870,13 +871,14 @@ function renderLogin() {
             <input class="input" id="liMemPass" type="password" placeholder="首次：${TEMP_PASSWORD}" autocomplete="current-password">
           </div>
           <div id="liMemErr" class="err mt-8"></div>
-          <button type="submit" class="btn btn-primary btn-lg btn-block mt-16">${icon('users', 17)} 進入團員頁</button>
+          <button type="submit" class="btn btn-primary btn-lg btn-block mt-16">${icon('key', 17)} 登入</button>
         </form>
+        <button class="btn btn-block mt-12" type="button" id="btnApply">${icon('plus', 16)} 未開戶？申請開戶</button>
         ` : `
         <button class="btn btn-ghost btn-sm mb-12" type="button" id="doorBack">${icon('chevronL', 14)} 返回選擇入口</button>
         <form id="loginForm" autocomplete="off">
           <div class="field mt-8">
-            <label class="label">電郵（領袖）／帳號</label>
+            <label class="label">電郵</label>
             <input class="input" id="liUser" autocomplete="username" placeholder="例：scouter@example.com">
           </div>
           <div class="field mt-12">
@@ -886,21 +888,22 @@ function renderLogin() {
           <div id="liErr" class="err mt-8"></div>
           <button type="submit" class="btn btn-primary btn-lg btn-block mt-16">${icon('key', 17)} 進入系統</button>
         </form>
+        <form id="setupKeyForm" class="mt-16" autocomplete="off" style="border-top:1px solid var(--line-2);padding-top:14px">
+          <div class="semibold sm mb-8">新旅團開團 KEY</div>
+          <div class="hint mb-8">喺 Google 試算表 → Apps Script 執行 <code>issueSetupKey()</code>（每次 72 小時；過期再執行一次）。</div>
+          <input class="input" id="liSetupKey" placeholder="貼上 EC72-… KEY">
+          <div id="liKeyErr" class="err mt-8"></div>
+          <button type="submit" class="btn btn-block mt-12">用 KEY 進入開戶</button>
+        </form>
 
         <div class="mt-16">
           <button class="btn btn-block" id="btnMock">${icon('eye', 16)} 試用示範（MOCK）</button>
-          <div class="hint mt-8">示範模式用假資料，同真實資料完全分開，隨便試都唔會影響真數據。</div>
+          <div class="hint mt-8">示範模式用假資料，同真實資料完全分開。</div>
         </div>
-
         <div class="mt-16" style="border-top:1px solid var(--line-2);padding-top:12px">
-          <div class="row-between wrap gap-8">
-            <div class="xs faint">而家嘅旅團：<b class="mono">${esc(code)}</b>${isMock() ? '（示範模式）' : ''}</div>
-            <div class="row gap-8 wrap">
-              <button class="btn btn-xs" id="btnGate" type="button">${icon('refresh', 13)} 返回旅團選擇</button>
-            </div>
-          </div>
+          <div class="xs faint">而家嘅旅團：<b class="mono">${esc(code)}</b>${isMock() ? '（示範模式）' : ''}</div>
+          <button class="btn btn-xs mt-8" id="btnGate" type="button">${icon('refresh', 13)} 返回旅團選擇</button>
         </div>
-
         `}
 
         ${loginDoor === 'staff' && showDefaultHint ? `
@@ -961,7 +964,55 @@ function renderLogin() {
     const m = res.member;
     saveHubAuth(code, { id: m.id, name: m.name, ymis: m.ymis, identity: identityOf(m), mustChangePw: !!res.mustChangePw });
     saveMe({ id: m.id, name: m.name });
+    if (res.dest === 'staff') {
+      document.body.classList.remove('login-body');
+      applyTheme(load()?.unit?.theme);
+      location.hash = '#/dashboard';
+      render();
+      if (res.mustChangePw) maybeForceChangePw();
+      return;
+    }
     location.href = `./members.html?u=${encodeURIComponent(code)}${res.mustChangePw ? '#forcepw' : ''}`;
+  });
+
+  app.querySelector('#btnApply')?.addEventListener('click', async () => {
+    const r = await modal({
+      title: '申請開戶',
+      sub: '批核後首次密碼係 1234',
+      body: `<div class="field"><label class="label">YMIS（10 位）</label>
+          <input class="input" id="apY" inputmode="numeric"></div>
+        <div class="field mt-12"><label class="label">姓名（同名冊）</label>
+          <input class="input" id="apN"></div>
+        <div class="field mt-12"><label class="label">電郵（可選）</label>
+          <input class="input" id="apE"></div>
+        <div id="apErr" class="err mt-8"></div>`,
+      actions: [
+        { label: '取消', class: 'btn', value: null },
+        { label: '送出申請', class: 'btn-primary', onClick: el => {
+          const ymis = el.querySelector('#apY').value, name = el.querySelector('#apN').value, email = el.querySelector('#apE').value;
+          const res = applyAccount({ ymis, name, email });
+          if (!res.ok) { el.querySelector('#apErr').textContent = res.msg; el.querySelector('#apErr').style.display = 'block'; return false; }
+          return true;
+        } }
+      ]
+    });
+    if (r) toast('已送出，等執委／領袖批准', 'ok');
+  });
+
+  app.querySelector('#setupKeyForm')?.addEventListener('submit', async e => {
+    e.preventDefault();
+    const box = app.querySelector('#liKeyErr');
+    if (box) { box.textContent = ''; box.style.display = 'none'; }
+    const res = await loginSetupKey(app.querySelector('#liSetupKey')?.value);
+    if (!res.ok) {
+      if (box) { box.textContent = res.msg; box.style.display = 'block'; }
+      return;
+    }
+    document.body.classList.remove('login-body');
+    applyTheme(load()?.unit?.theme);
+    location.hash = '#/admin';
+    render();
+    toast('已用開團 KEY 進入。請即刻新增領袖電郵帳戶。', 'ok');
   });
 
   app.querySelector('#loginForm')?.addEventListener('submit', async e => {

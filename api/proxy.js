@@ -31,7 +31,7 @@ const SCOUT_ADMIN_API = process.env.SCOUT_ADMIN_API ||
 const ALLOWED_ACTIONS = new Set([
   'ping', 'status', 'test', 'sync', 'claim', 'loan', 'noticeSignup',
   /* 整份資料庫讀／寫 —— app 嘅真正儲存（換機／清 cache 都唔會冇咗） */
-  'saveDb', 'loadDb', 'dbInfo',
+  'saveDb', 'loadDb', 'dbInfo', 'verifySetupKey',
   /* 公開通告：免登入讀旅團自己後端嘅「通告全文」（只回已發布） */
   'notices',
   'submitRegistration'
