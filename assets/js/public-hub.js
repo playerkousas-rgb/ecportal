@@ -5,7 +5,7 @@ import { memberLinks, profile, publicEvents, RSVP, quizzes, activeMembers, publi
 import { loadMe, saveMe, identityForSubmit } from './lib/member-me.js';
 import { loadHubAuth, saveHubAuth, clearHubAuth } from './lib/hub-session.js';
 import { loginMember, changeMemberOwnPassword, TEMP_PASSWORD } from './lib/auth.js';
-import { progressConfigured, loadRemote, loadItems, flattenItems, memberDetail } from './lib/progress.js';
+import { progressConfigured, loadRemote, loadItems, flattenItems, memberDetail, submitProgressRequest, loadMyRequests } from './lib/progress.js';
 import { esc, icon, toast, todayISO, modal } from './lib/util.js';
 
 const app = document.getElementById('app');
@@ -50,9 +50,11 @@ function paint() {
   <div class="hub-wrap">
     ${sec === 'cal' && id ? eventDetail(id)
       : sec === 'quiz' && id ? quizFill(id)
+      : sec === 'progress' ? progressPage(auth)
       : home()}
   </div>`;
   bind();
+  if (sec === 'progress') fillProgressPage(auth);
 }
 
 function paintGate() {
@@ -115,26 +117,47 @@ function home() {
   const evs = publicEvents();
   const qz = quizzes().filter(q => q.status !== 'closed');
   const notices = (load().notices || []).filter(n => n.status === 'published');
+  const links = troopPublicLinks();
   const u = code();
+  const LINK_ICON = { drive: 'cloud', album: 'image', instagram: 'instagram', facebook: 'facebook', website: 'globe', whatsapp: 'whatsapp' };
   const tools = [
+    { href: '#/progress', icon: 'target', title: '我的進度', desc: '睇自己獎章進度，仲可以申報完成咗邊項' },
     { href: publicPageUrl('entry.html', { u }), icon: 'camera', title: '影單據／記一筆', desc: '墊支或代收，影相交司庫' },
     { href: publicPageUrl('borrow.html', { u }), icon: 'grid', title: '借物資', desc: '申請借用旅團物資' },
     { href: publicPageUrl('constitution.html', { u }), icon: 'book', title: '團章', desc: '免登入閱讀' }
   ];
   return `
     <div class="semibold mb-8">我要做</div>
-    ${tools.map(t => `<a class="hub-card" href="${esc(withName(t.href))}">
-      <span class="stat-ic">${icon(t.icon, 18)}</span>
-      <div class="grow"><div class="semibold">${esc(t.title)}</div><div class="xs muted mt-4">${esc(t.desc)}</div></div>
-    </a>`).join('')}
+    ${tools.map(t => t.href.startsWith('#')
+      ? `<button class="hub-card" type="button" data-open="${esc(t.href)}" style="width:100%;text-align:left">
+          <span class="stat-ic">${icon(t.icon, 18)}</span>
+          <div class="grow"><div class="semibold">${esc(t.title)}</div><div class="xs muted mt-4">${esc(t.desc)}</div></div>
+        </button>`
+      : `<a class="hub-card" href="${esc(withName(t.href))}">
+          <span class="stat-ic">${icon(t.icon, 18)}</span>
+          <div class="grow"><div class="semibold">${esc(t.title)}</div><div class="xs muted mt-4">${esc(t.desc)}</div></div>
+        </a>`).join('')}
+
+    ${links.length ? `
+    <div class="semibold mt-24 mb-8">旅團連結</div>
+    <div class="xs muted mb-8">後台填咗嘅 IG／FB／網頁等 —— 撳一下就開，唔使記網址</div>
+    ${links.map(l => {
+      const safe = /^https?:\/\//i.test(l.url) ? l.url : 'https://' + l.url;
+      return `<a class="hub-card" href="${esc(safe)}" target="_blank" rel="noopener noreferrer">
+        <span class="stat-ic">${icon(LINK_ICON[l.id] || 'link', 18)}</span>
+        <div class="grow"><div class="semibold">${esc(l.label)}</div><div class="xs muted mt-4">${esc(l.desc)} · ${esc(l.url)}</div></div>
+        <span class="stat-ic">${icon('external', 15)}</span>
+      </a>`;
+    }).join('')}` : ''}
 
     <div class="semibold mt-24 mb-8">活動行事曆</div>
     ${evs.length ? evs.map(e => {
       const st = myRsvp(e);
+      const overnight = e.dateEnd && e.dateEnd !== e.date;
       return `<button class="hub-card" type="button" data-open="#/cal/${e.id}" style="width:100%;text-align:left">
         <span class="stat-ic">${icon('calendar', 18)}</span>
-        <div class="grow"><div class="semibold">${esc(e.title)}</div>
-          <div class="xs muted mt-4">${esc(e.date)} ${esc(e.time || '')} · ${esc(e.venue || '')}</div>
+        <div class="grow"><div class="semibold">${esc(e.title)}${overnight ? ' <span class="tag">過夜</span>' : ''}</div>
+          <div class="xs muted mt-4">${overnight ? `${esc(e.date)} 至 ${esc(e.dateEnd)}` : esc(e.date)} ${esc(e.time || '')} · ${esc(e.venue || '')}</div>
           ${st ? `<div class="xs mt-4"><span class="badge ${RSVP[st]?.cls || ''}">已回覆：${esc(RSVP[st]?.label)}</span></div>` : ''}</div>
       </button>`;
     }).join('') : '<div class="card card-pad muted">暫時未有團員可見活動。</div>'}
@@ -190,10 +213,11 @@ function eventDetail(id) {
   const e = (load().events || []).find(x => x.id === id);
   if (!e || e.visibility === 'exco') return '<div class="card card-pad">搵唔到呢個活動。</div>';
   const st = myRsvp(e);
+  const overnight = e.dateEnd && e.dateEnd !== e.date;
   return `<button class="btn btn-ghost btn-sm mb-12" type="button" data-open="#/home">${icon('chevronL', 14)} 返回</button>
     <div class="card card-pad">
       <div class="page-title" style="font-size:20px">${esc(e.title)}</div>
-      <div class="sm muted mt-4">${esc(e.date)} ${esc(e.time || '')} · ${esc(e.venue || '')}</div>
+      <div class="sm muted mt-4">${overnight ? `${esc(e.date)} 至 ${esc(e.dateEnd)}（${esc(e.time || '')} 起步）` : `${esc(e.date)} ${esc(e.time || '')}`} · ${esc(e.venue || '')}</div>
       <div class="sm mt-12" style="white-space:pre-wrap">${esc(e.detail || '未有詳細內容')}</div>
       <div class="semibold sm mt-16">我會…（未填名都可以先睇；回覆先要名）</div>
       <div class="row wrap gap-8 mt-8">
@@ -201,6 +225,111 @@ function eventDetail(id) {
           `<button class="btn btn-sm ${st === k ? 'btn-primary' : ''}" type="button" data-eid="${e.id}" data-rsvp="${k}">${v.label}</button>`).join('')}
       </div>
     </div>`;
+}
+
+/* ============================================================
+   我的進度（團員自助，2026-09-18 第 5 項要求）
+   團員見到自己每個獎章嘅項目：完成咗嘅有日期；未完成嘅可以
+   「申報完成」→ 寫入後端「待批完成」→ 執委喺審批中心批准先入數。
+   ============================================================ */
+function progressPage(auth) {
+  return `<button class="btn btn-ghost btn-sm mb-12" type="button" data-open="#/home">${icon('chevronL', 14)} 返回</button>
+  <div id="progressBody"><div class="card card-pad muted">載入緊進度…</div></div>`;
+}
+
+async function fillProgressPage(auth) {
+  const box = app.querySelector('#progressBody');
+  if (!box) return;
+  const ymis = String(auth?.ymis || '').trim();
+  if (!progressConfigured()) {
+    box.innerHTML = `<div class="card card-pad"><div class="semibold mb-4">我的進度</div>
+      <div class="xs muted">旅團未接進度後端。接好之後你會喺呢度見到自己嘅獎章進度。</div></div>`;
+    return;
+  }
+  if (!ymis) {
+    box.innerHTML = `<div class="card card-pad"><div class="semibold mb-4">我的進度</div>
+      <div class="xs muted">名冊未有你嘅 YMIS 會籍編號，無法對應進度 —— 請搵執委幫你喺「用戶」填返。</div></div>`;
+    return;
+  }
+  try {
+    const [r, it, mine] = await Promise.all([loadRemote(), loadItems(), loadMyRequests(ymis)]);
+    if (!r.ok) {
+      box.innerHTML = `<div class="card card-pad"><div class="semibold mb-4">我的進度</div>
+        <div class="xs muted">${esc(r.error || '讀唔到進度')}</div></div>`;
+      return;
+    }
+    const catalog = it.ok ? flattenItems(it.data) : {};
+    const d = memberDetail(r.data, catalog, ymis);
+    const myName = (r.data?.members || []).find(m => String(m.ymis) === ymis)?.name || auth?.name || '';
+    const reqs = (mine?.ok && mine?.data?.requests) || [];
+    const REQ_LABEL = { pending: ['b-warn', '等批核'], approved: ['b-ok', '已批准'], rejected: ['b-danger', '已拒絕'] };
+    box.innerHTML = `
+      <div class="card card-pad">
+        <div class="semibold">我的進度</div>
+        <div class="xs muted mt-4">已完成 <b>${d.done}</b> 項 · YMIS ${esc(ymis)}${myName ? ' · ' + esc(myName) : ''}</div>
+        ${(d.badges || []).filter(b => b.total).map(b => `
+          <div class="mt-16">
+            <div class="row-between sm"><span>${esc(b.icon || '')} ${esc(b.name)}</span><span class="mono xs">${b.done}/${b.total}（${b.rate}%）</span></div>
+            <div class="progress mt-4"><i style="width:${b.rate}%"></i></div>
+            <div class="mt-8">
+              ${b.items.map(x => x.done ? `
+                <div class="row-between sm" style="padding:5px 0;border-bottom:1px solid var(--line-2)">
+                  <span>${esc(x.name)}</span>
+                  <span class="xs" style="color:var(--ok)">${icon('check', 13)} ${esc(x.date || '已完成')}${x.confirmer ? ` · ${esc(x.confirmer)}` : ''}</span>
+                </div>` : `
+                <div class="row-between sm" style="padding:5px 0;border-bottom:1px solid var(--line-2)">
+                  <span class="muted">${esc(x.name)}</span>
+                  <button class="btn btn-xs btn-primary" type="button" data-claim="${esc(x.id)}" data-name="${esc(x.name)}">${icon('plus', 12)} 申報完成</button>
+                </div>`).join('')}
+            </div>
+          </div>`).join('') || '<div class="xs muted mt-8">未有考核項目定義。</div>'}
+      </div>
+      <div class="card mt-16">
+        <div class="card-head"><div><div class="card-title">我嘅申報紀錄</div>
+          <div class="card-sub">申報之後等執委批核，批准先算數</div></div></div>
+        <div>
+          ${reqs.length ? reqs.map(q => {
+            const [cls, label] = REQ_LABEL[q.status] || ['b-warn', q.status];
+            return `<div class="list-item">
+              <span class="stat-ic">${icon('target', 15)}</span>
+              <div class="li-main">
+                <div class="li-t">${esc(q.item_name || q.item_id)} <span class="badge ${cls}">${esc(label)}</span></div>
+                <div class="li-s xs faint">${esc(q.requested_date || '')}${q.review_note ? ' · 備註：' + esc(q.review_note) : ''}${q.confirmed_date && q.status === 'approved' ? ' · 確認日：' + esc(q.confirmed_date) : ''}</div>
+              </div>
+            </div>`;
+          }).join('') : '<div style="padding:12px 16px" class="xs muted">仲未有申報。上面揀一項撳「申報完成」就得。</div>'}
+        </div>
+      </div>`;
+    box.querySelectorAll('[data-claim]').forEach(b => b.addEventListener('click', () => claimProgressDialog(auth, b.dataset.claim, b.dataset.name)));
+  } catch (e) {
+    box.innerHTML = `<div class="card card-pad muted">${esc(e.message || '載入失敗')}</div>`;
+  }
+}
+
+async function claimProgressDialog(auth, itemId, itemName) {
+  const ymis = String(auth?.ymis || '').trim();
+  if (!ymis) { toast('名冊未有你嘅 YMIS，申報唔到', 'err'); return; }
+  const r = await modal({
+    title: '申報完成',
+    sub: itemName,
+    body: `<div class="field"><label class="label">完成日期</label>
+        <input class="input" type="date" id="rqDate" value="${esc(todayISO())}"></div>
+      <div class="field mt-12"><label class="label">證據／簡介（可空）</label>
+        <textarea class="textarea" id="rqEv" rows="3" placeholder="例：2026 夏季營完成咗全程、導師簽名紀錄…"></textarea></div>
+      <div class="hint mt-8">送出之後會變成「待批核」，執委喺審批中心批准先算數。</div>`,
+    actions: [
+      { label: '取消', class: 'btn', value: null },
+      { label: '送出申報', class: 'btn-primary', onClick: el => {
+        const date = el.querySelector('#rqDate')?.value || todayISO();
+        const ev = el.querySelector('#rqEv')?.value.trim() || '';
+        return { date, ev };
+      } }
+    ]
+  });
+  if (!r) return;
+  const res = await submitProgressRequest({ ymis, name: auth?.name || '', item_id: itemId, item_name: itemName, requested_date: r.date, evidence: r.ev });
+  if (res.ok) { toast('已送出申報，等執委批核 ✓', 'ok'); paint(); }
+  else toast(res.error || '申報失敗，一陣再試', 'err');
 }
 
 function quizFill(id) {
@@ -300,39 +429,6 @@ function submitQuiz(id) {
   toast('已交卷', 'ok');
   location.hash = '#/home';
   paint();
-}
-
-async function fillMyProgress() {
-  const box = app.querySelector('#myProgress');
-  if (!box) return;
-  const auth = loadHubAuth(code());
-  if (!progressConfigured()) {
-    box.innerHTML = `<div class="semibold mb-4">我的進度</div>
-      <div class="xs muted">旅團未接進度後端。進度追蹤系統仍然可以獨立使用；接好之後你會喺呢度見到自己嘅獎章進度。</div>`;
-    return;
-  }
-  if (!auth?.ymis) {
-    box.innerHTML = `<div class="semibold mb-4">我的進度</div><div class="xs muted">名冊未有你嘅 YMIS，無法對應進度。</div>`;
-    return;
-  }
-  try {
-    const [r, it] = await Promise.all([loadRemote(), loadItems()]);
-    if (!r.ok) {
-      box.innerHTML = `<div class="semibold mb-4">我的進度</div><div class="xs muted">${esc(r.error || '讀唔到進度')}</div>`;
-      return;
-    }
-    const catalog = it.ok ? flattenItems(it.data) : {};
-    const d = memberDetail(r.data, catalog, String(auth.ymis).trim());
-    const badges = (d.badges || []).filter(b => b.total);
-    box.innerHTML = `<div class="semibold mb-8">我的進度</div>
-      <div class="xs muted mb-8">已完成 ${d.done} 項（YMIS ${esc(auth.ymis)}）。進度追蹤獨立入口仍然可以用。</div>
-      ${badges.map(b => `<div class="mb-8">
-        <div class="row-between sm"><span>${esc(b.icon || '')} ${esc(b.name)}</span><span class="mono">${b.done}/${b.total}（${b.rate}%）</span></div>
-        <div class="progress mt-4"><i style="width:${b.rate}%"></i></div>
-      </div>`).join('') || '<div class="xs muted">未有考核項目定義。</div>'}`;
-  } catch (e) {
-    box.innerHTML = `<div class="semibold">我的進度</div><div class="xs muted mt-4">${esc(e.message || '失敗')}</div>`;
-  }
 }
 
 async function forceMemberPw(memberId) {

@@ -63,13 +63,25 @@ try {
       store.add('members', { name: step.name, ymis: step.ymis, identity: 'member' });
       out.steps.push({ op: 'addMember', name: step.name, total: store.load().members.length });
     }
+    if (step.op === 'bulkMembers') {
+      /* 灌大量團員把 db 谷大過分件閾值 —— 測 v2.4.0 分件儲存。
+         一次過注入再 commit 一次（同真實「試算表匯入」路徑一樣；
+         唔係逐個 add —— 咁樣會千幾次全 db 序列化，純粹燒記憶體）。 */
+      const db = store.load();
+      for (let i = 0; i < (step.count || 0); i++) {
+        db.members.push({ id: 'mb' + i, name: (step.prefix || 'Bulk') + i, ymis: '2026' + String(1000000 + i), identity: 'member', note: 'x'.repeat((step.kb || 2) * 1024) });
+      }
+      store.commit();
+      const db2 = store.load();
+      out.steps.push({ op: 'bulkMembers', total: db2.members.length, bytes: JSON.stringify(db2).length });
+    }
     if (step.op === 'addTx') {
       store.add('transactions', { date: step.date, type: step.type, item: step.item, amount: step.amount });
       out.steps.push({ op: 'addTx', total: store.load().transactions.length });
     }
     if (step.op === 'push') {
       const r = await remote.pushDb({ silent: true });
-      out.steps.push({ op: 'push', ok: r.ok, error: r.error || '', bytes: r.bytes || 0, pending: Number(store.load().sync?.pending || 0) });
+      out.steps.push({ op: 'push', ok: r.ok, error: r.error || '', bytes: r.bytes || 0, parts: r.parts || 0, pending: Number(store.load().sync?.pending || 0) });
     }
     if (step.op === 'autosave') {
       /* 模擬「改完自動存」：arm 之後改一筆，等 debounce 過咗 */
@@ -86,7 +98,7 @@ try {
       const g = await remote.pullDb();
       let adopted = null;
       if (g.ok && g.db) {
-        store.adoptRemote(g.db);
+        store.adoptRemote(g.db, { version: String(g.version || '') });
         adopted = {
           members: store.load().members.length,
           transactions: store.load().transactions.length,
@@ -104,7 +116,47 @@ try {
         transactions: db.transactions.length,
         names: db.members.map(m => m.name),
         hasLocalContent: store.hasLocalContent(),
-        updatedAt: store.localUpdatedAt()
+        updatedAt: store.localUpdatedAt(),
+        lastSyncedVersion: String(db.sync?.lastSyncedVersion || ''),
+        pending: Number(db.sync?.pending || 0)
+      });
+    }
+    /* 「第 N 部機」模擬：把呢部機嘅本機 db 匯出／匯入（模擬同一部機走開咗再返嚟，
+       中間有第二部機更新咗後端 —— 用嚟測衝突復原）。 */
+    if (step.op === 'export') {
+      fs.writeFileSync(step.file, store.exportAll(), 'utf8');
+      out.steps.push({ op: 'export', file: step.file, members: store.load().members.length });
+    }
+    /* 模擬「隊友喺另一部機儲存」：直接經 proxy 用正確 baseVersion 寫入後端 */
+    if (step.op === 'teammatePush') {
+      const got = await remote.pullDb();
+      if (!got.ok || !got.db) { out.steps.push({ op: 'teammatePush', ok: false, error: got.error || '後端空' }); continue; }
+      const db = JSON.parse(JSON.stringify(got.db));
+      db.members = [...(db.members || []), { id: 'm8' + Date.now(), name: step.name, ymis: step.ymis, identity: 'member' }];
+      db.meta = { ...(db.meta || {}), updatedAt: '2026-09-18T20:00:00.000Z' };
+      const r = await (await fetch(`${BASE}/api/proxy`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'saveDb', unit: '0082', db, baseVersion: String(got.version || '') })
+      })).json();
+      out.steps.push({ op: 'teammatePush', ok: r.ok === true, version: String(r.version || '') });
+    }
+    /* 「立即同步」：問後端有冇隊友新版本，有就拉（本機有 pending 就會合併） */
+    if (step.op === 'checksync') {
+      const r = await remote.checkRemote({ silent: true });
+      const db = store.tryLoad();
+      out.steps.push({
+        op: 'checksync', ok: !!r?.ok, updated: !!r?.updated, merged: !!r?.merged, upToDate: !!r?.upToDate,
+        members: (db?.members || []).length, names: (db?.members || []).map(m => m.name),
+        pending: Number(db?.sync?.pending || 0)
+      });
+    }
+    if (step.op === 'import') {
+      store.importAll(fs.readFileSync(step.file, 'utf8'));
+      const db = store.load();
+      out.steps.push({
+        op: 'import', file: step.file, members: db.members.length,
+        names: db.members.map(m => m.name), pending: Number(db.sync?.pending || 0),
+        lastSyncedVersion: String(db.sync?.lastSyncedVersion || '')
       });
     }
   }

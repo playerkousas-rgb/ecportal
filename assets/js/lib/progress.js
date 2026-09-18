@@ -159,6 +159,29 @@ export async function testConnection() {
 }
 
 /* ============================================================
+   團員自助進度（2026-09-18 第 5 項要求）
+   團員喺團員入口申報「完成咗某個考核項目」→ 寫入後端「待批完成」
+   → 執委喺「進度 → 審批中心」批准 → 先真正寫入進度。
+   團員冇 API Key，所以唔會直接改到進度；後端 addRequest 係免 key 動作。
+   ============================================================ */
+/** 申報完成：{ ymis, name, item_id, item_name, requested_date, evidence } */
+export async function submitProgressRequest(req = {}) {
+  return callApi({
+    ...cfgPayload(), action: 'addRequest',
+    data: {
+      ymis: String(req.ymis || ''), name: String(req.name || ''),
+      item_id: String(req.item_id || ''), item_name: String(req.item_name || ''),
+      requested_date: String(req.requested_date || ''), evidence: String(req.evidence || '')
+    }
+  });
+}
+
+/** 查自己嘅申報紀錄（待批／已批／已拒） */
+export async function loadMyRequests(ymis) {
+  return callApi({ ...cfgPayload(), action: 'myRequests', data: { ymis: String(ymis || '') } });
+}
+
+/* ============================================================
    項目目錄（items.json）
    ============================================================ */
 /** 攤平成 { itemId: { id, name, badgeId, badgeName, segmentId, segmentName } } */

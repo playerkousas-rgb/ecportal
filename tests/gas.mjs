@@ -240,9 +240,10 @@ section('旅團隔離');
   const rb = g.post({ action: 'loadDb', unit: '0099' });
   ok('0082 只讀到自己嘅', ra.db?.members?.[0]?.name === '0082 團員');
   ok('0099 只讀到自己嘅', rb.db?.members?.[0]?.name === '0099 團員');
-  /* 再存一次 0082，唔可以整爛 0099 */
+  /* 再存一次 0082，唔可以整爛 0099（v2.2.0 起要帶 baseVersion 樂觀鎖） */
   a.members.push({ id: 'a2', name: '新團員' });
-  g.post({ action: 'saveDb', unit: '0082', db: a });
+  const v6 = g.post({ action: 'loadDb', unit: '0082' });
+  g.post({ action: 'saveDb', unit: '0082', db: a, baseVersion: v6.version || '' });
   const rb2 = g.post({ action: 'loadDb', unit: '0099' });
   ok('覆寫 0082 唔會影響 0099', rb2.db?.members?.[0]?.name === '0099 團員' && rb2.found === true);
 }
@@ -256,7 +257,8 @@ section('覆寫要乾淨');
   const big = sampleDb(); big.blob = 'y'.repeat(100000);
   g.post({ action: 'saveDb', unit: '0082', db: big });
   const small = sampleDb();
-  g.post({ action: 'saveDb', unit: '0082', db: small });
+  const v7 = g.post({ action: 'loadDb', unit: '0082' });
+  g.post({ action: 'saveDb', unit: '0082', db: small, baseVersion: v7.version || '' });
   const back = g.post({ action: 'loadDb', unit: '0082' });
   ok('大份變細份之後，讀返嘅係細份（冇殘留舊段）', back.db?.blob === undefined && JSON.stringify(back.db) === JSON.stringify(small));
 }
@@ -271,9 +273,165 @@ section('gastemplate 同 apps-script/Code.gs 一致');
   ok('gastemplate 有 saveDb / loadDb / dbInfo', /saveDb/.test(tpl) && /loadDb/.test(tpl) && /dbInfo/.test(tpl));
   ok('兩份都有「資料庫」分頁', /資料庫/.test(built) && /資料庫/.test(tpl));
   ok('版本號一致',
-    (built.match(/v?2\.1\.\d/) || [''])[0] === (tpl.match(/v?2\.1\.\d/) || [''])[0],
-    `built=${(built.match(/v?2\.1\.\d/) || [''])[0]} tpl=${(tpl.match(/v?2\.1\.\d/) || [''])[0]}`);
+    (built.match(/v?2\.4\.\d/) || [''])[0] === (tpl.match(/v?2\.4\.\d/) || [''])[0],
+    `built=${(built.match(/v?2\.4\.\d/) || [''])[0]} tpl=${(tpl.match(/v?2\.4\.\d/) || [''])[0]}`);
 }
+
+/* ============================================================
+   ⑧ 樂觀鎖（v2.2.0）：過時裝置唔可以用舊資料盲蓋後端
+   ------------------------------------------------------------
+   2026-09-18 真實事故：普通 Chrome（本機過時）一登入就把
+   另一部機啱啱同步嘅資料整個蓋走 —— 後端一定要拒收舊版本。
+   ============================================================ */
+section('樂觀鎖：saveDb baseVersion（過時裝置唔可以盲蓋後端）');
+{
+  const g = makeGas();
+  /* 後端仲係空 → 第一次存唔使 baseVersion 都得（新旅團開張） */
+  const first = g.post({ action: 'saveDb', unit: '0110', db: sampleDb() });
+  ok('後端空：第一次存成功（唔使 baseVersion）', first.ok === true, JSON.stringify(first).slice(0, 120));
+  const V1 = first.version;
+
+  /* 另一部機用正確 baseVersion 存新版本 */
+  const db2 = sampleDb(); db2.meta.updatedAt = '2026-09-18T12:00:00.000Z'; db2.members.push({ id: 'm9', name: '第二部機加嘅' });
+  const second = g.post({ action: 'saveDb', unit: '0110', db: db2, baseVersion: V1 });
+  ok('baseVersion 對上 → 存得到', second.ok === true, JSON.stringify(second).slice(0, 120));
+  const V2 = second.version;
+  ok('版本有更新', V2 && V2 !== V1, `${V1} -> ${V2}`);
+
+  /* 過時裝置攞住舊 baseVersion（V1）想蓋 → 拒收 + conflict */
+  const stale = sampleDb(); stale.meta.updatedAt = '2026-09-18T09:00:00.000Z'; stale.members = [];
+  const conflictSave = g.post({ action: 'saveDb', unit: '0110', db: stale, baseVersion: V1 });
+  ok('舊 baseVersion → 拒收（conflict:true）', conflictSave.ok === false && conflictSave.conflict === true, JSON.stringify(conflictSave).slice(0, 160));
+  ok('拒收嗰陣話畀你知後端而家咩版本', conflictSave.version === V2, JSON.stringify(conflictSave.version));
+  const unchanged = g.post({ action: 'loadDb', unit: '0110' });
+  ok('拒收之後後端資料冇被改動', unchanged.db?.members?.length === 3, JSON.stringify(unchanged.db?.members?.length));
+
+  /* 冇帶 baseVersion（舊版 app）而後端有版本 → 都要拒收（防盲蓋） */
+  const legacy = g.post({ action: 'saveDb', unit: '0110', db: stale });
+  ok('冇 baseVersion（舊版 app）→ 一樣拒收', legacy.ok === false && legacy.conflict === true, JSON.stringify(legacy).slice(0, 160));
+
+  /* 唔同旅團互不影響 */
+  const other = g.post({ action: 'saveDb', unit: '0220', db: sampleDb() });
+  ok('另一個旅團（後端空）照樣第一次存得到', other.ok === true, JSON.stringify(other).slice(0, 120));
+}
+
+/* ============================================================
+   ⑨ 團員自助申報（v2.2.0）：addRequest / myRequests
+   ------------------------------------------------------------
+   團員喺團員入口申報完成 → 寫入「待批完成」（pending），
+   執委喺審批中心批核。addRequest 免 API Key（同 claim/loan 睇齊）。
+   ============================================================ */
+section('團員自助申報：addRequest / myRequests');
+{
+  const g = makeGas();
+  g.sandbox.initializeSheets();
+  const ar = g.post({ action: 'addRequest', unit: '0082', ymis: '2026000001', name: '陳大文', item_id: 'VS-C1', item_name: '技能科 第 1 項', requested_date: '2026-09-18', evidence: '夏季營完成' });
+  ok('addRequest 免 key 都寫得到（寫入待批完成）', ar.ok === true && !!ar.request_id, JSON.stringify(ar).slice(0, 160));
+  const mine = g.post({ action: 'myRequests', unit: '0082', ymis: '2026000001' });
+  ok('myRequests 攞返自己嘅申報', mine.ok === true && mine.requests?.length === 1, JSON.stringify(mine).slice(0, 200));
+  ok('申報狀態係 pending', mine.requests?.[0]?.status === 'pending', JSON.stringify(mine.requests?.[0]));
+  ok('項目名／日期正確', mine.requests?.[0]?.item_name === '技能科 第 1 項' && mine.requests?.[0]?.requested_date === '2026-09-18', JSON.stringify(mine.requests?.[0]));
+  const other = g.post({ action: 'myRequests', unit: '0082', ymis: '9999999999' });
+  ok('第二個團員查唔到人哋嘅申報', other.ok === true && other.requests?.length === 0, JSON.stringify(other));
+
+  /* 缺欄位要拒 */
+  const bad = g.post({ action: 'addRequest', unit: '0082', ymis: '', item_id: '' });
+  ok('缺 ymis/item_id → 拒', bad.ok === false, JSON.stringify(bad).slice(0, 120));
+}
+
+/* ============================================================
+   ⑩ 體積治理（v2.3.0）：uploadPhotos／dbInfo sizes
+   ------------------------------------------------------------
+   APP 內申報嘅相片要直接上 Drive（唔好入 db JSON）；
+   dbInfo 要回逐分頁體積（app 畫「體積檢查」用）。
+   ============================================================ */
+section('體積治理：uploadPhotos 上 Drive／dbInfo 回體積');
+{
+  const g = makeGas();
+  /* 唔叫 initializeSheets（唔想生成 API Key 擋住 saveDb；呢個 section 只測體積契約） */
+  /* savePhotos 冇 DRIVE_FOLDER_ID 嗰陣會回空陣列 —— 契約唔可以爆 */
+  const up = g.post({ action: 'uploadPhotos', unit: '0082',
+    payload: { id: 'c_test1', photos: [{ name: 'a.jpg', type: 'image/jpeg', dataUrl: 'data:image/jpeg;base64,AAAA' }] } });
+  ok('uploadPhotos 免 key 都用到', up.ok === true, JSON.stringify(up).slice(0, 160));
+  ok('uploadPhotos 回 links 陣列（冇 Folder 時係空）', Array.isArray(up.links) && up.saved === 0, JSON.stringify(up));
+
+  /* dbInfo 回逐分頁體積 */
+  const db = sampleDb();
+  db.claims = [{ id: 'c1', photos: [{ name: 'x', dataUrl: 'data:image/jpeg;base64,' + 'A'.repeat(1000) }] }];
+  const saved = g.post({ action: 'saveDb', unit: '0082', db });
+  ok('存一份有相片嘅 db 成功', saved.ok === true, JSON.stringify(saved).slice(0, 140));
+  const info = g.post({ action: 'dbInfo', unit: '0082' });
+  ok('dbInfo 回 sizes（逐分頁 bytes）', info.ok === true && typeof info.sizes === 'object' && info.sizes.members > 0, JSON.stringify(info.sizes || {}));
+  ok('dbInfo 回 photoBytes（相片食緊幾多）', info.photoBytes > 1000, JSON.stringify(info.photoBytes));
+  ok('dbInfo counts 照舊有（向後兼容）', info.counts?.members === 2, JSON.stringify(info.counts));
+
+  /* 大份 db 再存一次：確認 deleteRows 成梳刪唔會爛（存完讀得返） */
+  const big = sampleDb(); big.blob = 'z'.repeat(60000);
+  const bigSave = g.post({ action: 'saveDb', unit: '0082', db: big, baseVersion: saved.version });
+  ok('大份資料重存（成梳刪舊段）成功', bigSave.ok === true, JSON.stringify(bigSave).slice(0, 120));
+  const bigBack = g.post({ action: 'loadDb', unit: '0082' });
+  ok('成梳刪之後讀返冇殘留', bigBack.db?.blob?.length === 60000);
+}
+
+/* ------------------------------------------------------------
+   ⑪ 分件儲存（v2.4.0 長壽命）：saveDbPart／saveDbCommit
+   db 大過單一請求上限都存得到 —— 暫存→逐件→拼合→清暫存。
+   ------------------------------------------------------------ */
+section('分件儲存：saveDbPart／saveDbCommit（長壽命架構）');
+{
+  const g = makeGas();
+  const mk = (tag) => ({
+    schema: 2, kind: 'ecportal', unitCode: '0082',
+    members: [{ id: 'm' + tag, name: '團員' + tag }],
+    blob: tag.repeat(3000)          // 每件帶啲肉
+  });
+  const saveId = '0082-stg-' + Date.now().toString(36) + '-abcd';
+
+  /* 5 件：冇 part 0（要拒）、齊件、saveId 唔啱格式、partIdx 越界、撞版 */
+  const noPart0 = g.post({ action: 'saveDbPart', unit: '0082', saveId, partIdx: 1, parts: 5, baseVersion: '', data: mk('1') });
+  ok('分件冇 part 0 開頭都照收（版本檢查只做一次）', noPart0.ok === true, JSON.stringify(noPart0).slice(0, 120));
+  g.post({ action: 'saveDbPart', unit: '0082', saveId, partIdx: 3, parts: 5, baseVersion: '', data: mk('3') });
+  const badId = g.post({ action: 'saveDbPart', unit: '0082', saveId: '0082-xxx', partIdx: 0, parts: 2, baseVersion: '', data: mk('x') });
+  ok('saveId 唔係 <unit>-stg- 開頭會拒', badId.ok === false, JSON.stringify(badId).slice(0, 120));
+  const oob = g.post({ action: 'saveDbPart', unit: '0082', saveId, partIdx: 9, parts: 5, baseVersion: '', data: mk('9') });
+  ok('partIdx 越界會拒', oob.ok === false, JSON.stringify(oob).slice(0, 100));
+
+  /* 補埋第 0（版本檢查位）同其餘件 → commit */
+  g.post({ action: 'saveDbPart', unit: '0082', saveId, partIdx: 0, parts: 5, baseVersion: '', data: mk('0') });
+  g.post({ action: 'saveDbPart', unit: '0082', saveId, partIdx: 2, parts: 5, baseVersion: '', data: mk('2') });
+  g.post({ action: 'saveDbPart', unit: '0082', saveId, partIdx: 4, parts: 5, baseVersion: '', data: mk('4') });
+
+  const missing = g.post({ action: 'saveDbCommit', unit: '0082', saveId, parts: 7, baseVersion: '' });
+  ok('缺件 commit 會拒（話埋邊件缺）', missing.ok === false && /缺少分件/.test(String(missing.error)), JSON.stringify(missing).slice(0, 140));
+
+  const committed = g.post({ action: 'saveDbCommit', unit: '0082', saveId, parts: 5, baseVersion: '' });
+  ok('齊件 commit 成功＋回新版本', committed.ok === true && !!committed.version, JSON.stringify(committed).slice(0, 140));
+
+  const back = g.post({ action: 'loadDb', unit: '0082' });
+  ok('拼合後讀得返：陣列按件序接駁（5 件各帶 1 個 → 5 個）', back.db?.members?.length === 5, JSON.stringify(back.db?.members));
+  ok('後件覆蓋：blob 係最後一件嘅內容', back.db?.blob === '4'.repeat(3000), String(back.db?.blob || '').slice(0, 20));
+
+  const info = g.post({ action: 'dbInfo', unit: '0082' });
+  ok('dbInfo 唔會俾暫存行污染 counts', info.counts?.members === 5, JSON.stringify(info.counts));
+
+  /* 撞版：part 0 對住新版本就拒 */
+  const conflictPart = g.post({ action: 'saveDbPart', unit: '0082', saveId: '0082-stg-x1-aaaa', partIdx: 0, parts: 2, baseVersion: '舊版本', data: mk('a') });
+  ok('分件撞版（part 0 版本唔對）會拒', conflictPart.ok === false && conflictPart.conflict === true, JSON.stringify(conflictPart).slice(0, 140));
+  const conflictCommit = g.post({ action: 'saveDbCommit', unit: '0082', saveId: '0082-stg-x1-aaaa', parts: 2, baseVersion: committed.version + '-old' });
+  ok('commit 撞版都會拒', conflictCommit.ok === false && conflictCommit.conflict === true, JSON.stringify(conflictCommit).slice(0, 120));
+
+  /* 暫存唔會污染正常 loadDb／成梳刪：再存一次單件確認舊暫存清走 */
+  const again = g.post({ action: 'saveDb', unit: '0082', db: mk('Z'), baseVersion: committed.version });
+  ok('分件之後照樣可以單件儲存', again.ok === true, JSON.stringify(again).slice(0, 100));
+  const back2 = g.post({ action: 'loadDb', unit: '0082' });
+  ok('單件重存後讀返啱', back2.db?.blob === 'Z'.repeat(3000));
+
+  /* receiptFolderId 三層：uploadPhotos 帶 folderId（folders/ URL 都收） */
+  const upF = g.post({ action: 'uploadPhotos', unit: '0082', folderId: 'https://drive.google.com/drive/folders/ABC123',
+    payload: { id: 'c_f1', photos: [{ name: 'b.jpg', type: 'image/jpeg', dataUrl: 'data:image/jpeg;base64,BBBB' }] } });
+  ok('uploadPhotos 帶 folderId 免 key 用到（契約唔爆）', upF.ok === true && Array.isArray(upF.links), JSON.stringify(upF).slice(0, 140));
+}
+
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} Code.gs：${pass} 過 / ${fail} 唔過（${Date.now() - t0}ms）`);
 process.exit(fail === 0 ? 0 : 1);

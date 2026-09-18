@@ -568,12 +568,20 @@ export function importAll(jsonText, { allowMockIntoReal = false } = {}) {
 /* ---------------- 後端資料（由旅團自己嘅 Google Sheet 讀返） ---------------- */
 
 /**
- * 採用後端讀返嚟嘅資料庫（覆蓋本機）。
+ * 採用後端讀返嚟嘅資料庫（覆蓋本機，或者同本機合併）。
  * 只寫本機，唔會即刻又送返上去後端（避免來回打交）。
+ *
  * @param {object} remoteDb 後端「資料庫」分頁存住嘅完整 db
+ * @param {object} opts
+ *   - version：後端回傳嘅版本字串（記入 sync.lastSyncedVersion —— 之後 push
+ *     會用佢做 baseVersion 樂觀鎖，防止過時裝置盲蓋後端）
+ *   - merge：true = 本機有未同步改動（sync.pending > 0）→ 唔好一刀切覆蓋，
+ *     做「聯集合併」：兩邊陣列紀錄按 id 合併（本機多出嚟嘅紀錄保留，
+ *     兩邊都有嘅以後端為準），物件欄位以後端為準。呢個係 2026-09-18
+ *     「登入清空後端」事故嘅根本修復之一：合併永遠唔會因為同步而蝕資料。
  * @returns {object} 採用咗嘅 db
  */
-export function adoptRemote(remoteDb) {
+export function adoptRemote(remoteDb, { version = '', merge = false } = {}) {
   if (!remoteDb || typeof remoteDb !== 'object') throw new Error('後端資料格式唔啱');
   if (isMock()) throw new Error('示範模式唔會採用後端資料');
   if (remoteDb.schema && remoteDb.schema !== SCHEMA) {
@@ -581,18 +589,113 @@ export function adoptRemote(remoteDb) {
   }
   /* 後端資料唔應該改變「我而家係邊個旅團」 */
   const code = state.unitCode;
-  state.db = { ...remoteDb, unitCode: remoteDb.unitCode || code };
+  const local = state.db;
+  let merged = remoteDb;
+
+  if (merge && local && typeof local === 'object') {
+    merged = mergeDbs(remoteDb, local);
+  }
+
+  state.db = { ...merged, unitCode: merged.unitCode || code };
   if (!Array.isArray(state.db.accounts) || !state.db.accounts.length) {
     state.db.accounts = SEED_ACCOUNTS;
   }
   migrateIdentities(state.db);
   migrateMemberKeys(state.db);
-  state.db.sync = { ...(state.db.sync || {}), pending: 0, lastPullAt: nowStamp() };
+  /* merge 模式：本機未同步嘅改動仲喺度，要繼續排隊 push；
+     覆蓋模式：本機內容 = 後端內容，冇嘢未同步。 */
+  const keepPending = merge ? Math.max(1, Number(local?.sync?.pending || 0)) : 0;
+  state.db.sync = {
+    ...(state.db.sync || {}),
+    pending: keepPending,
+    lastPullAt: nowStamp(),
+    lastSyncedVersion: String(version || remoteDb?.meta?.updatedAt || ''),
+    log: [...(state.db.sync?.log || []), {
+      at: nowStamp().slice(0, 19).replace('T', ' '),
+      msg: merge ? '⇩ 已拉後端並同本機未同步改動合併' : '⇩ 已採用後端最新版本'
+    }].slice(-40)
+  };
+  /* 連線設定跟本機（部機而家連緊嘅後端唔好因為拉資料而斷） */
+  if (local?.sync?.url) state.db.sync.url = local.sync.url;
+  if (local?.sync?.apiKey) state.db.sync.apiKey = local.sync.apiKey;
+  if (local?.sync?.unit) state.db.sync.unit = local.sync.unit;
+  if (local?.sync?.auto !== undefined) state.db.sync.auto = local.sync.auto;
+  if (local?.backend) state.db.backend = local.backend;
   state.seedFailed = false;
-  state.seedSource = '（後端：旅團自己嘅 Google Sheet）';
+  state.seedSource = merge ? '（後端＋本機合併）' : '（後端：旅團自己嘅 Google Sheet）';
   state.db.meta = { ...(state.db.meta || {}), seedSource: state.seedSource };
   persistLocalOnly();
   return state.db;
+}
+
+/**
+ * 聯集合併（2026-09-18 同步事故修復）：
+ *   · 陣列紀錄（團員／帳目／通告…）：按 id 合併 —— 兩邊都有嘅**逐格深層合併**，
+ *     只有一邊有嘅保留。呢個係「一齊開 APP 一齊做嘢」嘅關鍵：
+ *     例：同一個活動，A 點名陳大文出席、B 點名李小明出席 —— 深層合併後
+ *     兩個人都喺度（盲蓋或者「成條以後端為準」都會蝕一邊）。
+ *     同一條紀錄嘅同一個純值格（例如同一個成員嘅電話）兩邊都改咗
+ *     → 以「未存落後端嗰部機」為準（同用家螢幕一致）；地圖格
+ *     （rsvp／rollcall／responses 等人名→狀態）做併集。
+ *   · 物件／標量（settings、constitution…）：以 remote 為準；本機 sync/backend
+ *     連線設定同 meta 由 adoptRemote 之後再補返。
+ *   · 已知取捨：本機離線刪除嘅紀錄，如果另一部機未見過，合併後會「翻生」
+ *     —— 總好過成個資料庫被盲蓋清空。刪多一次就得。
+ * @returns {object} 合併後嘅新 db（唔會改動傳入嘅兩個物件）
+ */
+
+/** 兩條同 id 紀錄逐格合併：地圖格併集（本機細格贏）、陣列格遞迴、純值本機贏 */
+function mergeRec(rv, lv) {
+  const out = { ...rv };
+  Object.keys(lv).forEach(k => {
+    const b = lv[k];
+    if (b === undefined) return;
+    const a = out[k];
+    if (a === undefined) { out[k] = b; return; }
+    const aMap = a && typeof a === 'object' && !Array.isArray(a);
+    const bMap = b && typeof b === 'object' && !Array.isArray(b);
+    if (aMap && bMap) { out[k] = { ...a, ...b }; return; }            // rsvp／rollcall／responses／title：併集
+    if (Array.isArray(a) && Array.isArray(b)) { out[k] = mergeArrayById(a, b); return; }
+    out[k] = b;                                                       // 純值：以未存嗰邊為準
+  });
+  return out;
+}
+
+/** 陣列合併：有 id 嘅物件按 id 合（同 id 遞迴 mergeRec）、冇 id 嘅去重加入 */
+function mergeArrayById(rv, lv) {
+  const base = (Array.isArray(rv) ? rv : []).slice();
+  const index = new Map();
+  base.forEach((x, i) => { if (x && typeof x === 'object' && x.id !== undefined) index.set(String(x.id), i); });
+  (Array.isArray(lv) ? lv : []).forEach(item => {
+    if (item && typeof item === 'object' && item.id !== undefined) {
+      const key = String(item.id);
+      if (index.has(key)) base[index.get(key)] = mergeRec(base[index.get(key)], item);
+      else { index.set(key, base.length); base.push(item); }
+    } else if (!base.includes(item)) base.push(item);
+  });
+  return base;
+}
+
+/** 匯出畀測試等需要合併語意嘅地方用（純函數，唔會寫入） */
+export function mergeDbs(remote, local) {
+  const out = { ...remote };
+  Object.keys(local).forEach(key => {
+    if (key === 'sync' || key === 'meta' || key === 'backend' || key === 'unitCode') return;
+    const lv = local[key];
+    const rv = remote[key];
+    if (Array.isArray(lv) && (Array.isArray(rv) || rv === undefined)) {
+      out[key] = mergeArrayById(rv || [], lv);
+    } else if (lv !== undefined && rv === undefined) {
+      out[key] = lv;            // 後端完全冇呢個 key（舊版後端）→ 用本機
+    }
+    /* 兩邊都有嘅物件（settings／constitution…）→ 保持 remote（已在 out） */
+  });
+  return out;
+}
+
+/** 本機已知嘅「後端版本」（上次 pull／push 成功嗰個）—— push 時做樂觀鎖 baseVersion 用 */
+export function lastSyncedVersion() {
+  return String(state.db?.sync?.lastSyncedVersion || '');
 }
 
 /** 本機資料庫嘅「最後改動時間」（同後端比新舊用） */

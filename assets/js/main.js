@@ -3,7 +3,7 @@
    ============================================================ */
 
 import {
-  init, load, isMock, currentUnit, seedInfo, enterMock, exitMock, exitMockToUnit,
+  init, load, tryLoad, isMock, currentUnit, seedInfo, enterMock, exitMock, exitMockToUnit,
   switchUnit, clearMockData, resetToGate, setMode, setUnitCode, lastRealUnit, CHOSEN_UNIT_KEY
 } from './lib/store.js';
 import {
@@ -131,19 +131,23 @@ async function syncBoot() {
   try {
     const info = await remoteApi.remoteInfo();
     if (info?.ok && info.found) {
-      const localAt = store.localUpdatedAt();
+      /* 2026-09-18 修復：以前用「時間戳邊個新」決定使唔使拉後端 ——
+         但本機 meta.updatedAt 喺離線改動嗰陣都會更新，搞到過時裝置
+         永遠「以為自己較新」→ 唔拉 → 一改嘢就把過時資料盲蓋上後端
+         （「另一邊讀不到」「一登入後端就清空」嘅死因）。
+         而家用「版本內容」判斷：後端版本 ≠ 本機上次同步過嘅版本
+         → 即係我手上嘅唔係最新內容 → 拉落嚟；本機有未同步改動就合併。 */
       const remoteAt = String(info.version || info.at || '');
-      const localHas = store.hasLocalContent();
-      /* 後端比本機新（或者本機根本係新裝置／空白）→ 拉後端落嚟 */
-      const remoteNewer = !localHas || (remoteAt && localAt && normAt(remoteAt) > normAt(localAt));
-      if (remoteNewer) {
+      const lastSynced = store.lastSyncedVersion();
+      if (remoteAt && remoteAt !== lastSynced) {
         const got = await remoteApi.pullDb();
         if (got?.ok && got.found && got.db) {
           try {
-            store.adoptRemote(got.db);
+            const merged = Number(store.tryLoad()?.sync?.pending || 0) > 0;
+            store.adoptRemote(got.db, { version: String(got.version || ''), merge: merged });
             applyTheme(load()?.unit?.theme);
             render();
-            toast('已由後端載入最新資料', 'ok');
+            toast(merged ? '後端有另一部機嘅新版本 —— 已同本機改動合併' : '已由後端載入最新資料', 'ok');
           } catch (e) { console.warn('[sync] 採用後端資料失敗', e); }
         }
       }
@@ -154,6 +158,8 @@ async function syncBoot() {
 
   /* 開機流程完成先至開始自動儲存（避免種子資料一載入就寫返上去） */
   remoteApi.arm();
+  /* 會議模式：每 60 秒靜靜問一次後端有冇隊友更新（一齊睇／一齊做嘢用） */
+  remoteApi.startPolling();
   paintSyncChip();
 
   /* 離開頁面前，仲有嘢未存就即刻試多次 */
@@ -167,7 +173,12 @@ async function syncBoot() {
   });
 }
 
-/** 頂部「儲存狀態」提示 —— 一眼睇到資料有冇真係入咗後端 */
+/** 頂部「儲存狀態」提示 —— 一眼睇到資料有冇真係入咗後端。
+    2026-09-18 團長要求：右上天長地久有一個「立即儲存／立即同步」掣，
+    唔好收埋喺「總表同步」入面。所以呢度畫兩樣嘢：
+      ① 狀態 badge（儲存緊／已存到後端／未儲存／撞版…）—— 撳佢去詳情頁
+      ② 行動掣：有未存嘢 → 「立即儲存（N）」＝即刻 flush；
+         已經同步 → 「立即同步」＝問後端有冇隊友更新，有就拉落嚟 */
 function paintSyncChip() {
   const el = document.getElementById('syncChip');
   if (!el) return;
@@ -182,19 +193,42 @@ function paintSyncChip() {
   }
 
   const s = remoteApi.syncState();
+  const pending = Number(tryLoad()?.sync?.pending || 0);
   const map = {
     saving:  ['b-warn', 'cloud', '儲存緊…'],
     saved:   ['b-ok', 'check', '已存到後端'],
     pending: ['b-warn', 'clock', '未儲存'],
     offline: ['b-warn', 'alert', '離線'],
     loading: ['b-warn', 'cloud', '讀取緊…'],
+    conflict:['b-warn', 'alert', '同步撞版：已自動合併'],
     error:   ['b-danger', 'alert', '儲存失敗'],
     idle:    ['b-ok', 'cloud', '已連後端']
   };
   const [cls, ic, label] = map[s.state] || map.idle;
-  el.innerHTML = `<span class="badge ${cls}" title="${esc(s.msg || label)}">${icon(ic, 12)} ${esc(label)}</span>`;
-  el.onclick = () => go('#/tables/sync');
-  el.style.cursor = 'pointer';
+  const needSave = pending > 0 || s.state === 'error' || s.state === 'conflict' || s.state === 'offline';
+  el.innerHTML = `<span class="badge ${cls}" title="${esc(s.msg || label)}">${icon(ic, 12)} ${esc(label)}</span>
+    <button class="btn btn-xs ${needSave ? 'btn-primary' : ''}" id="syncActBtn" title="${needSave ? '即刻把呢部機嘅改動寫入後端' : '睇下隊友有冇新改動，有就拉落嚟'}">
+      ${icon(needSave ? 'save' : 'refresh', 12)} ${needSave ? `立即儲存${pending > 1 ? `（${pending}）` : ''}` : '立即同步'}</button>`;
+  el.style.cursor = 'default';
+  const badge = el.querySelector('.badge');
+  if (badge) badge.style.cursor = 'pointer';
+  if (badge) badge.onclick = () => go('#/tables/sync');
+  el.querySelector('#syncActBtn')?.addEventListener('click', async () => {
+    const btn = el.querySelector('#syncActBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '處理中…'; }
+    if (needSave) {
+      const r = await remoteApi.flush();
+      toast(r.ok ? '已儲存到後端 ✓' : '儲存失敗：' + (r.error || '未知錯誤') + (r.hint ? '（' + r.hint + '）' : ''), r.ok ? 'ok' : 'err');
+    } else {
+      const r = await remoteApi.checkRemote();
+      if (r?.upToDate) toast('已經係最新 —— 後端冇隊友新改動', 'ok');
+      else if (r?.updated) {
+        toast(r.merged ? '後端有隊友新版本 —— 已同你未存嘅改動合併，之後自動存' : '已載入隊友嘅最新改動', 'ok');
+        render();
+      } else if (r && !r.ok) toast(r.error || '同步失敗', 'err');
+    }
+    paintSyncChip();
+  });
 }
 
 /** 把 GAS 回嘅時間（可能係 ISO 或者 'YYYY-MM-DD HH:mm:ss'）正規化做可比較字串 */

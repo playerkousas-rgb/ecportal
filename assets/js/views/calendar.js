@@ -56,11 +56,22 @@ function monthView() {
   for (let i = 0; i < startDow; i++) cells.push(null);
   for (let d = 1; d <= days; d++) cells.push(d);
   while (cells.length % 7) cells.push(null);
+  /* 多日（過夜）活動：每個活動由 date 到 dateEnd（冇填就用 date 當日）
+     每一日都會出現 —— 2026-09-18 第 3 項要求 */
+  const monthStart = `${cursor}-01`, monthEnd = `${cursor}-${String(days).padStart(2, '0')}`;
   const byDay = {};
   list().forEach(e => {
-    if (!String(e.date || '').startsWith(cursor)) return;
-    const d = Number(String(e.date).slice(8, 10));
-    (byDay[d] = byDay[d] || []).push(e);
+    const d0 = String(e.date || '').slice(0, 10);
+    if (!d0) return;
+    const d1 = (String(e.dateEnd || '').slice(0, 10) >= d0) ? String(e.dateEnd).slice(0, 10) : d0;
+    const from = d0 > monthStart ? d0 : monthStart;
+    const to = d1 < monthEnd ? d1 : monthEnd;
+    if (from > to) return;
+    const start = new Date(from + 'T00:00:00'), end = new Date(to + 'T00:00:00');
+    for (let t = start; t <= end; t.setDate(t.getDate() + 1)) {
+      const d = t.getDate();
+      (byDay[d] = byDay[d] || []).push(e);
+    }
   });
   return `<div class="card">
     <div class="card-head">
@@ -80,15 +91,16 @@ function monthView() {
           <div class="cal-n">${d}</div>
           ${items.map(e => {
             const c = rsvpCounts(e);
+            const multi = e.dateEnd && e.dateEnd !== e.date;
             return `<button class="cal-ev ${e.visibility === 'exco' ? 'exco' : ''}" data-open="${e.id}">
-              ${esc((e.title || '').slice(0, 18))}
+              ${multi && String(e.date) !== iso ? '↳ ' : ''}${esc((e.title || '').slice(0, 18))}${multi ? ' …' : ''}
               <span class="xs faint"> ${c.present + c.late + c.early}出／${c.absent}唔出</span>
             </button>`;
           }).join('')}
         </div>`;
       }).join('')}
     </div>
-    <div class="hint" style="padding:10px 14px">棗紅＝團員可見；虛線＝只限執委＋領袖。撳日子新增，撳活動睇人數同點名。</div>
+    <div class="hint" style="padding:10px 14px">棗紅＝團員可見；虛線＝只限執委＋領袖。過夜活動會由首日拉到尾日（…＝仲有下日）。撳日子新增，撳活動睇人數同點名。</div>
   </div>`;
 }
 
@@ -99,9 +111,10 @@ function listView() {
     <thead><tr><th>日期</th><th>活動</th><th>可見</th><th>回覆</th><th>點名</th></tr></thead>
     <tbody>${rows.map(e => {
       const c = rsvpCounts(e);
+      const overnight = e.dateEnd && e.dateEnd !== e.date;
       return `<tr data-open="${e.id}" style="cursor:pointer">
-        <td class="mono sm">${esc(e.date)} ${esc(e.time || '')}</td>
-        <td><div class="semibold sm">${esc(e.title)}</div><div class="xs faint">${esc(KINDS[e.kind] || '')} · ${esc(e.venue || '')}</div></td>
+        <td class="mono sm">${esc(e.date)}${overnight ? `<br>至 ${esc(e.dateEnd)}` : ''} ${esc(e.time || '')}</td>
+        <td><div class="semibold sm">${esc(e.title)}${overnight ? ' <span class="tag">過夜</span>' : ''}</div><div class="xs faint">${esc(KINDS[e.kind] || '')} · ${esc(e.venue || '')}</div></td>
         <td>${e.visibility === 'exco' ? '<span class="badge b-warn">執委＋領袖</span>' : '<span class="badge b-ok">團員可見</span>'}</td>
         <td class="sm">出 ${c.present} · 唔出 ${c.absent} · 遲 ${c.late} · 早 ${c.early}</td>
         <td class="sm">${c.rollTotal ? `已點 ${c.rollTotal}` : '<span class="faint">未點名</span>'}</td>
@@ -228,11 +241,12 @@ function detail(id, query) {
   const rsvp = peopleOf(e, 'rsvp');
   const roll = peopleOf(e, 'rollcall');
   const roster = activeMembers();
+  const overnight = e.dateEnd && e.dateEnd !== e.date;
   return `
   <div class="no-print mb-12"><button class="btn btn-ghost btn-sm" data-go="#/calendar">${icon('chevronL', 15)} 返回行事曆</button></div>
   ${pageHead({
     title: e.title,
-    sub: `${e.date} ${e.time || ''} · ${e.venue || ''} · ${KINDS[e.kind] || ''} · ${e.visibility === 'exco' ? '只限執委＋領袖' : '團員可見'}`,
+    sub: `${e.date}${overnight ? ` 至 ${e.dateEnd}（過夜）` : ''} ${e.time || ''} · ${e.venue || ''} · ${KINDS[e.kind] || ''} · ${e.visibility === 'exco' ? '只限執委＋領袖' : '團員可見'}`,
     actions: can('calendar.edit') ? `<button class="btn btn-sm" data-act="edit">${icon('edit', 15)} 編輯</button>
       <button class="btn btn-sm btn-danger" data-act="del">${icon('trash', 15)}</button>` : ''
   })}
@@ -256,16 +270,25 @@ function detail(id, query) {
 }
 
 function editor(e, query = {}) {
-  const d = e || { title: '', date: query.date || todayISO(), time: '19:30', venue: '', kind: 'activity', visibility: 'members', detail: '', fee: '', deadline: '' };
+  const d = e || { title: '', date: query.date || todayISO(), dateEnd: '', time: '19:30', venue: '', kind: 'activity', visibility: 'members', detail: '', fee: '', deadline: '' };
+  const dOvernight = !!(d.dateEnd && d.dateEnd !== d.date);
   return `
   <div class="no-print mb-12"><button class="btn btn-ghost btn-sm" data-go="#/calendar">${icon('chevronL', 15)} 返回</button></div>
   ${pageHead({ title: e ? '編輯活動' : '新增活動', sub: '揀「團員可見」或「只限執委＋領袖」' })}
   <div class="card card-pad" style="max-width:720px">
     <div class="grid g-2" style="gap:12px">
       <div class="field" style="grid-column:1/-1"><label class="label">名稱 <span class="req">*</span></label>
-        <input class="input" id="e-title" value="${esc(d.title)}" placeholder="例：週五集會／遠足"></div>
-      <div class="field"><label class="label">日期</label><input class="input" type="date" id="e-date" value="${esc(d.date)}"></div>
+        <input class="input" id="e-title" value="${esc(d.title)}" placeholder="例：週五集會／遠足／兩日營"></div>
+      <div class="field"><label class="label">日期（開始）</label><input class="input" type="date" id="e-date" value="${esc(d.date)}"></div>
       <div class="field"><label class="label">時間</label><input class="input" type="time" id="e-time" value="${esc(d.time || '')}"></div>
+      <div class="field" style="grid-column:1/-1">
+        <label class="check"><input type="checkbox" id="e-overnight" ${dOvernight ? 'checked' : ''}> 過夜／多日活動（兩日營、大露營、外港交流等）</label>
+      </div>
+      <div class="field" style="grid-column:1/-1;${dOvernight ? '' : 'display:none'}" id="e-dateend-wrap">
+        <label class="label">結束日期</label>
+        <input class="input" type="date" id="e-dateend" value="${esc(d.dateEnd || d.date)}">
+        <div class="hint mt-4">月曆會由開始日拉到結束日，團員入口都會見到「X 至 Y」。</div>
+      </div>
       <div class="field"><label class="label">地點</label><input class="input" id="e-venue" value="${esc(d.venue || '')}"></div>
       <div class="field"><label class="label">種類</label>
         <select class="select" id="e-kind">${Object.entries(KINDS).map(([k, v]) => `<option value="${k}" ${d.kind === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
@@ -320,12 +343,27 @@ export function mount(root, params) {
       remove('events', params.id); toast('已刪除', 'ok'); go('#/calendar');
     }
   });
+  root.querySelector('#e-overnight')?.addEventListener('change', e => {
+    const wrap = root.querySelector('#e-dateend-wrap');
+    if (!wrap) return;
+    wrap.style.display = e.target.checked ? '' : 'none';
+    if (e.target.checked) {
+      const inp = root.querySelector('#e-dateend');
+      if (inp && !inp.value) inp.value = root.querySelector('#e-date')?.value || todayISO();
+    }
+  });
   root.querySelector('[data-act="save"]')?.addEventListener('click', () => {
     const v = k => root.querySelector(k)?.value.trim() || '';
     const title = v('#e-title');
     if (!title) { toast('請填名稱', 'err'); return; }
+    const date = v('#e-date') || todayISO();
+    /* 過夜／多日：勾咗先有 dateEnd；尾日早過頭日就當返同一日 */
+    const overnight = !!root.querySelector('#e-overnight')?.checked;
+    let dateEnd = v('#e-dateend');
+    if (!overnight) dateEnd = '';
+    else if (!dateEnd || dateEnd < date) dateEnd = date;
     const payload = {
-      title, date: v('#e-date') || todayISO(), time: v('#e-time'), venue: v('#e-venue'),
+      title, date, dateEnd, time: v('#e-time'), venue: v('#e-venue'),
       kind: v('#e-kind') || 'activity', visibility: v('#e-vis') || 'members',
       detail: v('#e-detail'), fee: v('#e-fee'), deadline: v('#e-dead'), status: 'ok'
     };
