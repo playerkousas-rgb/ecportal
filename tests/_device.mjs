@@ -86,7 +86,7 @@ try {
       const g = await remote.pullDb();
       let adopted = null;
       if (g.ok && g.db) {
-        store.adoptRemote(g.db);
+        store.adoptRemote(g.db, { version: String(g.version || '') });
         adopted = {
           members: store.load().members.length,
           transactions: store.load().transactions.length,
@@ -104,7 +104,24 @@ try {
         transactions: db.transactions.length,
         names: db.members.map(m => m.name),
         hasLocalContent: store.hasLocalContent(),
-        updatedAt: store.localUpdatedAt()
+        updatedAt: store.localUpdatedAt(),
+        lastSyncedVersion: String(db.sync?.lastSyncedVersion || ''),
+        pending: Number(db.sync?.pending || 0)
+      });
+    }
+    /* 「第 N 部機」模擬：把呢部機嘅本機 db 匯出／匯入（模擬同一部機走開咗再返嚟，
+       中間有第二部機更新咗後端 —— 用嚟測衝突復原）。 */
+    if (step.op === 'export') {
+      fs.writeFileSync(step.file, store.exportAll(), 'utf8');
+      out.steps.push({ op: 'export', file: step.file, members: store.load().members.length });
+    }
+    if (step.op === 'import') {
+      store.importAll(fs.readFileSync(step.file, 'utf8'));
+      const db = store.load();
+      out.steps.push({
+        op: 'import', file: step.file, members: db.members.length,
+        names: db.members.map(m => m.name), pending: Number(db.sync?.pending || 0),
+        lastSyncedVersion: String(db.sync?.lastSyncedVersion || '')
       });
     }
   }

@@ -211,6 +211,43 @@ section('3.5 PDF 抽出文字：斷行題目、描述行、縮排選項');
 }
 
 /* ============================================================ */
+section('3.7 Google Form 列印雜線：電郵地址／分區介紹唔可以當題目（2026-09-18 第 2 項）');
+{
+  const text = [
+    '中華小測（十一月版）',
+    '',                                     // ← 空行（表單說明）
+    '* 必填',
+    '電子郵件地址',                          // ← Forms 官方欄位說明（以前被當成題目）
+    '你的電子郵件地址將不會公開，因為這份表單不要求登入。',   // ← 說明行
+    '區段 1 共 2 個區段',                    // ← 分區標題
+    '(請細心閱讀以下露營守則，然後作答。)',    // ← 分區介紹（以前會黐落第一題）
+    '1. 旅團格言係咩？',
+    '  日行一善',
+    '  人生以服務為目的',
+    '2. 邊個係你嘅小隊長？',
+    '  陳大文',
+    '  李小明',
+    '區段 2 共 2 個區段',
+    '以下係意見調查部分。',                  // ← 第二個分區嘅介紹
+    '3. 有咩意見？',
+    'Google 表單',                           // ← 版尾
+    '此內容既非建立，也未經 Google 認可'
+  ].join('\n');
+  const p = parseQuizImport(text);
+  ok('Forms 列印：解析成功', !p.error, p.error);
+  ok('Forms 列印：啱啱 3 條題目（雜線全部丟走）', p.questions.length === 3, JSON.stringify(p.questions.map(q => q.prompt)));
+  ok('Forms 列印：標題由第一行嚟', p.title === '中華小測（十一月版）', JSON.stringify(p.title));
+  ok('Forms 列印：第一題冇黐住分區介紹', p.questions[0]?.prompt === '1. 旅團格言係咩？', JSON.stringify(p.questions[0]?.prompt));
+  ok('Forms 列印：冇任何「電郵」雜線入咗題目', !p.questions.some(q => /電子郵件|電郵/.test(q.prompt)), JSON.stringify(p.questions.map(q => q.prompt)));
+  ok('Forms 列印：冇「區段／分區」入咗題目', !p.questions.some(q => /區段|分區/.test(q.prompt)), JSON.stringify(p.questions.map(q => q.prompt)));
+  ok('Forms 列印：冇 Google 字眼入咗題目', !p.questions.some(q => /Google/i.test(q.prompt)));
+
+  /* 真問題唔可以誤殺：問號結尾／有冒號嘅「電郵」問題要保留 */
+  const p2 = parseQuizImport('1. 你嘅電郵地址係咩？\n2. 請填聯絡電郵:');
+  ok('唔好誤殺真問題（有問號／冒號嘅電郵題）', p2.questions.length === 2, JSON.stringify(p2.questions.map(q => q.prompt)));
+}
+
+/* ============================================================ */
 section('4. ToUnicode CMap：bfrange');
 {
   const src = `beginbfrange

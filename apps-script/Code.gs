@@ -1,7 +1,14 @@
 /**
  * ============================================================
  *  82venture · 總表同步與多旅團後端 Apps Script（Code.gs）
- *  版本：v2.1.0
+ *  版本：v2.2.0
+ *
+ *  ★ v2.2.0 新增（2026-09-18 團長事故修正）：
+ *    ① saveDb 樂觀鎖（baseVersion）—— 舊瀏覽器／離線耐咗嘅裝置，唔可以再
+ *       用過時資料「盲蓋」後端（之前試過一登入就把另一部機同步嘅資料清空）。
+ *       版本對唔上 → 回 conflict:true，等 app 自動「拉後端＋合併＋重存」。
+ *    ② addRequest / myRequests —— 團員喺團員入口申報進度完成（寫入「待批完成」，
+ *       執委喺審批中心批），同埋查返自己嘅申報狀態。
  *
  *  ★ v2.1.0 新增：「資料庫」分頁 —— app 嘅資料真正存喺後端，
  *    換手機／換瀏覽器／清 cache 都唔會冇咗（action: saveDb / loadDb / dbInfo）。
@@ -196,7 +203,7 @@ function doPost(e) {
       }
       if (body.action === 'saveDb') {
         var sv = withLock(function () { return saveDb(body); });
-        return json({ ok: sv.success === true, success: sv.success === true,
+        return json({ ok: sv.success === true, success: sv.success === true, conflict: sv.conflict === true,
           chunks: sv.chunks || 0, bytes: sv.bytes || 0, at: sv.at || '', version: sv.version || '', error: sv.error || '' });
       }
       if (body.action === 'dbInfo') {
@@ -277,7 +284,17 @@ function doPost(e) {
         dbSaved = withLock(function () { return saveDb(body); });
       }
       return json({ ok: true, msg: '已寫入總表', counts: counts, unit: body.unit, at: body.at,
-        db: dbSaved ? { saved: dbSaved.success === true, chunks: dbSaved.chunks || 0, bytes: dbSaved.bytes || 0, error: dbSaved.error || '' } : null });
+        db: dbSaved ? { saved: dbSaved.success === true, conflict: dbSaved.conflict === true, chunks: dbSaved.chunks || 0, bytes: dbSaved.bytes || 0, error: dbSaved.error || '' } : null });
+    }
+    /* ---- 團員申報進度完成（免 API Key：寫入「待批完成」等執委批核）----
+       團員喺團員入口揀項目申報 → 執委喺「進度 → 審批中心」批准 → 寫入進度。 */
+    if (body.action === 'addRequest') {
+      var ar = withLock(function () { return addProgressRequest(body); });
+      return json({ ok: ar.success === true, success: ar.success === true, request_id: ar.request_id || '', error: ar.error || '' });
+    }
+    if (body.action === 'myRequests') {
+      /* 團員查返自己嘅申報狀態（只會回自己 YMIS 嘅紀錄） */
+      return json(loadMyRequests(textOf(body.ymis)));
     }
     if (body.action === 'status' || body.action === 'test') {
       return json({ ok: true, msg: '82venture 後端正常', spreadsheet: SpreadsheetApp.getActiveSpreadsheet().getName(), tabs: SHEET_TABS, at: new Date() });
@@ -287,7 +304,7 @@ function doPost(e) {
       var c2 = syncAll(body);
       return json({ ok: true, msg: '已寫入總表（無 action，當 sync）', counts: c2, unit: body.unit });
     }
-    return json({ ok: false, error: '未知 action：' + body.action, got: Object.keys(body || {}), hint: '支援 action: ping / sync / status / saveDb / loadDb / dbInfo / claim / noticeSignup / loan / save / saveOtherBadge / reviewRequest / reviewLogRequest' });
+    return json({ ok: false, error: '未知 action：' + body.action, got: Object.keys(body || {}), hint: '支援 action: ping / sync / status / saveDb / loadDb / dbInfo / claim / noticeSignup / loan / save / saveOtherBadge / reviewRequest / reviewLogRequest / addRequest / myRequests' });
   } catch (err) {
     return json({ ok: false, error: String(err) });
   }
@@ -359,7 +376,13 @@ function dbSheet() {
   return sh;
 }
 
-/** 寫入整份資料庫（原子：先刪舊段，再寫新段） */
+/** 寫入整份資料庫（原子：先驗版本，再刪舊段，再寫新段）
+ *  v2.2.0 樂觀鎖：body.baseVersion = 呢部機「上一次見過嘅後端版本」。
+ *  後端已有版本而 baseVersion 對唔上（包括舊 app 冇送 baseVersion）
+ *  → 拒絕寫入回 conflict:true，等 app 拉後端合併完再嚟。
+ *  咁樣過時裝置（例如離線咗幾日嘅瀏覽器）就永遠唔會把另一部機
+ *  啱啱同步嘅資料一鋪清空。baseVersion 同現版一致、或者後端本身
+ *  仲係空（第一次存）→ 照樣接受。 */
 function saveDb(body) {
   var unit = textOf(body.unit) || 'UNKNOWN';
   var db = body.db;
@@ -371,13 +394,28 @@ function saveDb(body) {
   var sh = dbSheet();
   var rows = sh.getDataRange().getValues();
 
+  /* 先睇而家後端有咩版本（呢個旅團最後一段嘅「版本」欄） */
+  var curVersion = '';
+  for (var v = rows.length - 1; v >= 1; v--) {
+    if (textOf(rows[v][0]) === unit) { curVersion = textOf(rows[v][4]); break; }
+  }
+  var baseVersion = textOf(body.baseVersion);
+  if (curVersion && baseVersion !== curVersion) {
+    return { success: false, conflict: true, version: curVersion,
+      error: '後端已有較新版本（另一部機剛剛同步過）。唔敢用舊資料蓋上去 —— app 會自動拉後端合併後重存。' };
+  }
+
   /* 由下而上刪走呢個旅團嘅舊段（由下而上先唔會搞亂行號） */
   for (var i = rows.length - 1; i >= 1; i--) {
     if (textOf(rows[i][0]) === unit) sh.deleteRow(i + 1);
   }
 
   var now = new Date();
-  var version = textOf(db.meta && db.meta.updatedAt) || now.toISOString();
+  /* v2.2.0：版本由**伺服器**派（ISO 時間＋隨機尾數）。
+     唔好用 db.meta.updatedAt 做版本 —— 佢只有分鐘精度，兩部機同一分鐘內
+     先後存，版本字串會撞到一樣，樂觀鎖就會誤判「無衝突」，過時資料
+     又可以盲蓋上去（2026-09-18 事故嘅隱藏版）。 */
+  var version = now.toISOString() + '-' + Math.floor(Math.random() * 100000);
   var chunks = [];
   for (var p = 0; p < text.length; p += DB_CHUNK) chunks.push(text.substring(p, p + DB_CHUNK));
   if (!chunks.length) chunks = ['{}'];
@@ -798,6 +836,47 @@ function saveOtherBadges(records) {
     }
   });
   return { success: true, processed: processed };
+}
+
+/* ============================================================
+   團員申報進度完成（v2.2.0，畀團員入口用；免 API Key）
+   寫入「待批完成」分頁，狀態 pending；執委喺審批中心批准後
+   先會真正寫入「進度追蹤」。唔會直接改任何進度資料。
+   ============================================================ */
+function addProgressRequest(body) {
+  var ymis = textOf(body.ymis);
+  var itemId = textOf(body.item_id);
+  if (!ymis || !itemId) return { success: false, error: '缺少 ymis 或 item_id' };
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName('待批完成');
+  if (!sheet) return { success: false, error: '搵唔到「待批完成」分頁（請先執行 initializeSheets）' };
+  var reqId = 'req_' + textOf(body.unit) + '_' + new Date().getTime() + '_' + Math.floor(Math.random() * 900 + 100);
+  var reqDate = textOf(body.requested_date) || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  sheet.appendRow([reqId, ymis, textOf(body.name), itemId, textOf(body.item_name),
+    reqDate, textOf(body.evidence), 'pending', new Date(), '', '', '', '']);
+  return { success: true, request_id: reqId };
+}
+
+/** 團員查自己嘅申報（只回該 YMIS 嘅紀錄；pending 嘅排先） */
+function loadMyRequests(ymis) {
+  ymis = textOf(ymis);
+  if (!ymis) return { ok: true, success: true, requests: [] };
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName('待批完成');
+  if (!sheet) return { ok: true, success: true, requests: [] };
+  var rows = sheet.getDataRange().getValues();
+  var out = [];
+  for (var i = 1; i < rows.length; i++) {
+    if (textOf(rows[i][1]) !== ymis) continue;
+    out.push({
+      request_id: textOf(rows[i][0]), item_id: textOf(rows[i][3]), item_name: textOf(rows[i][4]),
+      requested_date: dateOf(rows[i][5]), status: textOf(rows[i][7]) || 'pending',
+      review_note: textOf(rows[i][11]), confirmed_date: dateOf(rows[i][12]),
+      created_at: rows[i][8] ? new Date(rows[i][8]).toISOString() : ''
+    });
+  }
+  out.sort(function (a, b) { return String(b.created_at).localeCompare(String(a.created_at)); });
+  return { ok: true, success: true, requests: out.slice(0, 60) };
 }
 
 /* ============================================================

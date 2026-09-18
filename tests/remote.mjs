@@ -266,6 +266,141 @@ section('端到端：換機／清 cache 都唔會冇咗資料（真 HTTP）');
   }
 }
 
+
+/* ============================================================
+   ④.5 衝突復原（2026-09-18「登入清空後端」事故嘅回歸測試）
+   ------------------------------------------------------------
+   劇本（全部真 HTTP）：
+     A 部機同步咗（陳大文）→ B 部機拉咗，然後離線加咗（李四）
+     → C 部機（有正確 baseVersion）加咗（張三）並同步
+     → B 部機返嚟先 push → 撞版 → 要自動拉後端＋合併＋重存
+       （三個人都要喺度，唔可以任何人被蓋走）
+   另加：空白裝置（清咗 cache）唔可以自動蓋後端。
+   ============================================================ */
+section('衝突復原：兩部機都改過，同步要合併唔可以盲蓋（真 HTTP）');
+{
+  const net0 = await import('node:net');
+  const os0 = await import('node:os');
+  const fs0 = fs;
+  const { spawn } = await import('node:child_process');
+  const freePort = () => new Promise((resolve, reject) => {
+    const srv = net0.createServer();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => { const { port } = srv.address(); srv.close(() => resolve(port)); });
+  });
+  const GAS_PORT = await freePort();
+  const WEB_PORT = await freePort();
+  const BASE = `http://127.0.0.1:${WEB_PORT}`;
+  const FAKE_EXEC = `http://127.0.0.1:${GAS_PORT}/exec`;
+  const ENV = {
+    TROOP_0082_BACKEND: FAKE_EXEC,
+    TROOP_0082_APIKEY: 'test_key_conflict',
+    V82_PROXY_TEST: '1',
+    PORT: String(WEB_PORT)
+  };
+  const procs = [];
+  const spawnBg = (args, env = {}) => {
+    const p = spawn(process.execPath, args, { cwd: ROOT, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    procs.push(p);
+    return p;
+  };
+  const waitPort = async (port, ms = 8000) => {
+    const net = await import('node:net');
+    const t = Date.now();
+    while (Date.now() - t < ms) {
+      const up = await new Promise(r => {
+        const s = net.connect(port, '127.0.0.1');
+        s.on('connect', () => { s.destroy(); r(true); });
+        s.on('error', () => r(false));
+      });
+      if (up) return true;
+      await new Promise(r => setTimeout(r, 120));
+    }
+    return false;
+  };
+  const runDevice = (plan) => new Promise((resolve) => {
+    const p = spawn(process.execPath, [path.join(ROOT, 'tests', '_device.mjs'), BASE, JSON.stringify(plan)],
+      { cwd: ROOT, env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let buf = '', err = '';
+    p.stdout.on('data', d => { buf += d; });
+    p.stderr.on('data', d => { err += d; });
+    const done = (r) => { try { p.kill('SIGKILL'); } catch { /* ignore */ } resolve(r); };
+    const guard = setTimeout(() => done({ ok: false, error: '裝置逾時（30 秒）' }), 30000);
+    p.on('close', () => {
+      clearTimeout(guard);
+      const m = buf.match(/@@RESULT@@([\s\S]*?)@@END@@/);
+      if (!m) return resolve({ ok: false, error: (err || buf).slice(-600) });
+      try { resolve(JSON.parse(m[1])); } catch (e) { resolve({ ok: false, error: 'parse: ' + e.message }); }
+    });
+  });
+  const stepOf = (res, op) => (res.steps || []).find(s2 => s2.op === op);
+  const tmp = path.join(os0.tmpdir(), 'v82-conflict-' + Date.now() + '.json');
+
+  try {
+    spawnBg([path.join(ROOT, 'tests', '_fakegas.mjs'), String(GAS_PORT)]);
+    spawnBg([path.join(ROOT, 'dev-server.mjs')], ENV);
+    ok('衝突測試：假後端＋dev-server 已啟動', await waitPort(GAS_PORT) && await waitPort(WEB_PORT));
+
+    /* A 部機：陳大文 → 同步（版本 V1） */
+    const A = await runDevice({ steps: [
+      { op: 'wipe' },
+      { op: 'addMember', name: '陳大文', ymis: '2026000101' },
+      { op: 'push' }
+    ] });
+    ok('A 部機首次同步成功', stepOf(A, 'push')?.ok === true, JSON.stringify(stepOf(A, 'push')));
+
+    /* B 部機：拉 V1 → 離線加李四（唔好 push）→ 匯出本機 db */
+    const B1 = await runDevice({ steps: [
+      { op: 'pull' },
+      { op: 'addMember', name: '李四', ymis: '2026000102' },
+      { op: 'export', file: tmp },
+      { op: 'snapshot' }
+    ] });
+    ok('B 部機拉到 V1 並離線加咗李四（pending=1）', stepOf(B1, 'snapshot')?.pending === 1 && stepOf(B1, 'snapshot')?.lastSyncedVersion !== '', JSON.stringify(stepOf(B1, 'snapshot')));
+
+    /* C 部機：由 V1 加張三 → 同步成功（版本 V2：陳大文＋張三） */
+    const C = await runDevice({ steps: [
+      { op: 'pull' },
+      { op: 'addMember', name: '張三', ymis: '2026000103' },
+      { op: 'push' }
+    ] });
+    ok('C 部機同步成功（V2）', stepOf(C, 'push')?.ok === true, JSON.stringify(stepOf(C, 'push')));
+
+    /* B 部機返嚟：匯入返之前嘅本機 db（李四未同步、baseVersion 仲係 V1）→ push
+       舊版：盲蓋 → 張三消失（事故）。
+       新版：撞版 → 自動拉＋合併 → 重存 → 三個人都在。 */
+    const B2 = await runDevice({ steps: [
+      { op: 'import', file: tmp },
+      { op: 'push' },
+      { op: 'snapshot' }
+    ] });
+    const b2push = stepOf(B2, 'push');
+    ok('B 部機撞版後自動復原：push 最終成功', b2push?.ok === true, JSON.stringify(b2push));
+    const b2snap = stepOf(B2, 'snapshot');
+    ok('合併後 B 部機本機有齊三個人', b2snap?.names?.includes('陳大文') && b2snap?.names?.includes('張三') && b2snap?.names?.includes('李四'), JSON.stringify(b2snap));
+    ok('合併後 B 部機 pending 清零（已存到後端）', b2snap?.pending === 0, String(b2snap?.pending));
+
+    const D = await runDevice({ steps: [{ op: 'pull' }] });
+    const dnames = stepOf(D, 'pull')?.adopted?.names || [];
+    ok('第四部機由後端見到三個人（冇任何人被蓋走）',
+      dnames.includes('陳大文') && dnames.includes('張三') && dnames.includes('李四'), JSON.stringify(dnames));
+
+    /* 空白裝置保險閘：清咗 cache 嘅新機唔可以自動蓋有料後端 */
+    const Z = await runDevice({ steps: [
+      { op: 'wipe' },
+      { op: 'push' },
+      { op: 'snapshot' }
+    ] });
+    ok('空白裝置 push 被保險閘擋住（blank_guard）', stepOf(Z, 'push')?.ok === false, JSON.stringify(stepOf(Z, 'push')));
+    const D2 = await runDevice({ steps: [{ op: 'pull' }] });
+    ok('空白裝置冇蓋爛後端（資料仲在）',
+      (stepOf(D2, 'pull')?.adopted?.members || 0) >= 3, JSON.stringify(stepOf(D2, 'pull')?.adopted));
+  } finally {
+    procs.forEach(p => { try { p.kill('SIGKILL'); } catch { /* ignore */ } });
+    try { fs0.unlinkSync(tmp); } catch { /* ignore */ }
+  }
+}
+
 /* ============================================================
    ⑤ 嚴格隔離：新旅團唔會見到／寫入 0082 嘅資料
    ============================================================ */

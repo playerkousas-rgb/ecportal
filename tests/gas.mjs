@@ -240,9 +240,10 @@ section('旅團隔離');
   const rb = g.post({ action: 'loadDb', unit: '0099' });
   ok('0082 只讀到自己嘅', ra.db?.members?.[0]?.name === '0082 團員');
   ok('0099 只讀到自己嘅', rb.db?.members?.[0]?.name === '0099 團員');
-  /* 再存一次 0082，唔可以整爛 0099 */
+  /* 再存一次 0082，唔可以整爛 0099（v2.2.0 起要帶 baseVersion 樂觀鎖） */
   a.members.push({ id: 'a2', name: '新團員' });
-  g.post({ action: 'saveDb', unit: '0082', db: a });
+  const v6 = g.post({ action: 'loadDb', unit: '0082' });
+  g.post({ action: 'saveDb', unit: '0082', db: a, baseVersion: v6.version || '' });
   const rb2 = g.post({ action: 'loadDb', unit: '0099' });
   ok('覆寫 0082 唔會影響 0099', rb2.db?.members?.[0]?.name === '0099 團員' && rb2.found === true);
 }
@@ -256,7 +257,8 @@ section('覆寫要乾淨');
   const big = sampleDb(); big.blob = 'y'.repeat(100000);
   g.post({ action: 'saveDb', unit: '0082', db: big });
   const small = sampleDb();
-  g.post({ action: 'saveDb', unit: '0082', db: small });
+  const v7 = g.post({ action: 'loadDb', unit: '0082' });
+  g.post({ action: 'saveDb', unit: '0082', db: small, baseVersion: v7.version || '' });
   const back = g.post({ action: 'loadDb', unit: '0082' });
   ok('大份變細份之後，讀返嘅係細份（冇殘留舊段）', back.db?.blob === undefined && JSON.stringify(back.db) === JSON.stringify(small));
 }
@@ -271,8 +273,70 @@ section('gastemplate 同 apps-script/Code.gs 一致');
   ok('gastemplate 有 saveDb / loadDb / dbInfo', /saveDb/.test(tpl) && /loadDb/.test(tpl) && /dbInfo/.test(tpl));
   ok('兩份都有「資料庫」分頁', /資料庫/.test(built) && /資料庫/.test(tpl));
   ok('版本號一致',
-    (built.match(/v?2\.1\.\d/) || [''])[0] === (tpl.match(/v?2\.1\.\d/) || [''])[0],
-    `built=${(built.match(/v?2\.1\.\d/) || [''])[0]} tpl=${(tpl.match(/v?2\.1\.\d/) || [''])[0]}`);
+    (built.match(/v?2\.2\.\d/) || [''])[0] === (tpl.match(/v?2\.2\.\d/) || [''])[0],
+    `built=${(built.match(/v?2\.2\.\d/) || [''])[0]} tpl=${(tpl.match(/v?2\.2\.\d/) || [''])[0]}`);
+}
+
+/* ============================================================
+   ⑧ 樂觀鎖（v2.2.0）：過時裝置唔可以用舊資料盲蓋後端
+   ------------------------------------------------------------
+   2026-09-18 真實事故：普通 Chrome（本機過時）一登入就把
+   另一部機啱啱同步嘅資料整個蓋走 —— 後端一定要拒收舊版本。
+   ============================================================ */
+section('樂觀鎖：saveDb baseVersion（過時裝置唔可以盲蓋後端）');
+{
+  const g = makeGas();
+  /* 後端仲係空 → 第一次存唔使 baseVersion 都得（新旅團開張） */
+  const first = g.post({ action: 'saveDb', unit: '0110', db: sampleDb() });
+  ok('後端空：第一次存成功（唔使 baseVersion）', first.ok === true, JSON.stringify(first).slice(0, 120));
+  const V1 = first.version;
+
+  /* 另一部機用正確 baseVersion 存新版本 */
+  const db2 = sampleDb(); db2.meta.updatedAt = '2026-09-18T12:00:00.000Z'; db2.members.push({ id: 'm9', name: '第二部機加嘅' });
+  const second = g.post({ action: 'saveDb', unit: '0110', db: db2, baseVersion: V1 });
+  ok('baseVersion 對上 → 存得到', second.ok === true, JSON.stringify(second).slice(0, 120));
+  const V2 = second.version;
+  ok('版本有更新', V2 && V2 !== V1, `${V1} -> ${V2}`);
+
+  /* 過時裝置攞住舊 baseVersion（V1）想蓋 → 拒收 + conflict */
+  const stale = sampleDb(); stale.meta.updatedAt = '2026-09-18T09:00:00.000Z'; stale.members = [];
+  const conflictSave = g.post({ action: 'saveDb', unit: '0110', db: stale, baseVersion: V1 });
+  ok('舊 baseVersion → 拒收（conflict:true）', conflictSave.ok === false && conflictSave.conflict === true, JSON.stringify(conflictSave).slice(0, 160));
+  ok('拒收嗰陣話畀你知後端而家咩版本', conflictSave.version === V2, JSON.stringify(conflictSave.version));
+  const unchanged = g.post({ action: 'loadDb', unit: '0110' });
+  ok('拒收之後後端資料冇被改動', unchanged.db?.members?.length === 3, JSON.stringify(unchanged.db?.members?.length));
+
+  /* 冇帶 baseVersion（舊版 app）而後端有版本 → 都要拒收（防盲蓋） */
+  const legacy = g.post({ action: 'saveDb', unit: '0110', db: stale });
+  ok('冇 baseVersion（舊版 app）→ 一樣拒收', legacy.ok === false && legacy.conflict === true, JSON.stringify(legacy).slice(0, 160));
+
+  /* 唔同旅團互不影響 */
+  const other = g.post({ action: 'saveDb', unit: '0220', db: sampleDb() });
+  ok('另一個旅團（後端空）照樣第一次存得到', other.ok === true, JSON.stringify(other).slice(0, 120));
+}
+
+/* ============================================================
+   ⑨ 團員自助申報（v2.2.0）：addRequest / myRequests
+   ------------------------------------------------------------
+   團員喺團員入口申報完成 → 寫入「待批完成」（pending），
+   執委喺審批中心批核。addRequest 免 API Key（同 claim/loan 睇齊）。
+   ============================================================ */
+section('團員自助申報：addRequest / myRequests');
+{
+  const g = makeGas();
+  g.sandbox.initializeSheets();
+  const ar = g.post({ action: 'addRequest', unit: '0082', ymis: '2026000001', name: '陳大文', item_id: 'VS-C1', item_name: '技能科 第 1 項', requested_date: '2026-09-18', evidence: '夏季營完成' });
+  ok('addRequest 免 key 都寫得到（寫入待批完成）', ar.ok === true && !!ar.request_id, JSON.stringify(ar).slice(0, 160));
+  const mine = g.post({ action: 'myRequests', unit: '0082', ymis: '2026000001' });
+  ok('myRequests 攞返自己嘅申報', mine.ok === true && mine.requests?.length === 1, JSON.stringify(mine).slice(0, 200));
+  ok('申報狀態係 pending', mine.requests?.[0]?.status === 'pending', JSON.stringify(mine.requests?.[0]));
+  ok('項目名／日期正確', mine.requests?.[0]?.item_name === '技能科 第 1 項' && mine.requests?.[0]?.requested_date === '2026-09-18', JSON.stringify(mine.requests?.[0]));
+  const other = g.post({ action: 'myRequests', unit: '0082', ymis: '9999999999' });
+  ok('第二個團員查唔到人哋嘅申報', other.ok === true && other.requests?.length === 0, JSON.stringify(other));
+
+  /* 缺欄位要拒 */
+  const bad = g.post({ action: 'addRequest', unit: '0082', ymis: '', item_id: '' });
+  ok('缺 ymis/item_id → 拒', bad.ok === false, JSON.stringify(bad).slice(0, 120));
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} Code.gs：${pass} 過 / ${fail} 唔過（${Date.now() - t0}ms）`);

@@ -35,7 +35,9 @@ const MAX_DATA_BYTES = 1024 * 1024;        // 前端送上去嘅資料上限 1MB
 const MAX_ITEMS_BYTES = 2 * 1024 * 1024;   // items.json 上限 2MB
 
 // 旅團後端（Code.gs）支援嘅 action（唔會放寬）
-const ACTIONS = new Set(['load', 'save', 'saveOtherBadge', 'catalog', 'reviewRequest', 'reviewLogRequest']);
+const ACTIONS = new Set(['load', 'save', 'saveOtherBadge', 'catalog', 'reviewRequest', 'reviewLogRequest',
+  /* 團員入口自助進度：申報完成（寫入「待批完成」）／查自己嘅申報狀態（v2.2.0） */
+  'addRequest', 'myRequests']);
 
 function sendJson(res, status, obj) {
   res.setHeader('Cache-Control', 'no-store');

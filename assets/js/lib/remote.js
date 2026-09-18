@@ -40,8 +40,14 @@ function setState(state, msg = '') {
   } catch { /* 非瀏覽器環境（測試）→ 冇所謂 */ }
 }
 
-/** 開機完成之後先至開始自動儲存（避免種子資料一載入就寫返上去） */
-export function arm() { armed = true; }
+/** 開機完成之後先至開始自動儲存（避免種子資料一載入就寫返上去）。
+    開機對資料期間（remoteInfo／pullDb 進行中）已經積落嘅 pending 改動
+    （例如開機嗰幾秒之內登入寫嘅 audit）—— arm 嗰刻要即刻排隊補存，
+    唔係佢會卡住直到下一個改動先至送到後端。 */
+export function arm() {
+  armed = true;
+  if (hasPending()) scheduleSave();
+}
 export function disarm() { armed = false; if (timer) { clearTimeout(timer); timer = null; } }
 export function isArmed() { return armed; }
 
@@ -176,14 +182,45 @@ function hintOf(err) {
 
 /* ---------------- 三個主要動作 ---------------- */
 
-/** 把成個資料庫寫入後端 */
-export async function pushDb({ silent = true } = {}) {
+/**
+ * 把成個資料庫寫入後端。
+ *
+ * 2026-09-18 事故修復（「一登入就把後端清空」）：
+ *   以前 push 係「盲蓋」—— 本機咩版本都照寫上去。過時裝置（離線耐咗、
+ *   或者開機拉唔到後端）一有改動（登入都會寫一筆 audit！）就會把
+ *   另一部機啱啱同步嘅資料整個蓋走。
+ *   而家：
+ *   ① 送 baseVersion（本機上次見過嘅後端版本）做樂觀鎖 —— 後端版本
+ *     對唔上就拒收（conflict），舊資料冇得盲蓋；
+ *   ② 撞 conflict → 自動「拉後端 → 同本機未同步改動合併 → 重存一次」，
+ *     全程寫入 sync log；只會自動重試一次（防無限迴圈）；
+ *   ③ 空機保險閘：本機完全冇內容（新裝置／清咗 cache）又從未拉過後端
+ *     → 唔會自動送空白資料上去，淨係等拉。
+ */
+export async function pushDb({ silent = true, _retried = 0 } = {}) {
   if (isMock()) return { ok: false, reason: 'mock', error: '示範模式唔會寫入後端' };
   const db = tryLoad();
   if (!db) return { ok: false, reason: 'no_db', error: '資料庫未載入' };
   const cfg = remoteCfg();
   if (!cfg.ok) return { ok: false, reason: 'not_configured', error: '未設定後端網址' };
   if (inFlight) return { ok: false, reason: 'busy', error: '上一次儲存仲未完成' };
+
+  const store = await import('./store.js');
+  const synced = store.lastSyncedVersion();
+  /* 空機保險閘：本機完全冇內容（新裝置／清咗 cache）又從未同後端對過版本
+     —— 呢種狀態只應該「拉」，唔應該「推」。
+     （例外：後端本身都仲係空 —— 新旅團第一筆資料都要存得到，所以先問一次 dbInfo。） */
+  if (!store.hasLocalContent() && !synced) {
+    const info = await callBackend({ action: 'dbInfo' }, { timeoutMs: 20000 });
+    if (info?.ok && info.found) {
+      db.sync = db.sync || {};
+      pushLog(db, '✗ 空白裝置唔會自動寫後端 —— 等拉到後端資料先');
+      commitMeta();
+      setState('idle', '空白裝置：等緊由後端載入資料');
+      scheduleSave();   // 遲啲再試（拉到資料就有嘢存）
+      return { ok: false, reason: 'blank_guard', error: '本機係空白裝置，唔會自動蓋後端（等拉資料）' };
+    }
+  }
 
   inFlight = true;
   if (!silent) setState('saving', '儲存緊…');
@@ -195,15 +232,48 @@ export async function pushDb({ silent = true } = {}) {
   const sentAt = db.meta?.updatedAt || '';
 
   try {
-    const r = await callBackend({ action: 'saveDb', db });
+    const r = await callBackend({ action: 'saveDb', db, baseVersion: synced });
     const cur = load();
     cur.sync = cur.sync || {};
+
+    /* 樂觀鎖撞版：另一部機啱啱先寫入後端。
+       自動復原：拉後端 → 聯集合併本機未同步改動 → 重存一次。 */
+    if (!r.ok && r.conflict) {
+      cur.sync.lastError = r.error || '後端有較新版本';
+      pushLog(cur, `⚠ 後端有另一部機寫入嘅新版本 —— 自動拉返嚟合併（第 ${_retried + 1} 次）`);
+      commitMeta();
+      inFlight = false;
+      if (_retried >= 1) {
+        setState('conflict', '兩邊都改咗：已合併一次都仲撞版，請去「總表同步」核對');
+        return { ...r, ok: false, reason: 'conflict', hint: '已經自動合併咗一次都仲撞版 —— 好可能兩部機同時改緊。去「帳號與系統 → 資料管理 → 總表同步」撳「由後端還原」，或者等一陣再儲存。' };
+      }
+      const got = await pullDb();
+      if (got?.ok && got.found && got.db) {
+        try {
+          store.adoptRemote(got.db, { version: got.version || got.db?.meta?.updatedAt || '', merge: true });
+          if (typeof window !== 'undefined') {
+            try { (await import('./util.js')).toast('另一部機更新咗後端 —— 已自動合併兩邊資料', 'ok'); } catch { /* */ }
+          }
+          setState('pending', '合併完成，儲存緊…');
+          return await pushDb({ silent, _retried: _retried + 1 });
+        } catch (e) {
+          setState('error', '合併失敗：' + (e?.message || ''));
+          return { ok: false, reason: 'conflict', error: '自動合併失敗：' + (e?.message || '') };
+        }
+      }
+      setState('conflict', '後端有新版本但拉唔到 —— 一陣再自動試');
+      scheduleRetry();
+      return { ...r, ok: false, reason: 'conflict', hint: '拉唔到後端最新版本嚟合併，會自動再試。' };
+    }
+
     if (r.ok) {
       /* 送出期間新增嘅改動要留返 pending（送出時 snapshot 減走就啱） */
       const now = Number(cur.sync.pending || 0);
       cur.sync.pending = Math.max(0, now - sentPending);
       cur.sync.lastPushAt = new Date().toISOString();
       cur.sync.remoteVersion = r.version || sentAt;
+      /* 呢個版本嘅內容而家本機＝後端完全一致 —— 之後 push 用佢做 baseVersion */
+      if (r.version) cur.sync.lastSyncedVersion = String(r.version);
       cur.sync.lastError = '';
       pushLog(cur, `✓ 已儲存到後端（${fmtBytes(r.bytes)}）`);
       retryStep = 0;

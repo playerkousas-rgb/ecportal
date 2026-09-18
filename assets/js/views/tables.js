@@ -776,8 +776,9 @@ export function buildPayload({ sample = false } = {}) {
     tables
   };
   /* 真正嘅同步：除咗攤平嘅報表，仲要帶埋**整個資料庫**（原樣 JSON），
-     後端會存入「資料庫」分頁 —— 咁先讀得返、換機先唔會冇咗。 */
-  if (!sample) payload.db = db;
+     後端會存入「資料庫」分頁 —— 咁先讀得返、換機先唔會冇咗。
+     baseVersion ＝ 樂觀鎖：後端版本對唔上就拒收（防過時裝置盲蓋後端）。 */
+  if (!sample) { payload.db = db; payload.baseVersion = String(db.sync?.lastSyncedVersion || ''); }
   return payload;
 }
 
@@ -840,17 +841,26 @@ export async function pushToMaster({ silent = false } = {}) {
       : !res.ok;
     const ok = !failed;
     const detail = viaProxy ? String(json?.error || json?.msg || '').replace(/\s+/g, ' ').slice(0, 120) : '';
+    /* 資料庫部分撞版（另一部機先寫入）→ 報表照同步，但整個 db 冇寫入，
+       要話畀用家知去「總表同步」拉返後端先（唔好再用呢部機嘅舊資料）。 */
+    const dbConflict = !!(viaProxy && json?.db?.conflict);
     if (ok) {
       const d = load();
-      d.sync = { ...(d.sync || {}), pending: 0, lastPushAt: new Date().toISOString(), lastError: '' };
+      d.sync = { ...(d.sync || {}), pending: 0, lastPushAt: new Date().toISOString(), lastError: dbConflict ? '資料庫部分撞版（後端有另一部機嘅新版本）' : '' };
+      if (dbConflict) {
+        d.sync = { ...d.sync, log: [...(d.sync.log || []), { at: new Date().toISOString().slice(0, 19).replace('T', ' '), msg: '⚠ 報表已同步，但整個資料庫撞版未寫入 —— 後端有另一部機嘅新版本，請先「由後端還原」核對' }].slice(-40) };
+      }
     } else if (viaProxy && detail) {
       const d = load();
       d.sync = { ...(d.sync || {}), lastError: detail };
     }
     const total = payload.counts ? Object.values(payload.counts).reduce((a, b) => a + b, 0) : 0;
     log(`${ok ? '✓' : '✗'} HTTP ${res.status}${viaProxy ? '（代理）' : ''} · ${total} 筆 · ${(detail || txt).replace(/\s+/g, ' ').slice(0, 80)}`);
-    if (!silent) toast(ok ? '已同步到總表' : ('同步失敗：' + (detail || ('HTTP ' + res.status))), ok ? 'ok' : 'err');
-    return { ok, msg: detail || txt.slice(0, 300), viaProxy };
+    if (!silent) {
+      if (dbConflict) toast('報表已同步，但整個資料庫撞版未寫入 —— 去「總表同步」撳「由後端還原」先', 'warn');
+      else toast(ok ? '已同步到總表' : ('同步失敗：' + (detail || ('HTTP ' + res.status))), ok ? 'ok' : 'err');
+    }
+    return { ok, conflict: dbConflict, msg: detail || txt.slice(0, 300), viaProxy };
   } catch (e) {
     if (viaProxy) {
       /* 經代理唔會有「送咗但讀唔到」呢回事 —— 掟 exception 即係根本未送到 */
@@ -1203,7 +1213,7 @@ export function mount(root, params) {
         if (!got?.ok || !got.db) { toast('讀取失敗：' + (got?.error || '未知錯誤'), 'err'); return; }
         const { adoptRemote } = await import('../lib/store.js');
         try {
-          adoptRemote(got.db);
+          adoptRemote(got.db, { version: String(got.version || '') });
           toast('已由後端還原資料', 'ok');
           refresh();
         } catch (e) { toast('還原失敗：' + e.message, 'err'); }

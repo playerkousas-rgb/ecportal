@@ -131,19 +131,23 @@ async function syncBoot() {
   try {
     const info = await remoteApi.remoteInfo();
     if (info?.ok && info.found) {
-      const localAt = store.localUpdatedAt();
+      /* 2026-09-18 修復：以前用「時間戳邊個新」決定使唔使拉後端 ——
+         但本機 meta.updatedAt 喺離線改動嗰陣都會更新，搞到過時裝置
+         永遠「以為自己較新」→ 唔拉 → 一改嘢就把過時資料盲蓋上後端
+         （「另一邊讀不到」「一登入後端就清空」嘅死因）。
+         而家用「版本內容」判斷：後端版本 ≠ 本機上次同步過嘅版本
+         → 即係我手上嘅唔係最新內容 → 拉落嚟；本機有未同步改動就合併。 */
       const remoteAt = String(info.version || info.at || '');
-      const localHas = store.hasLocalContent();
-      /* 後端比本機新（或者本機根本係新裝置／空白）→ 拉後端落嚟 */
-      const remoteNewer = !localHas || (remoteAt && localAt && normAt(remoteAt) > normAt(localAt));
-      if (remoteNewer) {
+      const lastSynced = store.lastSyncedVersion();
+      if (remoteAt && remoteAt !== lastSynced) {
         const got = await remoteApi.pullDb();
         if (got?.ok && got.found && got.db) {
           try {
-            store.adoptRemote(got.db);
+            const merged = Number(store.tryLoad()?.sync?.pending || 0) > 0;
+            store.adoptRemote(got.db, { version: String(got.version || ''), merge: merged });
             applyTheme(load()?.unit?.theme);
             render();
-            toast('已由後端載入最新資料', 'ok');
+            toast(merged ? '後端有另一部機嘅新版本 —— 已同本機改動合併' : '已由後端載入最新資料', 'ok');
           } catch (e) { console.warn('[sync] 採用後端資料失敗', e); }
         }
       }
@@ -188,6 +192,7 @@ function paintSyncChip() {
     pending: ['b-warn', 'clock', '未儲存'],
     offline: ['b-warn', 'alert', '離線'],
     loading: ['b-warn', 'cloud', '讀取緊…'],
+    conflict:['b-warn', 'alert', '同步撞版：已自動合併'],
     error:   ['b-danger', 'alert', '儲存失敗'],
     idle:    ['b-ok', 'cloud', '已連後端']
   };

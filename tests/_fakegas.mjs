@@ -13,13 +13,25 @@ const DB_CHUNK = 45000;
 
 /* 模擬 Sheet：一行一段 [unit, seq, text, at, version] */
 let sheet = [];
+/* 模擬「待批完成」分頁（addRequest / myRequests） */
+const requests = [];
 
 function saveDb(body) {
   const unit = String(body.unit || 'UNKNOWN');
   const text = JSON.stringify(body.db);
+  /* v2.2.0 樂觀鎖（同真 Code.gs 一致）：後端已有版本而 baseVersion 對唔上
+     → 拒收回 conflict，等 app 自動拉後端合併。 */
+  const cur = [...sheet].reverse().find(r => r[0] === unit);
+  const curVersion = cur ? String(cur[4] || '') : '';
+  const baseVersion = String(body.baseVersion ?? '');
+  if (curVersion && baseVersion !== curVersion) {
+    return { ok: false, success: false, conflict: true, version: curVersion,
+      error: '後端已有較新版本（另一部機剛剛同步過）' };
+  }
   sheet = sheet.filter(r => r[0] !== unit);            // 刪走舊段
   const now = new Date().toISOString();
-  const version = body.db?.meta?.updatedAt || now;
+  /* 同真 Code.gs v2.2.0 一致：版本由伺服器派（時間＋隨機尾數），唔會撞 */
+  const version = now + '-' + Math.floor(Math.random() * 100000);
   for (let p = 0, i = 1; p < text.length; p += DB_CHUNK, i++) {
     sheet.push([unit, i, text.substring(p, p + DB_CHUNK), now, version]);
   }
@@ -81,8 +93,23 @@ http.createServer((req, res) => {
       out = { ok: true, success: true, msg: '已寫入總表', counts: {} };
       if (body.db) {
         if (EXPECTED_KEY && key !== EXPECTED_KEY) out.db = { saved: false, error: '未授權：API Key 唔正確' };
-        else out.db = { saved: saveDb(body).success };
+        else { const sv = saveDb(body); out.db = { saved: sv.success === true, conflict: sv.conflict === true, error: sv.error || '' }; }
       }
+    } else if (a === 'addRequest') {
+      /* 團員申報進度（同真 Code.gs 一樣：記入記憶體，狀態 pending） */
+      if (!body.ymis || !body.item_id) out = { ok: false, success: false, error: '缺少 ymis 或 item_id' };
+      else {
+        const id = 'req_' + Date.now() + '_' + Math.floor(Math.random() * 900 + 100);
+        requests.push({
+          request_id: id, ymis: String(body.ymis), name: String(body.name || ''),
+          item_id: String(body.item_id), item_name: String(body.item_name || ''),
+          requested_date: String(body.requested_date || ''), status: 'pending',
+          review_note: '', confirmed_date: '', created_at: new Date().toISOString()
+        });
+        out = { ok: true, success: true, request_id: id };
+      }
+    } else if (a === 'myRequests') {
+      out = { ok: true, success: true, requests: requests.filter(r => r.ymis === String(body.ymis || '')).slice(0, 60) };
     } else if (a === 'status' || a === 'ping') out = { ok: true, success: true, msg: 'pong' };
     else out = { ok: false, success: false, error: '未知 action：' + a };
 

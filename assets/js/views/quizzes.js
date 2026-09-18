@@ -16,10 +16,25 @@ export function refresh() { window.dispatchEvent(new CustomEvent('v82:refresh'))
    ① Google Form 列印 PDF 抽出嚟嘅文字（pdftext.js 會將選項行加兩格縮排）
    ② 人手貼嘅「1. 題目」＋「A. 選項」
    ③ CSV／TSV：題目,類型,選項（用 | 分隔）,必填 */
-const QUIZ_JUNK = /^(?:[＊*]+\s*必填|必填|required|[＊*]+|提交|submit|清除表單|重新填寫|重新整理|取得連結|google[\s\S]{0,24}forms?|google[\s\S]{0,24}表單|docs\.google\.com\S*|\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}日?)\s*$/i;
+const QUIZ_JUNK = /^(?:[＊*]+\s*必填|必填|required|[＊*]+|提交|submit|清除表單|重新填寫|重新整理|取得連結|google[\s\S]{0,24}forms?|google[\s\S]{0,24}表單|docs\.google\.com\S*|\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}日?|電子郵件(?:地址)?|你(?:的|嘅)?電子郵件(?:地址)?|電郵地址|(?:區段|分區|章節)\s*\d+(?:\s*[/／]\s*共\s*\d+\s*個?(?:區段|分區)?)?|section\s+\d+(?:\s+of\s+\d+)?|從不提交密碼)\s*$/i;
 const isNumberedQ = t => /^(?:\d+[.、)]|Q\d+[:：]?|題目[:：])/i.test(t);
 const endsQuestion = t => /[?？]\s*$/.test(t);
 const stripOptBullet = t => t.replace(/^(?:[([]?[A-Da-d][)\].、]\s*|[-•●○◯□■▪·◇◆]\s*)/, '').trim();
+/* Google Form 列印 PDF 嘅說明／介紹行（2026-09-18 第 2 項要求）：
+   「電子郵件地址」說明、「分區／區段」標題同介紹、版尾 Google 字眼……
+   以前會被當成題目。真正嘅問題行通常有問號、有編號、或者帶「請填：」——
+   呢個過濾器只會丟走又短、又冇問號、又唔係題目格式嘅 Forms 官方字眼。 */
+const isFormsBoilerplate = t => {
+  if (QUIZ_JUNK.test(t)) return true;
+  if (endsQuestion(t) || isNumberedQ(t)) return false;
+  const short = t.replace(/\s/g, '').length <= 50;
+  if (short && /電子郵件|電郵地址|e-?mail/i.test(t) && !/[:：]/.test(t)) return true;
+  if (short && /將不會公開|不會公開|唔會公開/.test(t)) return true;
+  if (/^(?:區段|分區|章節|section)\s*\d/i.test(t)) return true;
+  if (short && /google\s*(?:帳戶|account|表單|forms?)|此內容.{0,20}(?:google|建立)|未經.{0,8}google/i.test(t)) return true;
+  if (/^\s*\d+\s*[/／]\s*\d+\s*$/.test(t)) return true;   // 「1/3」頁／區段進度
+  return false;
+};
 
 export function parseQuizImport(text) {
   const raw = String(text || '').replace(/^\uFEFF/, '').trim();
@@ -102,8 +117,9 @@ export function parseQuizImport(text) {
     /* 「標題：xxx」／「試卷：xxx」直接入標題 */
     const tm = t.match(/^(?:標題|試卷)[:：]\s*(.+)/);
     if (tm) { if (!title) title = tm[1]; continue; }
-    /* 垃圾行（必填／頁碼／提交／Google Forms 版尾…）；問號結尾嘅照當題目 */
-    if (!endsQuestion(t) && (QUIZ_JUNK.test(t) || /^\d{1,3}$/.test(t))) continue;
+    /* 垃圾行（必填／頁碼／提交／電郵地址說明／分區標題／Google Forms 版尾…）；
+       問號結尾嘅照當題目 —— 2026-09-18 第 2 項要求 */
+    if (!endsQuestion(t) && (isFormsBoilerplate(t) || /^\d{1,3}$/.test(t))) continue;
     const indented = hasIndent && /^ {2}\S/.test(line);
 
     /* PDF 抽出：縮排行＝揀緊嗰條題目嘅選項 */
@@ -118,7 +134,9 @@ export function parseQuizImport(text) {
       const next = lines.slice(i + 1).find(x => x.trim());
       if (next && /^ {2}\S/.test(next)) { startQ(t); continue; }   // 下一行係選項 → 呢行係題目（可能冇問號）
       if (cur && !cur.options.length) { cur.prompt += ' ' + t; continue; }   // 題目斷行
-      if (!cur && !title) { title = t; pending = ''; continue; }    // 第一段 body 行＝標題
+      /* 未去到第一條題目之前嘅 body 行＝表單標題（第一行）或者其他介紹文字
+         —— 介紹文字一律丟走，唔好畀佢黐落第一條題目度 */
+      if (!cur) { if (!title) title = t; pending = ''; continue; }
       pending = t;                                                  // 可能係斷咗嘅題目前半，交畀 startQ 接
       continue;
     }
@@ -129,14 +147,15 @@ export function parseQuizImport(text) {
     const body = [];
     while (j < lines.length) {
       const x = lines[j].trim();
-      if (!x || QUIZ_JUNK.test(x) || isNumberedQ(x) || endsQuestion(x)) break;
+      if (!x || isFormsBoilerplate(x) || isNumberedQ(x) || endsQuestion(x)) break;
       body.push(x);
       j++;
     }
     if (body.length >= 2) { body.forEach(addOpt); i = j - 1; continue; }
     if (body.length === 1 && /^[([]?[A-Da-d][)\].、]\s*|^[-•●○◯□■▪·]/.test(body[0])) { addOpt(body[0]); i = j - 1; continue; }
+    if (isFormsBoilerplate(t)) continue;                            // 分區之間嘅介紹文字：丟走
     if (!cur.options.length && cur.prompt.length + t.length < 120) { cur.prompt += ' ' + t; continue; }
-    /* 唔識分類嘅行（分節標題等）：略過 */
+    /* 唔識分類嘅行：略過 */
   }
 
   const qs = questions.filter(q => q.prompt.trim());
