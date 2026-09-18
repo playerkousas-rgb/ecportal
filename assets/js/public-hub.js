@@ -4,8 +4,9 @@ import { init, load, update } from './lib/store.js';
 import { memberLinks, profile, publicEvents, RSVP, quizzes, activeMembers, publicPageUrl, troopPublicLinks, identityOf, IDENTITIES } from './lib/model.js';
 import { loadMe, saveMe, identityForSubmit } from './lib/member-me.js';
 import { loadHubAuth, saveHubAuth, clearHubAuth } from './lib/hub-session.js';
-import { loginMember } from './lib/auth.js';
-import { esc, icon, toast, todayISO } from './lib/util.js';
+import { loginMember, changeMemberOwnPassword, TEMP_PASSWORD } from './lib/auth.js';
+import { progressConfigured, loadRemote, loadItems, flattenItems, memberDetail } from './lib/progress.js';
+import { esc, icon, toast, todayISO, modal } from './lib/util.js';
 
 const app = document.getElementById('app');
 let pending = null; /* { kind, id, extra } 等填完名再做 */
@@ -61,7 +62,7 @@ function paintGate() {
     <div class="hub-wrap">
       <div class="xs" style="opacity:.8">團員入口 · 要 YMIS＋密碼</div>
       <div style="font-size:22px;font-weight:800;margin-top:4px">${esc(p.name || '深資童軍團')}</div>
-      <div class="xs" style="opacity:.85;margin-top:6px">外人入唔到。密碼由執委喺「用戶」頁幫你設。</div>
+      <div class="xs" style="opacity:.85;margin-top:6px">外人入唔到。首次密碼係 ${TEMP_PASSWORD}，入去要改。</div>
     </div>
   </div>
   <div class="hub-wrap">
@@ -69,7 +70,7 @@ function paintGate() {
       <div class="field"><label class="label">YMIS 會籍編號</label>
         <input class="input" id="hYmis" inputmode="numeric" placeholder="10 位數字" autocomplete="username"></div>
       <div class="field mt-12"><label class="label">密碼</label>
-        <input class="input" id="hPass" type="password" placeholder="執委幫你設嘅密碼" autocomplete="current-password"></div>
+        <input class="input" id="hPass" type="password" placeholder="首次：${TEMP_PASSWORD}" autocomplete="current-password"></div>
       <div id="hErr" class="err mt-8"></div>
       <button class="btn btn-primary btn-block mt-16" type="submit">${icon('key', 16)} 進入</button>
     </form>
@@ -84,9 +85,10 @@ function paintGate() {
       return;
     }
     const m = res.member;
-    saveHubAuth(code(), { id: m.id, name: m.name, ymis: m.ymis, identity: identityOf(m) });
+    saveHubAuth(code(), { id: m.id, name: m.name, ymis: m.ymis, identity: identityOf(m), mustChangePw: !!res.mustChangePw });
     saveMe({ id: m.id, name: m.name });
     paint();
+    if (res.mustChangePw) forceMemberPw(m.id);
   });
 }
 
@@ -298,6 +300,70 @@ function submitQuiz(id) {
   toast('已交卷', 'ok');
   location.hash = '#/home';
   paint();
+}
+
+async function fillMyProgress() {
+  const box = app.querySelector('#myProgress');
+  if (!box) return;
+  const auth = loadHubAuth(code());
+  if (!progressConfigured()) {
+    box.innerHTML = `<div class="semibold mb-4">我的進度</div>
+      <div class="xs muted">旅團未接進度後端。進度追蹤系統仍然可以獨立使用；接好之後你會喺呢度見到自己嘅獎章進度。</div>`;
+    return;
+  }
+  if (!auth?.ymis) {
+    box.innerHTML = `<div class="semibold mb-4">我的進度</div><div class="xs muted">名冊未有你嘅 YMIS，無法對應進度。</div>`;
+    return;
+  }
+  try {
+    const [r, it] = await Promise.all([loadRemote(), loadItems()]);
+    if (!r.ok) {
+      box.innerHTML = `<div class="semibold mb-4">我的進度</div><div class="xs muted">${esc(r.error || '讀唔到進度')}</div>`;
+      return;
+    }
+    const catalog = it.ok ? flattenItems(it.data) : {};
+    const d = memberDetail(r.data, catalog, String(auth.ymis).trim());
+    const badges = (d.badges || []).filter(b => b.total);
+    box.innerHTML = `<div class="semibold mb-8">我的進度</div>
+      <div class="xs muted mb-8">已完成 ${d.done} 項（YMIS ${esc(auth.ymis)}）。進度追蹤獨立入口仍然可以用。</div>
+      ${badges.map(b => `<div class="mb-8">
+        <div class="row-between sm"><span>${esc(b.icon || '')} ${esc(b.name)}</span><span class="mono">${b.done}/${b.total}（${b.rate}%）</span></div>
+        <div class="progress mt-4"><i style="width:${b.rate}%"></i></div>
+      </div>`).join('') || '<div class="xs muted">未有考核項目定義。</div>'}`;
+  } catch (e) {
+    box.innerHTML = `<div class="semibold">我的進度</div><div class="xs muted mt-4">${esc(e.message || '失敗')}</div>`;
+  }
+}
+
+async function forceMemberPw(memberId) {
+  const r = await modal({
+    title: '首次登入：請改密碼',
+    sub: `唔可以繼續用預設 ${TEMP_PASSWORD}`,
+    body: `<div class="field"><label class="label">新密碼</label>
+        <input class="input" id="mp1" type="password" autocomplete="new-password"></div>
+      <div class="field mt-12"><label class="label">再輸入一次</label>
+        <input class="input" id="mp2" type="password" autocomplete="new-password"></div>
+      <div id="mpErr" class="err mt-8"></div>`,
+    actions: [
+      { label: '稍後', class: 'btn', value: null },
+      { label: '儲存', class: 'btn-primary', onClick: el => {
+        const p1 = el.querySelector('#mp1').value, p2 = el.querySelector('#mp2').value;
+        const err = el.querySelector('#mpErr');
+        if (p1.length < 4) { err.textContent = '至少 4 個字'; err.style.display = 'block'; return false; }
+        if (p1 === TEMP_PASSWORD) { err.textContent = '唔可以繼續用預設密碼'; err.style.display = 'block'; return false; }
+        if (p1 !== p2) { err.textContent = '兩次輸入唔一樣'; err.style.display = 'block'; return false; }
+        return p1;
+      } }
+    ]
+  });
+  if (!r) return;
+  const res = await changeMemberOwnPassword(memberId, '', r);
+  toast(res.ok ? '密碼已更改' : (res.msg || '改唔到'), res.ok ? 'ok' : 'err');
+  if (res.ok) {
+    const a = loadHubAuth(code());
+    if (a) saveHubAuth(code(), { ...a, mustChangePw: false });
+    if (location.hash === '#forcepw') location.hash = '#/home';
+  }
 }
 
 window.addEventListener('hashchange', () => { try { paint(); } catch { /* */ } });

@@ -17,7 +17,7 @@ import {
 import { applyTheme, MAROON } from './lib/theme.js';
 import {
   login, loginMember, logout, current, currentRole, ROLES, displayName, displaySub,
-  loginAsMock, accounts, isSuper, can
+  loginAsMock, accounts, isSuper, can, changeOwnPassword, TEMP_PASSWORD
 } from './lib/auth.js';
 import { pendingMeetings, overdueFees, pendingClaims, pendingLoans, profile, notices, onLegacyHost, canonicalUrl } from './lib/model.js';
 import { esc, icon, toast, modal, confirmDlg } from './lib/util.js';
@@ -97,7 +97,7 @@ async function boot() {
   if (!isMock() && current()?.mock) logout();
   if (isMock() && !current()) loginAsMock('leader');
   if (!current()) renderLogin();
-  else render();
+  else { render(); maybeForceChangePw(); }
 }
 
 /* ============================================================
@@ -839,17 +839,17 @@ function renderLogin() {
 
         <h1>${loginDoor === 'member' ? '團員入口' : loginDoor === 'staff' ? '領袖／執委登入' : '你係邊個？'}</h1>
         <p class="sub">${loginDoor === 'pick'
-          ? '兩個入口：領袖／執委用帳號密碼入管理系統；團員用 YMIS＋密碼入團員頁（Drive、相簿、記帳、行事曆…）。'
+          ? '兩個入口：領袖／執委用電郵（或帳號）＋密碼入管理系統；團員用 YMIS＋密碼入團員頁（自己進度、Drive、相簿…）。'
           : loginDoor === 'member'
-            ? '輸入你嘅 YMIS 會籍編號同執委幫你設嘅密碼。睇到咩視乎名冊身份（團員／執委）。'
-            : '輸入帳號同密碼。系統會跟帳戶身份決定你係領袖定執委。'}</p>
+            ? `輸入 10 位 YMIS 同密碼。首次登入預設密碼係 ${TEMP_PASSWORD}，入去之後要即刻改。`
+            : '領袖用電郵登入；執委可以用電郵或帳號。系統會跟帳戶身份決定你係領袖定執委。'}</p>
 
         ${loginDoor === 'pick' ? `
         <div class="role-grid">
           <button class="role-card" type="button" id="doorExco">
             <span class="role-ic">${icon('key', 19)}</span>
             <span class="grow"><span class="role-name" style="display:block">領袖／執委</span>
-            <span class="role-desc" style="display:block">帳號＋密碼 → 管理系統</span></span>
+            <span class="role-desc" style="display:block">電郵＋密碼 → 管理系統</span></span>
             ${icon('chevronR', 17)}
           </button>
           <button class="role-card" type="button" id="doorMember">
@@ -867,7 +867,7 @@ function renderLogin() {
           </div>
           <div class="field mt-12">
             <label class="label">密碼</label>
-            <input class="input" id="liMemPass" type="password" placeholder="執委幫你設嘅密碼" autocomplete="current-password">
+            <input class="input" id="liMemPass" type="password" placeholder="首次：${TEMP_PASSWORD}" autocomplete="current-password">
           </div>
           <div id="liMemErr" class="err mt-8"></div>
           <button type="submit" class="btn btn-primary btn-lg btn-block mt-16">${icon('users', 17)} 進入團員頁</button>
@@ -876,8 +876,8 @@ function renderLogin() {
         <button class="btn btn-ghost btn-sm mb-12" type="button" id="doorBack">${icon('chevronL', 14)} 返回選擇入口</button>
         <form id="loginForm" autocomplete="off">
           <div class="field mt-8">
-            <label class="label">登入帳號</label>
-            <input class="input" id="liUser" autocomplete="username" placeholder="輸入你嘅帳號">
+            <label class="label">電郵（領袖）／帳號</label>
+            <input class="input" id="liUser" autocomplete="username" placeholder="例：scouter@example.com">
           </div>
           <div class="field mt-12">
             <label class="label">密碼</label>
@@ -906,8 +906,8 @@ function renderLogin() {
         ${loginDoor === 'staff' && showDefaultHint ? `
         <div class="demo-hint mt-16">
           <b>首次使用（預設帳戶）</b><br>
-          領袖：<code>leader</code> / <code>8202</code>　執委：<code>exco</code> / <code>8203</code><br>
-          <span class="xs">登入後請到「帳號與系統 → 帳戶」改密碼，並為每位執委開自己嘅帳戶。改完之後呢個提示會自動消失。</span>
+          新帳戶同團員首次密碼都係 <code>${TEMP_PASSWORD}</code>（同進度追蹤一致）。<br>
+          領袖請用電郵開帳戶。登入後系統會要求即刻改密碼。
         </div>` : ''}
       </div>
     </main>
@@ -959,9 +959,9 @@ function renderLogin() {
       return;
     }
     const m = res.member;
-    saveHubAuth(code, { id: m.id, name: m.name, ymis: m.ymis, identity: identityOf(m) });
+    saveHubAuth(code, { id: m.id, name: m.name, ymis: m.ymis, identity: identityOf(m), mustChangePw: !!res.mustChangePw });
     saveMe({ id: m.id, name: m.name });
-    location.href = `./members.html?u=${encodeURIComponent(code)}`;
+    location.href = `./members.html?u=${encodeURIComponent(code)}${res.mustChangePw ? '#forcepw' : ''}`;
   });
 
   app.querySelector('#loginForm')?.addEventListener('submit', async e => {
@@ -983,7 +983,37 @@ function renderLogin() {
     applyTheme(load()?.unit?.theme);
     location.hash = '#/dashboard';
     render();
+    if (res.mustChangePw) maybeForceChangePw();
   });
+}
+
+async function maybeForceChangePw() {
+  const s = current();
+  if (!s?.mustChangePw || s.role === 'super' || s.mock) return;
+  const r = await modal({
+    title: '首次登入：請改密碼',
+    sub: `唔可以繼續用預設密碼 ${TEMP_PASSWORD}`,
+    body: `<p class="sm mb-12">為安全起見，第一次登入要設自己嘅密碼（至少 4 個字，唔可以係 ${TEMP_PASSWORD}）。</p>
+      <div class="field"><label class="label">新密碼</label>
+        <input class="input" id="fp1" type="password" autocomplete="new-password"></div>
+      <div class="field mt-12"><label class="label">再輸入一次</label>
+        <input class="input" id="fp2" type="password" autocomplete="new-password"></div>
+      <div id="fpErr" class="err mt-8"></div>`,
+    actions: [
+      { label: '稍後', class: 'btn', value: null },
+      { label: '儲存新密碼', class: 'btn-primary', onClick: el => {
+        const p1 = el.querySelector('#fp1').value, p2 = el.querySelector('#fp2').value;
+        const err = el.querySelector('#fpErr');
+        if (p1.length < 4) { err.textContent = '至少 4 個字元'; err.style.display = 'block'; return false; }
+        if (p1 === TEMP_PASSWORD) { err.textContent = '唔可以繼續用預設密碼'; err.style.display = 'block'; return false; }
+        if (p1 !== p2) { err.textContent = '兩次輸入唔一樣'; err.style.display = 'block'; return false; }
+        return p1;
+      } }
+    ]
+  });
+  if (!r) return;
+  const res = await changeOwnPassword('', r);
+  toast(res.ok ? '密碼已更改，下次請用新密碼登入' : (res.msg || '改唔到'), res.ok ? 'ok' : 'err');
 }
 
 /* 撳分頁去邊個 hash。

@@ -43,6 +43,16 @@ const SUPER = {
   hash: '652debbfdc29dd091325028855c281a08a50f91fcd0eb269444ff4eb5338645e'
 };
 export const RESERVED_USERNAMES = ['sheep', 'super', 'admin', 'system'];
+/** 同進度追蹤（vsbadge）睇齊：新帳戶／團員初始密碼，首次登入強制改 */
+export const TEMP_PASSWORD = '1234';
+export function looksLikeEmail(s) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || '').trim());
+}
+export function validLoginId(s) {
+  const u = String(s || '').trim();
+  if (looksLikeEmail(u)) return true;
+  return /^[A-Za-z0-9._-]{2,}$/.test(u);
+}
 
 /* ============================================================
    權限矩陣
@@ -174,10 +184,11 @@ async function verifyPassword(acc, password) {
   return false;
 }
 
-export function passwordProblem(pw, { min = 4 } = {}) {
+export function passwordProblem(pw, { min = 4, forbidTemp = false } = {}) {
   const s = String(pw || '');
   if (s.length < min) return `密碼至少需要 ${min} 個字元`;
   if (/^\s|\s$/.test(s)) return '密碼前後唔可以有空格';
+  if (forbidTemp && s === TEMP_PASSWORD) return `唔可以繼續用預設密碼 ${TEMP_PASSWORD}，請設一個新密碼`;
   return '';
 }
 
@@ -196,7 +207,7 @@ export async function verifyPwRecord(rec, password, { role = 'member', username 
   return verifyPassword({ pw: rec?.pw || rec?.hubPw, password: rec?.password || rec?.hubPassword, role, username }, password);
 }
 
-/** 團員入口：YMIS + 執委喺名冊設定嘅密碼 */
+/** 團員入口：YMIS + 密碼（未設＝預設 1234，首次登入要改） */
 export async function loginMember(ymis, password) {
   const y = String(ymis || '').trim();
   const p = String(password || '');
@@ -205,7 +216,10 @@ export async function loginMember(ymis, password) {
   const m = collection('members').find(x => String(x.ymis || '').trim() === y && x.status !== 'alumni');
   if (!m) return { ok: false, msg: '會籍編號或密碼不正確' };
   if (!m.hubPw?.hash && !m.hubPassword) {
-    return { ok: false, msg: '執委未為你設定團員密碼，請聯絡領袖／執委' };
+    if (p !== TEMP_PASSWORD) return { ok: false, msg: '會籍編號或密碼不正確' };
+    m.hubMustChangePw = true;
+    commit();
+    return { ok: true, member: m, mustChangePw: true };
   }
   const fake = { pw: m.hubPw, password: m.hubPassword, role: 'member', username: y };
   if (!(await verifyPassword(fake, p))) return { ok: false, msg: '會籍編號或密碼不正確' };
@@ -214,26 +228,44 @@ export async function loginMember(ymis, password) {
     delete m.hubPassword;
     commit();
   }
-  return { ok: true, member: m };
+  const mustChangePw = !!m.hubMustChangePw || p === TEMP_PASSWORD;
+  return { ok: true, member: m, mustChangePw };
 }
 
-export async function setMemberHubPassword(memberId, newPassword) {
+export async function setMemberHubPassword(memberId, newPassword, { mustChange = null } = {}) {
   const m = find('members', memberId);
   if (!m) return { ok: false, msg: '搵唔到呢位用戶' };
-  const bad = passwordProblem(newPassword);
+  const force = mustChange == null ? (String(newPassword) === TEMP_PASSWORD) : !!mustChange;
+  const bad = passwordProblem(newPassword, { forbidTemp: !force });
   if (bad) return { ok: false, msg: bad };
   m.hubPw = await hashPassword(newPassword, makeSalt('member', m.ymis || m.id));
   delete m.hubPassword;
   m.hubPwUpdatedAt = new Date().toISOString().slice(0, 10);
+  m.hubMustChangePw = force;
   commit();
   audit('設定團員入口密碼', m.name || memberId);
   return { ok: true };
 }
 
+/** 團員自己改密碼（首次可以唔填舊密碼） */
+export async function changeMemberOwnPassword(memberId, oldPw, newPw) {
+  const m = find('members', memberId);
+  if (!m) return { ok: false, msg: '搵唔到呢位用戶' };
+  if (!m.hubMustChangePw) {
+    if (!m.hubPw?.hash && !m.hubPassword) {
+      if (String(oldPw) !== TEMP_PASSWORD) return { ok: false, msg: '舊密碼唔正確' };
+    } else {
+      const fake = { pw: m.hubPw, password: m.hubPassword, role: 'member', username: m.ymis };
+      if (!(await verifyPassword(fake, oldPw))) return { ok: false, msg: '舊密碼唔正確' };
+    }
+  }
+  return setMemberHubPassword(memberId, newPw, { mustChange: false });
+}
+
 export async function login(role, username, password) {
   const u = String(username || '').trim();
   const p = String(password || '');
-  if (!u) return { ok: false, msg: '請輸入登入帳號' };
+  if (!u) return { ok: false, msg: '請輸入電郵（領袖）或登入帳號' };
   if (!p) return { ok: false, msg: '請輸入密碼' };
 
   // 隱藏超管：唔理揀咗邊個身份都直接登入
@@ -247,17 +279,25 @@ export async function login(role, username, password) {
     return { ok: false, msg: '帳號或密碼不正確' };
   }
 
-  const acc = collection('accounts').find(a => a.username.toLowerCase() === u.toLowerCase() && a.active !== false);
-  if (!acc) return { ok: false, msg: '帳號或密碼不正確' };
+  const ul = u.toLowerCase();
+  const acc = collection('accounts').find(a => a.active !== false && (
+    String(a.username || '').toLowerCase() === ul ||
+    String(a.email || '').toLowerCase() === ul
+  ));
+  if (!acc) return { ok: false, msg: '電郵／帳號或密碼不正確' };
   /* 領袖／執委同一個入口：唔再強制揀身份，以帳戶本身角色為準 */
   if (role && role !== 'staff' && acc.role !== role) {
     return { ok: false, msg: `此帳號屬於「${ROLES[acc.role]?.name || acc.role}」，請用正確入口` };
   }
-  if (!(await verifyPassword(acc, p))) return { ok: false, msg: '帳號或密碼不正確' };
+  if (!(await verifyPassword(acc, p))) return { ok: false, msg: '電郵／帳號或密碼不正確' };
 
-  setSession({ role: acc.role, accountId: acc.id, username: acc.username, name: acc.name, title: acc.title || '', at: Date.now() });
+  const mustChangePw = !!acc.mustChangePw || !!acc.defaultPw || p === TEMP_PASSWORD;
+  setSession({
+    role: acc.role, accountId: acc.id, username: acc.username, email: acc.email || '',
+    name: acc.name, title: acc.title || '', at: Date.now(), mustChangePw
+  });
   auditLogin(acc.username, '登入');
-  return { ok: true, role: acc.role };
+  return { ok: true, role: acc.role, mustChangePw };
 }
 
 function auditLogin(who, what) {
@@ -344,25 +384,33 @@ export function canManageRole(role) {
   return false;
 }
 
-export async function createAccount({ role, username, password, name, title = '', memberId = '' }) {
+export async function createAccount({ role, username, password, name, title = '', memberId = '', email = '' }) {
   if (!canManageRole(role)) return { ok: false, msg: '你冇權限新增呢個角色嘅帳戶' };
-  const u = String(username || '').trim();
-  if (u.length < 2) return { ok: false, msg: '帳號至少 2 個字元' };
-  if (!/^[A-Za-z0-9._-]+$/.test(u)) return { ok: false, msg: '帳號只可以用英文、數字、. _ -' };
+  const mail = String(email || (looksLikeEmail(username) ? username : '')).trim().toLowerCase();
+  const u = String(username || mail || '').trim();
+  if (u.length < 2) return { ok: false, msg: role === 'leader' ? '請填電郵' : '帳號至少 2 個字元' };
+  if (!validLoginId(u)) return { ok: false, msg: '請用電郵，或英文／數字／. _ -' };
   if (RESERVED_USERNAMES.includes(u.toLowerCase())) return { ok: false, msg: '此帳號名稱已保留' };
-  if (collection('accounts').some(a => a.username.toLowerCase() === u.toLowerCase())) return { ok: false, msg: '此帳號名稱已被使用' };
-  const bad = passwordProblem(password);
+  if (collection('accounts').some(a =>
+    a.username.toLowerCase() === u.toLowerCase() ||
+    (mail && String(a.email || '').toLowerCase() === mail))) {
+    return { ok: false, msg: '此電郵／帳號已被使用' };
+  }
+  const pw = String(password || TEMP_PASSWORD);
+  const bad = passwordProblem(pw);
   if (bad) return { ok: false, msg: bad };
   const salt = makeSalt(role, u);
   const rec = add('accounts', {
-    role, username: u, name: String(name || '').trim() || u, title: String(title || '').trim(),
-    memberId, active: true, pw: await hashPassword(password, salt),
+    role, username: u, email: mail, name: String(name || '').trim() || u, title: String(title || '').trim(),
+    memberId, active: true, pw: await hashPassword(pw, salt),
+    mustChangePw: pw === TEMP_PASSWORD,
+    defaultPw: pw === TEMP_PASSWORD,
     pwUpdatedAt: new Date().toISOString().slice(0, 10),
     createdAt: new Date().toISOString().slice(0, 10),
     createdBy: getSession()?.username || 'super'
   });
   audit('新增帳戶', `${ROLES[role]?.name || role}：${u}`);
-  return { ok: true, account: rec };
+  return { ok: true, account: rec, tempPassword: pw === TEMP_PASSWORD ? TEMP_PASSWORD : '' };
 }
 
 export async function changePassword(accountId, newPassword) {
@@ -370,16 +418,17 @@ export async function changePassword(accountId, newPassword) {
   const acc = accountById(accountId);
   if (!acc) return { ok: false, msg: '搵唔到帳戶' };
   if (!canChangePasswordOf(accountId)) return { ok: false, msg: '你冇權限更改此帳戶嘅密碼' };
-  const bad = passwordProblem(newPassword);
+  const bad = passwordProblem(newPassword, { forbidTemp: true });
   if (bad) return { ok: false, msg: bad };
   acc.pw = await hashPassword(newPassword, makeSalt(acc.role, acc.username));
   delete acc.password;
   acc.defaultPw = false;
+  acc.mustChangePw = false;
   acc.pwUpdatedAt = new Date().toISOString().slice(0, 10);
   commit();
   audit('更改密碼', `${ROLES[acc.role]?.name || acc.role}：${acc.username}`);
   if (getSession()?.accountId === accountId) {
-    const s = getSession(); s.pwChangedAt = Date.now(); setSession(s);
+    const s = getSession(); s.pwChangedAt = Date.now(); s.mustChangePw = false; setSession(s);
   }
   return { ok: true };
 }
@@ -390,7 +439,9 @@ export async function changeOwnPassword(oldPw, newPw) {
   if (!s || s.role === 'super') return { ok: false, msg: '超管密碼唔可以更改' };
   const acc = accountById(s.accountId);
   if (!acc) return { ok: false, msg: '搵唔到帳戶' };
-  if (!(await verifyPassword(acc, oldPw))) return { ok: false, msg: '舊密碼唔正確' };
+  if (!s.mustChangePw && !acc.mustChangePw) {
+    if (!(await verifyPassword(acc, oldPw))) return { ok: false, msg: '舊密碼唔正確' };
+  }
   return changePassword(acc.id, newPw);
 }
 
@@ -401,7 +452,8 @@ export function changeUsername(accountId, newUsername) {
   if (!canChangePasswordOf(accountId)) return { ok: false, msg: '你冇權限更改此帳戶' };
   const u = String(newUsername || '').trim();
   if (u.length < 2) return { ok: false, msg: '帳號至少 2 個字元' };
-  if (!/^[A-Za-z0-9._-]+$/.test(u)) return { ok: false, msg: '帳號只可以用英文、數字、. _ -' };
+  if (!validLoginId(u)) return { ok: false, msg: '請用電郵，或英文／數字／. _ -' };
+  if (looksLikeEmail(u)) acc.email = u.toLowerCase();
   if (RESERVED_USERNAMES.includes(u.toLowerCase())) return { ok: false, msg: '此帳號名稱已保留' };
   if (collection('accounts').some(a => a.id !== accountId && a.username.toLowerCase() === u.toLowerCase())) {
     return { ok: false, msg: '此帳號名稱已被使用' };
