@@ -80,6 +80,43 @@ function showApiKey() {
   return apiKey;
 }
 
+/** SHA-256 hex（開團 KEY 只存雜湊） */
+function sha256HexGs(s) {
+  var raw = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(s || ''), Utilities.Charset.UTF_8);
+  return raw.map(function (b) { return ('0' + (b & 255).toString(16)).slice(-2); }).join('');
+}
+
+/**
+ * 開團登入 KEY：喺 Apps Script 編輯器執行呢個函數。
+ * 每次產生新 KEY，有效 72 小時；過期再執行一次。唔會寫入工作表、唔會喺 App 顯示超管。
+ */
+function issueSetupKey() {
+  var raw = Utilities.getUuid().replace(/-/g, '').substring(0, 20).toUpperCase();
+  var key = 'EC72-' + raw;
+  var exp = Date.now() + 72 * 3600 * 1000;
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty('SETUP_KEY_HASH', sha256HexGs(key));
+  props.setProperty('SETUP_KEY_EXP', String(exp));
+  var until = Utilities.formatDate(new Date(exp), 'Asia/Hong_Kong', 'yyyy-MM-dd HH:mm');
+  var ui = null;
+  try { ui = SpreadsheetApp.getUi(); } catch (e) { /* */ }
+  if (ui) {
+    ui.alert('開團登入 KEY（72 小時）', key + '\\n\\n有效至：' + until + '\\n過期請再執行 issueSetupKey()。\\n喺執委系統「領袖登入」貼上呢條 KEY。', ui.ButtonSet.OK);
+  }
+  Logger.log('SETUP KEY: ' + key + ' until ' + until);
+  return key;
+}
+
+function verifySetupKey(key) {
+  var props = PropertiesService.getScriptProperties();
+  var hash = props.getProperty('SETUP_KEY_HASH') || '';
+  var exp = Number(props.getProperty('SETUP_KEY_EXP') || 0);
+  if (!hash || !exp) return { ok: false, success: false, error: '未產生 KEY。請喺 Apps Script 執行 issueSetupKey()' };
+  if (Date.now() > exp) return { ok: false, success: false, error: 'KEY 已過期（72 小時）。請再執行 issueSetupKey()' };
+  if (sha256HexGs(String(key || '').trim()) !== hash) return { ok: false, success: false, error: 'KEY 不正確' };
+  return { ok: true, success: true, hoursLeft: Math.round((exp - Date.now()) / 3600000) };
+}
+
 /** 初始化試算表：建立所有必要分頁、設定棗紅標題列及凍結頂列 */
 function initializeSheets() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -220,6 +257,12 @@ function doPost(e) {
       return json({ success: true, ok: true, unit: textOf(body.unit), notices: loadPublicNotices(textOf(body.unit)) });
     }
 
+    if (body.action === 'verifySetupKey') {
+      if (expectedKey && key !== expectedKey) {
+        return json({ ok: false, success: false, error: '未授權：API Key 唔正確' });
+      }
+      return json(verifySetupKey(body.key || body.setupKey || ''));
+    }
     if (body.action === 'ping') return json({ ok: true, msg: 'pong', unit: body.unit, at: body.at });
     if (body.action === 'noticeSignup') {
       appendSignup(body);
