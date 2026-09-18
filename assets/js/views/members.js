@@ -369,7 +369,10 @@ function editor(id) {
           <input class="input" id="f-eng" data-draft="eng" value="${esc(m?.eng || '')}" placeholder="例：Chan Tai Man"></div>
         <div class="field"><label class="label">會籍編號（YMIS）</label>
           <input class="input" id="f-ymis" data-draft="ymis" value="${esc(m?.ymis || '')}" placeholder="同進度追蹤系統一樣嗰個">
-          <div class="hint">跨系統對人用嘅<b>權威 key</b>。填咗，進度追蹤等外部系統先可以準確認到呢個人（唔使靠姓名）。</div></div>
+          <div class="hint">團員入口登入用（YMIS＋密碼）。同進度系統同一個編號。</div></div>
+        <div class="field"><label class="label">團員入口密碼</label>
+          <input class="input" id="f-hubpw" type="text" autocomplete="new-password" placeholder="${m?.hubPw?.hash || m?.hubPassword ? '已設定 —— 留空＝唔改' : '至少 4 個字（團員用嚟入入口）'}">
+          <div class="hint">${m?.hubPw?.hash || m?.hubPassword ? `已有密碼${m.hubPwUpdatedAt ? `（${esc(m.hubPwUpdatedAt)}）` : ''}。` : '未設定 —— 團員而家入唔到入口。'}執委喺呢度幫佢設；唔好同執委帳戶密碼公開貼出街。</div></div>
         <div class="field"><label class="label">系統 ID（自動產生，唔好改）</label>
           <input class="input" value="${esc(m?.systemId || '（儲存時自動產生）')}" readonly style="font-family:var(--mono);font-size:12px;background:var(--bg-2)">
           <div class="hint">冇 YMIS 時嘅 fallback；一旦產生就唔會再改。</div></div>
@@ -587,12 +590,22 @@ export function mount(root, params = {}) {
         update('members', id, patch);
         clearDraft('member', id);
         toast(`已儲存 ${name}（${IDENTITIES[identity].l}）`, 'ok');
+        const hubPw = v('#f-hubpw');
+        if (hubPw) {
+          const pwRes = await setMemberHubPassword(id, hubPw);
+          if (!pwRes.ok) toast(pwRes.msg, 'err');
+        }
         undoable('（可以撳「還原」復原今次改動）', () => { update('members', id, before); refresh(); });
         go('#/members/' + id);
       } else {
         const nid = uid('m');
         const rec = add('members', { ...patch, id: nid, systemId: newSystemId(load().unitCode, nid) });
         clearDraft('member', 'new');
+        const hubPw = v('#f-hubpw');
+        if (hubPw) {
+          const pwRes = await setMemberHubPassword(rec.id, hubPw);
+          if (!pwRes.ok) toast(pwRes.msg, 'err');
+        }
         toast(`已新增 ${name}（${IDENTITIES[identity].l}）`, 'ok');
         go('#/members/' + rec.id);
       }

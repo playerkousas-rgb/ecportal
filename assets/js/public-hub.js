@@ -1,8 +1,10 @@
 /* 團員入口：掃一次見到全部公開功能。名可選填，存瀏覽器。 */
 import { loadRegistry, defaultUnitCode } from './lib/units.js';
 import { init, load, update } from './lib/store.js';
-import { memberLinks, profile, publicEvents, RSVP, quizzes, activeMembers, publicPageUrl } from './lib/model.js';
+import { memberLinks, profile, publicEvents, RSVP, quizzes, activeMembers, publicPageUrl, troopPublicLinks, identityOf, IDENTITIES } from './lib/model.js';
 import { loadMe, saveMe, identityForSubmit } from './lib/member-me.js';
+import { loadHubAuth, saveHubAuth, clearHubAuth } from './lib/hub-session.js';
+import { loginMember } from './lib/auth.js';
 import { esc, icon, toast, todayISO } from './lib/util.js';
 
 const app = document.getElementById('app');
@@ -28,26 +30,64 @@ function code() { return load().unitCode; }
 
 function paint() {
   const p = profile();
+  const auth = loadHubAuth(code());
+  if (!auth) return paintGate();
+  saveMe({ id: auth.id, name: auth.name });
   const hash = location.hash.replace(/^#\/?/, '') || 'home';
   const [sec, id] = hash.split('/');
-  const me = loadMe();
+  const ident = auth.identity || 'member';
+  const identL = IDENTITIES[ident]?.l || '團員';
   app.innerHTML = `
   <div class="hub-top">
     <div class="hub-wrap">
-      <div class="xs" style="opacity:.8">團員入口 · 免登入 · 掃一次齊晒</div>
+      <div class="xs" style="opacity:.8">團員入口 · ${esc(identL)} · 掃一次齊晒</div>
       <div style="font-size:22px;font-weight:800;margin-top:4px">${esc(p.name || '深資童軍團')}</div>
-      <div class="xs" style="opacity:.85;margin-top:6px">${me.name
-        ? `呢部機記住你係 <b>${esc(me.name)}</b>`
-        : '可以而家登記自己叫咩名（呢部機記住），或者入去先再填。'}</div>
+      <div class="xs" style="opacity:.85;margin-top:6px">你好，<b>${esc(auth.name)}</b>（YMIS ${esc(auth.ymis || '—')}）
+        · <button class="btn btn-xs" type="button" id="hubLogout" style="color:#fff;border-color:rgba(255,255,255,.35)">登出</button></div>
     </div>
   </div>
   <div class="hub-wrap">
-    ${idBar()}
     ${sec === 'cal' && id ? eventDetail(id)
       : sec === 'quiz' && id ? quizFill(id)
       : home()}
   </div>`;
   bind();
+}
+
+function paintGate() {
+  const p = profile();
+  app.innerHTML = `
+  <div class="hub-top">
+    <div class="hub-wrap">
+      <div class="xs" style="opacity:.8">團員入口 · 要 YMIS＋密碼</div>
+      <div style="font-size:22px;font-weight:800;margin-top:4px">${esc(p.name || '深資童軍團')}</div>
+      <div class="xs" style="opacity:.85;margin-top:6px">外人入唔到。密碼由執委喺「用戶」頁幫你設。</div>
+    </div>
+  </div>
+  <div class="hub-wrap">
+    <form class="card card-pad" id="hubLogin" autocomplete="off">
+      <div class="field"><label class="label">YMIS 會籍編號</label>
+        <input class="input" id="hYmis" inputmode="numeric" placeholder="10 位數字" autocomplete="username"></div>
+      <div class="field mt-12"><label class="label">密碼</label>
+        <input class="input" id="hPass" type="password" placeholder="執委幫你設嘅密碼" autocomplete="current-password"></div>
+      <div id="hErr" class="err mt-8"></div>
+      <button class="btn btn-primary btn-block mt-16" type="submit">${icon('key', 16)} 進入</button>
+    </form>
+  </div>`;
+  app.querySelector('#hubLogin')?.addEventListener('submit', async e => {
+    e.preventDefault();
+    const err = app.querySelector('#hErr');
+    if (err) { err.textContent = ''; err.style.display = 'none'; }
+    const res = await loginMember(app.querySelector('#hYmis')?.value, app.querySelector('#hPass')?.value);
+    if (!res.ok) {
+      if (err) { err.textContent = res.msg; err.style.display = 'block'; }
+      return;
+    }
+    const m = res.member;
+    saveHubAuth(code(), { id: m.id, name: m.name, ymis: m.ymis, identity: identityOf(m) });
+    saveMe({ id: m.id, name: m.name });
+    paint();
+  });
 }
 
 function idBar() {
@@ -198,6 +238,10 @@ function persistNameFromBar() {
 }
 
 function bind() {
+  app.querySelector('#hubLogout')?.addEventListener('click', () => {
+    clearHubAuth(code());
+    paint();
+  });
   app.querySelector('#hubPick')?.addEventListener('change', e => {
     const m = activeMembers().find(x => x.id === e.target.value);
     if (m) {

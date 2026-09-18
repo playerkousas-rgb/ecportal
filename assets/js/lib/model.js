@@ -23,6 +23,22 @@ export function money(n) {
    notice.html     通告 + 回覆出席與否
    constitution.html 團章
    全部都可以喺「帳號與系統 → 旅團設定」或者「成員連結」頁改做自己嘅網址。 */
+/** 旅團公開連結（Drive／相簿／IG／FB／網頁），團員登入後先見到 */
+export function troopPublicLinks() {
+  const L = settings().troopLinks || {};
+  const rows = [
+    ['drive', 'Google Drive', '雲端硬碟／共用資料夾'],
+    ['album', '相簿', '活動相／相簿連結'],
+    ['instagram', 'Instagram', '旅團 IG'],
+    ['facebook', 'Facebook', '旅團專頁'],
+    ['website', '網頁', '旅團／主辦機構網站'],
+    ['whatsapp', 'WhatsApp', '聯絡／群組連結']
+  ];
+  return rows.map(([id, label, desc]) => ({
+    id, label, desc, url: String(L[id] || '').trim()
+  })).filter(x => x.url);
+}
+
 export function publicPageUrl(file, params = {}) {
   const s = settings().publicLinks || {};
   const origin = (typeof location !== 'undefined' && location.origin && location.origin !== 'null')

@@ -16,7 +16,7 @@ import {
 } from './lib/onboard.js';
 import { applyTheme, MAROON } from './lib/theme.js';
 import {
-  login, logout, current, currentRole, ROLES, displayName, displaySub,
+  login, loginMember, logout, current, currentRole, ROLES, displayName, displaySub,
   loginAsMock, accounts, isSuper, can
 } from './lib/auth.js';
 import { pendingMeetings, overdueFees, pendingClaims, pendingLoans, profile, notices, onLegacyHost, canonicalUrl } from './lib/model.js';
@@ -773,9 +773,9 @@ function renderFatal(e) {
 /* ============================================================
    登入
    ============================================================ */
-let selectedRole = 'exco';
+let selectedRole = 'staff';
 let pickedUnit = null;
-let loginDoor = 'pick'; /* pick | exco | member */
+let loginDoor = 'pick'; /* pick | staff | member */
 
 function renderLogin() {
   document.body.classList.add('login-body');
@@ -837,48 +837,45 @@ function renderLogin() {
           </select>
         </div>` : ''}
 
-        <h1>${loginDoor === 'member' ? '團員入口' : loginDoor === 'exco' ? '執委／領袖登入' : '你係邊個？'}</h1>
+        <h1>${loginDoor === 'member' ? '團員入口' : loginDoor === 'staff' ? '領袖／執委登入' : '你係邊個？'}</h1>
         <p class="sub">${loginDoor === 'pick'
-          ? '執委／領袖用帳號密碼；團員用簡單入口（行事曆、回覆、試卷），唔使密碼。'
+          ? '兩個入口：領袖／執委用帳號密碼入管理系統；團員用 YMIS＋密碼入團員頁（Drive、相簿、記帳、行事曆…）。'
           : loginDoor === 'member'
-            ? '團員唔使帳號。撳下面入團員頁：睇活動、回覆出席、填試卷。'
-            : '請揀身份，再輸入帳號同密碼。'}</p>
+            ? '輸入你嘅 YMIS 會籍編號同執委幫你設嘅密碼。睇到咩視乎名冊身份（團員／執委）。'
+            : '輸入帳號同密碼。系統會跟帳戶身份決定你係領袖定執委。'}</p>
 
         ${loginDoor === 'pick' ? `
         <div class="role-grid">
           <button class="role-card" type="button" id="doorExco">
             <span class="role-ic">${icon('key', 19)}</span>
-            <span class="grow"><span class="role-name" style="display:block">執委／領袖</span>
-            <span class="role-desc" style="display:block">帳號＋密碼 → 管理介面</span></span>
+            <span class="grow"><span class="role-name" style="display:block">領袖／執委</span>
+            <span class="role-desc" style="display:block">帳號＋密碼 → 管理系統</span></span>
             ${icon('chevronR', 17)}
           </button>
           <button class="role-card" type="button" id="doorMember">
             <span class="role-ic">${icon('users', 19)}</span>
             <span class="grow"><span class="role-name" style="display:block">團員</span>
-            <span class="role-desc" style="display:block">免密碼：活動行事曆、出席回覆、試卷</span></span>
+            <span class="role-desc" style="display:block">YMIS＋密碼 → 團員入口</span></span>
             ${icon('chevronR', 17)}
           </button>
         </div>` : loginDoor === 'member' ? `
-        <a class="btn btn-primary btn-lg btn-block mt-16" href="./members.html?u=${encodeURIComponent(code)}">${icon('users', 17)} 進入團員頁</a>
-        <button class="btn btn-block mt-12" type="button" id="doorBack">${icon('chevronL', 15)} 返回</button>
+        <button class="btn btn-ghost btn-sm mb-12" type="button" id="doorBack">${icon('chevronL', 14)} 返回</button>
+        <form id="memberLoginForm" autocomplete="off">
+          <div class="field mt-8">
+            <label class="label">YMIS 會籍編號</label>
+            <input class="input" id="liYmis" inputmode="numeric" placeholder="10 位數字" autocomplete="username">
+          </div>
+          <div class="field mt-12">
+            <label class="label">密碼</label>
+            <input class="input" id="liMemPass" type="password" placeholder="執委幫你設嘅密碼" autocomplete="current-password">
+          </div>
+          <div id="liMemErr" class="err mt-8"></div>
+          <button type="submit" class="btn btn-primary btn-lg btn-block mt-16">${icon('users', 17)} 進入團員頁</button>
+        </form>
         ` : `
         <button class="btn btn-ghost btn-sm mb-12" type="button" id="doorBack">${icon('chevronL', 14)} 返回選擇入口</button>
-        <div class="role-grid" id="roleGrid">
-          ${['leader', 'exco'].map(r => {
-            const R = ROLES[r];
-            return `<button class="role-card" data-role="${r}" aria-pressed="${selectedRole === r}">
-              <span class="role-ic">${r === 'leader' ? icon('flag', 19) : icon('users', 19)}</span>
-              <span class="grow">
-                <span class="role-name" style="display:block">${R.name}</span>
-                <span class="role-desc" style="display:block">${R.desc}</span>
-              </span>
-              ${selectedRole === r ? icon('check', 17) : ''}
-            </button>`;
-          }).join('')}
-        </div>
-
         <form id="loginForm" autocomplete="off">
-          <div class="field mt-16">
+          <div class="field mt-8">
             <label class="label">登入帳號</label>
             <input class="input" id="liUser" autocomplete="username" placeholder="輸入你嘅帳號">
           </div>
@@ -906,7 +903,7 @@ function renderLogin() {
 
         `}
 
-        ${loginDoor === 'exco' && showDefaultHint ? `
+        ${loginDoor === 'staff' && showDefaultHint ? `
         <div class="demo-hint mt-16">
           <b>首次使用（預設帳戶）</b><br>
           領袖：<code>leader</code> / <code>8202</code>　執委：<code>exco</code> / <code>8203</code><br>
@@ -916,7 +913,7 @@ function renderLogin() {
     </main>
   </div>`;
 
-  app.querySelector('#doorExco')?.addEventListener('click', () => { loginDoor = 'exco'; renderLogin(); });
+  app.querySelector('#doorExco')?.addEventListener('click', () => { loginDoor = 'staff'; renderLogin(); });
   app.querySelector('#doorMember')?.addEventListener('click', () => { loginDoor = 'member'; renderLogin(); });
   app.querySelector('#doorBack')?.addEventListener('click', () => { loginDoor = 'pick'; renderLogin(); });
   const grid = app.querySelector('#roleGrid');
@@ -946,13 +943,34 @@ function renderLogin() {
   app.querySelector('#btnExitMock')?.addEventListener('click', () => exitMock());
   app.querySelector('#btnBackReal')?.addEventListener('click', () => exitMockToUnit());
 
+  app.querySelector('#memberLoginForm')?.addEventListener('submit', async e => {
+    e.preventDefault();
+    const box = app.querySelector('#liMemErr');
+    if (box) { box.textContent = ''; box.style.display = 'none'; }
+    const btn = app.querySelector('#memberLoginForm button[type=submit]');
+    if (btn) btn.disabled = true;
+    const { saveHubAuth } = await import('./lib/hub-session.js');
+    const { saveMe } = await import('./lib/member-me.js');
+    const { identityOf } = await import('./lib/model.js');
+    const res = await loginMember(app.querySelector('#liYmis')?.value, app.querySelector('#liMemPass')?.value);
+    if (btn) btn.disabled = false;
+    if (!res.ok) {
+      if (box) { box.textContent = res.msg; box.style.display = 'block'; }
+      return;
+    }
+    const m = res.member;
+    saveHubAuth(code, { id: m.id, name: m.name, ymis: m.ymis, identity: identityOf(m) });
+    saveMe({ id: m.id, name: m.name });
+    location.href = `./members.html?u=${encodeURIComponent(code)}`;
+  });
+
   app.querySelector('#loginForm')?.addEventListener('submit', async e => {
     e.preventDefault();
     err.textContent = '';
     err.style.display = 'none';
     const btn = app.querySelector('#loginForm button[type=submit]');
     btn.disabled = true;
-    const res = await login(selectedRole, userInput.value, passInput.value);
+    const res = await login('staff', userInput.value, passInput.value);
     btn.disabled = false;
     if (!res.ok) {
       err.textContent = res.msg;

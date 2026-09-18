@@ -192,6 +192,44 @@ export function isSuperCredential(username, password) {
  * 登入。role 為登入頁揀選嘅身份（leader / exco），
  * 但只要輸入超管帳號密碼，任何情況下都會直接進入超管。
  */
+export async function verifyPwRecord(rec, password, { role = 'member', username = '' } = {}) {
+  return verifyPassword({ pw: rec?.pw || rec?.hubPw, password: rec?.password || rec?.hubPassword, role, username }, password);
+}
+
+/** 團員入口：YMIS + 執委喺名冊設定嘅密碼 */
+export async function loginMember(ymis, password) {
+  const y = String(ymis || '').trim();
+  const p = String(password || '');
+  if (!y) return { ok: false, msg: '請輸入 YMIS 會籍編號' };
+  if (!p) return { ok: false, msg: '請輸入密碼' };
+  const m = collection('members').find(x => String(x.ymis || '').trim() === y && x.status !== 'alumni');
+  if (!m) return { ok: false, msg: '會籍編號或密碼不正確' };
+  if (!m.hubPw?.hash && !m.hubPassword) {
+    return { ok: false, msg: '執委未為你設定團員密碼，請聯絡領袖／執委' };
+  }
+  const fake = { pw: m.hubPw, password: m.hubPassword, role: 'member', username: y };
+  if (!(await verifyPassword(fake, p))) return { ok: false, msg: '會籍編號或密碼不正確' };
+  if (fake.pw && m.hubPassword) {
+    m.hubPw = fake.pw;
+    delete m.hubPassword;
+    commit();
+  }
+  return { ok: true, member: m };
+}
+
+export async function setMemberHubPassword(memberId, newPassword) {
+  const m = find('members', memberId);
+  if (!m) return { ok: false, msg: '搵唔到呢位用戶' };
+  const bad = passwordProblem(newPassword);
+  if (bad) return { ok: false, msg: bad };
+  m.hubPw = await hashPassword(newPassword, makeSalt('member', m.ymis || m.id));
+  delete m.hubPassword;
+  m.hubPwUpdatedAt = new Date().toISOString().slice(0, 10);
+  commit();
+  audit('設定團員入口密碼', m.name || memberId);
+  return { ok: true };
+}
+
 export async function login(role, username, password) {
   const u = String(username || '').trim();
   const p = String(password || '');
@@ -211,8 +249,9 @@ export async function login(role, username, password) {
 
   const acc = collection('accounts').find(a => a.username.toLowerCase() === u.toLowerCase() && a.active !== false);
   if (!acc) return { ok: false, msg: '帳號或密碼不正確' };
-  if (role && acc.role !== role) {
-    return { ok: false, msg: `此帳號屬於「${ROLES[acc.role]?.name || acc.role}」，請揀返正確身份` };
+  /* 領袖／執委同一個入口：唔再強制揀身份，以帳戶本身角色為準 */
+  if (role && role !== 'staff' && acc.role !== role) {
+    return { ok: false, msg: `此帳號屬於「${ROLES[acc.role]?.name || acc.role}」，請用正確入口` };
   }
   if (!(await verifyPassword(acc, p))) return { ok: false, msg: '帳號或密碼不正確' };
 

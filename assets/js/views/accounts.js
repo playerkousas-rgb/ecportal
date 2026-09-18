@@ -197,6 +197,18 @@ function unitView() {
       </div>
 
       <div class="card">
+        <div class="card-head"><div><div class="card-title">團員睇到嘅公開連結</div>
+          <div class="card-sub">團員用 YMIS＋密碼入入口之後先見到（Drive、相簿、IG、FB、網頁）</div></div></div>
+        <div style="padding:18px">
+          ${[['drive', 'Google Drive'], ['album', '相簿'], ['instagram', 'Instagram'], ['facebook', 'Facebook'], ['website', '網頁'], ['whatsapp', 'WhatsApp']].map(([k, l]) => `
+            <div class="field mt-8"><label class="label">${esc(l)}</label>
+              <input class="input" id="tl-${k}" value="${esc((s.troopLinks || {})[k] || '')}" placeholder="https://…"></div>`).join('')}
+          <button class="btn btn-primary mt-16" data-act="save-links">${icon('save', 16)} 儲存公開連結</button>
+          <div class="hint mt-8">留空就唔顯示嗰項。連結只喺團員登入後出現，外人掃 QR 未入密碼睇唔到。</div>
+        </div>
+      </div>
+
+      <div class="card">
         <div class="card-head"><div><div class="card-title">交換旅團（多旅團平台）</div>
           <div class="card-sub">每個旅團有自己嘅資料空間，互不影響</div></div>
           <button class="btn btn-xs" data-act="reload-registry">${icon('refresh', 13)} 重新載入 Registry</button></div>
@@ -451,6 +463,19 @@ export function mount(root) {
       db.settings = { ...db.settings, feePerYear: Number(v('#u-fee')) || 360, publicBaseUrl: v('#u-public') };
       commit();
       toast('已儲存旅團資料', 'ok'); refresh(); return;
+    }
+    if (act === 'save-links') {
+      const v = k => root.querySelector(k)?.value.trim() || '';
+      const db = load();
+      db.settings = {
+        ...(db.settings || {}),
+        troopLinks: {
+          drive: v('#tl-drive'), album: v('#tl-album'), instagram: v('#tl-instagram'),
+          facebook: v('#tl-facebook'), website: v('#tl-website'), whatsapp: v('#tl-whatsapp')
+        }
+      };
+      commit();
+      toast('已儲存團員公開連結', 'ok'); refresh(); return;
     }
     if (act === 'env-template') {
       if (!isSuper()) { toast('只有超級管理員可以開新旅團（要改 Vercel 設定）', 'err'); return; }
