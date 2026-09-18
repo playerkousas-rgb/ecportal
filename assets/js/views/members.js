@@ -385,7 +385,7 @@ function editor(id) {
           <div class="hint">團員入口登入用（YMIS＋密碼）。同進度系統同一個編號。</div></div>
         <div class="field"><label class="label">團員入口密碼</label>
           <input class="input" id="f-hubpw" type="text" autocomplete="new-password" placeholder="${m?.hubPw?.hash || m?.hubPassword ? '已設定 —— 留空＝唔改' : `留空＝預設 ${TEMP_PASSWORD}`}">
-          <div class="hint">${m?.hubPw?.hash || m?.hubPassword ? `已有密碼${m.hubPwUpdatedAt ? `（${esc(m.hubPwUpdatedAt)}）` : ''}。` : `未設就用預設 ${TEMP_PASSWORD}，首次登入要改。`}團員用 YMIS＋呢個密碼入入口。</div></div>
+          <div class="hint">${m?.hubPw?.hash || m?.hubPassword ? `已有密碼${m.hubPwUpdatedAt ? `（${esc(m.hubPwUpdatedAt)}）` : ''}。` : `未設就用預設 ${TEMP_PASSWORD}，首次登入要改。`}團員／執委：YMIS＋呢個密碼入入口。<b>領袖：呢個密碼＋上面電郵＝「領袖」入口嘅登入資料（唔使再另開帳戶）。</b></div></div>
         <div class="field"><label class="label">系統 ID（自動產生，唔好改）</label>
           <input class="input" value="${esc(m?.systemId || '（儲存時自動產生）')}" readonly style="font-family:var(--mono);font-size:12px;background:var(--bg-2)">
           <div class="hint">冇 YMIS 時嘅 fallback；一旦產生就唔會再改。</div></div>

@@ -228,11 +228,14 @@ export async function loginMember(ymis, password) {
   if (ident === 'leader') {
     return { ok: false, msg: '領袖請用「領袖」入口（電郵＋密碼）登入' };
   }
-  if (!m.hubOpened && !m.hubPw?.hash && !m.hubPassword) {
-    return { ok: false, msg: '未開戶。可以喺登入頁申請，或請執委／領袖喺後台開戶（首次密碼 1234）' };
-  }
-  if (!m.hubPw?.hash && !m.hubPassword) {
-    if (p !== TEMP_PASSWORD) return { ok: false, msg: '會籍編號或密碼不正確' };
+  const hasPw = !!(m.hubPw?.hash || m.hubPassword);
+  if (!hasPw) {
+    /* 2026-09-18 團長確認：名冊有個名＝當已開戶 —— 首次用 1234 就入到
+      （自動開戶，入去即刻強制改密碼）。以前要先喺後台撳「開戶」，呢步容易卡死人。 */
+    if (p !== TEMP_PASSWORD) {
+      return { ok: false, msg: `會籍編號或密碼不正確（未設定過密碼嘅話，首次密碼係 ${TEMP_PASSWORD}）` };
+    }
+    m.hubOpened = true;
     m.hubMustChangePw = true;
     commit();
   } else {
@@ -385,7 +388,35 @@ export async function login(role, username, password) {
     String(a.username || '').toLowerCase() === ul ||
     String(a.email || '').toLowerCase() === ul
   ));
-  if (!acc) return { ok: false, msg: '電郵／帳號或密碼不正確' };
+  if (!acc) {
+    /* 2026-09-18 團長回報「開咗新領袖用戶、有電郵有密碼，但登入唔到」：
+       「用戶」頁加嘅領袖只係名冊紀錄，以前一定要再喺「帳號與系統 → 帳戶」
+       另開一個電郵帳戶（仲要超管先開到）—— 等於死路。
+       而家：名冊入面 identity=leader、電郵對得上的，用「用戶」頁設嗰個
+       入口密碼就直接入得（唔使再開第二個帳戶）。 */
+    const lm = collection('members').find(x =>
+      x.identity === 'leader' && x.status !== 'alumni' &&
+      String(x.email || '').trim().toLowerCase() === ul);
+    if (!lm) return { ok: false, msg: '電郵／帳號或密碼不正確' };
+    if (!lm.hubPw?.hash && !lm.hubPassword) {
+      return { ok: false, msg: '呢位領袖仲未設定密碼 —— 請喺「用戶」幫佢設定入口密碼' };
+    }
+    const lfake = { pw: lm.hubPw, password: lm.hubPassword, role: 'leader', username: lm.email };
+    if (!(await verifyPassword(lfake, p))) return { ok: false, msg: '電郵／帳號或密碼不正確' };
+    if (lfake.pw && lm.hubPassword) {
+      lm.hubPw = lfake.pw;
+      delete lm.hubPassword;
+      commit();
+    }
+    const leaderMustChange = !!lm.hubMustChangePw || p === TEMP_PASSWORD;
+    setSession({
+      role: 'leader', accountId: 'member:' + lm.id, username: lm.email || lm.ymis || lm.id,
+      email: lm.email || '', name: lm.name, memberId: lm.id, via: 'email', at: Date.now(),
+      mustChangePw: leaderMustChange
+    });
+    auditLogin(lm.email || lm.name, '領袖（名冊）登入');
+    return { ok: true, role: 'leader', mustChangePw: leaderMustChange };
+  }
   /* 領袖／執委同一個入口：唔再強制揀身份，以帳戶本身角色為準 */
   if (role && role !== 'staff' && acc.role !== role) {
     return { ok: false, msg: `此帳號屬於「${ROLES[acc.role]?.name || acc.role}」，請用正確入口` };
@@ -538,6 +569,16 @@ export async function changePassword(accountId, newPassword) {
 export async function changeOwnPassword(oldPw, newPw) {
   const s = getSession();
   if (!s || s.role === 'super') return { ok: false, msg: '超管密碼唔可以更改' };
+  /* 名冊領袖（喺「用戶」頁開、用電郵入口入嚟）：密碼擺喺名冊 hubPw，唔喺 accounts */
+  if (String(s.accountId || '').startsWith('member:')) {
+    const m = find('members', String(s.accountId).slice('member:'.length));
+    if (!m) return { ok: false, msg: '搵唔到帳戶' };
+    if (!s.mustChangePw && !m.hubMustChangePw) {
+      const fake = { pw: m.hubPw, password: m.hubPassword, role: 'leader', username: m.ymis || m.email };
+      if (!(await verifyPassword(fake, oldPw))) return { ok: false, msg: '舊密碼唔正確' };
+    }
+    return setMemberHubPassword(m.id, newPw, { mustChange: false });
+  }
   const acc = accountById(s.accountId);
   if (!acc) return { ok: false, msg: '搵唔到帳戶' };
   if (!s.mustChangePw && !acc.mustChangePw) {
