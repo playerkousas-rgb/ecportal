@@ -1,8 +1,19 @@
 /**
  * ============================================================
  *  82venture · 總表同步與多旅團後端 Apps Script（Code.gs）
- *  版本：v2.2.0
+ *  版本：v2.5.0
  *
+ *  ★ v2.5.0 新增（2026-09-18 深夜，團長回報 6 項問題）：
+ *    ① constitution —— 公開團章免登入讀取（APP「發布」＋同步之後，
+ *       constitution.html 公開頁即刻見到最新版，唔使再人手上載
+ *       data/units/<編號>/constitution.json）。
+ *    ② loadPublicNotices 改為由「資料庫」分頁（正本）讀 —— 以前淨係讀
+ *       「通告全文」分頁，而嗰分頁要手動撳「總表同步」先會更新，
+ *       新發布嘅通告喺公開頁會一直見唔到。
+ *    ③ 公開頁送出嘅嘢（通告報名／收支申報／物資借用）而家會**寫入資料庫**，
+ *       執委部機開住 APP 就會自動拉到（以前只寫報表分頁，APP 入面永遠見唔到）。
+ *       通告報名會按「同一通告＋同名」防重複。
+ *    ④ status 回 backendVersion，APP 可以檢查後端係咪舊版。
  *  ★ v2.4.0 新增（2026-09-18 同一晚，長壽命架構）：
  *    分件儲存 saveDbPart / saveDbCommit —— 資料庫大過單一請求上限都照存得：
  *    前端把 db 拆成 N 件（每件 < 3MB）逐件送，暫存喺「資料庫」分頁
@@ -57,6 +68,9 @@ var MODE = 'per-unit-sheet';   // 'per-unit-sheet' = 每個旅團獨立工作表
 /** 相片上載（可選）：填咗資料夾 ID 就會將成員影嘅單據存去 Drive
  *  Drive 資料夾 → 共用 → 複製資料夾 ID（/folders/ 之後嗰串） */
 var DRIVE_FOLDER_ID = '';
+
+/** 後端版本（status 會回報；APP 用嚟檢查「你張 Sheet 係咪仲行舊 code」） */
+var BACKEND_VERSION = 'v2.5.0';
 
 /* ============================================================
    初始化與 API KEY 管理
@@ -276,6 +290,16 @@ function doPost(e) {
       return json({ success: true, ok: true, unit: textOf(body.unit), notices: loadPublicNotices(textOf(body.unit)) });
     }
 
+    /* 公開團章（v2.5.0，免 API Key）：APP「發布」＋同步咗之後，
+       constitution.html 公開頁即刻讀到最新版 —— 只回 constitution 同旅團名，
+       唔會漏名冊／帳目等其他資料。 */
+    if (body.action === 'constitution') {
+      var cons = publicConstitution(textOf(body.unit));
+      return json({ ok: cons.success === true, success: cons.success === true, found: !!cons.found,
+        constitution: cons.constitution || null, unitName: cons.unitName || '',
+        version: cons.version || '', at: cons.at || '', error: cons.error || '' });
+    }
+
     if (body.action === 'verifySetupKey') {
       if (expectedKey && key !== expectedKey) {
         return json({ ok: false, success: false, error: '未授權：API Key 唔正確' });
@@ -284,12 +308,14 @@ function doPost(e) {
     }
     if (body.action === 'ping') return json({ ok: true, msg: 'pong', unit: body.unit, at: body.at });
     if (body.action === 'noticeSignup') {
-      appendSignup(body);
-      return json({ ok: true, msg: '已記錄報名' });
+      /* v2.5.0：報名除咗寫「報名」分頁，仲會寫入資料庫（APP 執委端先至睇得到） */
+      var sgn = withLock(function () { return appendSignup(body); });
+      return json({ ok: sgn.success !== false, success: sgn.success !== false,
+        msg: sgn.duplicate ? '已經記錄過呢份報名' : '已記錄報名', duplicate: !!sgn.duplicate });
     }
     if (body.action === 'claim') {
-      var saved = appendClaim(body);
-      return json({ ok: true, msg: '已記錄，等批核', photos: saved });
+      var saved = withLock(function () { return appendClaim(body); });
+      return json({ ok: true, msg: '已記錄，等批核', photos: saved.photos || 0 });
     }
     /* ---- 相片上 Drive（v2.3.0；免 API Key，同 claim 同一信任級別）----
        APP 內申報用：只存檔回連結，唔會寫任何報表行（報表行由 syncAll 負責）。 */
@@ -299,8 +325,8 @@ function doPost(e) {
       return json({ ok: true, links: links, saved: links.length, asked: upPhotos.length });
     }
     if (body.action === 'loan') {
-      var photos = appendLoan(body);
-      return json({ ok: true, msg: '已記錄借用申請，等批核', photos: photos });
+      withLock(function () { appendLoan(body); });
+      return json({ ok: true, msg: '已記錄借用申請，等批核', photos: 0 });
     }
     if (body.action === 'sync') {
       var counts = withLock(function () { return syncAll(body); });
@@ -326,7 +352,7 @@ function doPost(e) {
       return json(loadMyRequests(textOf(body.ymis)));
     }
     if (body.action === 'status' || body.action === 'test') {
-      return json({ ok: true, msg: '82venture 後端正常', spreadsheet: SpreadsheetApp.getActiveSpreadsheet().getName(), tabs: SHEET_TABS, at: new Date() });
+      return json({ ok: true, msg: '82venture 後端正常', spreadsheet: SpreadsheetApp.getActiveSpreadsheet().getName(), tabs: SHEET_TABS, backendVersion: BACKEND_VERSION, at: new Date() });
     }
     // 兼容：冇 action 但係 82venture 嘅資料（當 sync）
     if (!body.action && body.tables) {
@@ -348,6 +374,12 @@ function doGet(e) {
     supplied = String((e.parameter && (e.parameter.apikey || e.parameter.apiKey)) || '');
   } catch (err0) { action = ''; }
   if (action === 'notices') return json({ success: true, ok: true, unit: textOf((e.parameter && e.parameter.unit) || ''), notices: loadPublicNotices(textOf((e.parameter && e.parameter.unit) || '')) });
+  if (action === 'constitution') {
+    var consG = publicConstitution(textOf((e.parameter && e.parameter.unit) || ''));
+    return json({ ok: consG.success === true, success: consG.success === true, found: !!consG.found,
+      constitution: consG.constitution || null, unitName: consG.unitName || '',
+      version: consG.version || '', at: consG.at || '', error: consG.error || '' });
+  }
   if (action === 'load') {
     var expected = PropertiesService.getScriptProperties().getProperty('API_KEY');
     if (supplied && expected && supplied !== expected) return json({ success: false, ok: false, error: 'Invalid API Key' });
@@ -766,8 +798,20 @@ function writeNoticesFull(ss, unit, notices) {
 /**
  * 讀公開通告（免登入）：只回 published
  * 兩個前端共用一個後端 —— 公開頁唔使等改 Git，同步完就見到新通告
+ *
+ * v2.5.0：改為由「資料庫」分頁（APP 儲存嘅正本）讀 ——
+ * 以前淨係讀「通告全文」分頁，但嗰分頁要手動撳「總表同步」先會更新，
+ * APP 新開／改完嘅通告喺公開頁會一直見唔到（團長回報「其他功能成唔成唔知」嘅死因之一）。
+ * 「通告全文」分頁留返做後備（舊資料／從未同步過嘅旅團）。
  */
 function loadPublicNotices(unit) {
+  try {
+    var r = loadDb(unit);
+    if (r.success && r.found && r.db && Array.isArray(r.db.notices)) {
+      var fromDb = r.db.notices.filter(function (n) { return n && n.status === 'published' && n.id; });
+      if (fromDb.length) return fromDb;
+    }
+  } catch (e0) { /* 跌落去「通告全文」分頁 */ }
   var out = [];
   var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('通告全文');
   if (!sh) return out;
@@ -784,6 +828,26 @@ function loadPublicNotices(unit) {
     } catch (e) { /* 壞行就略過 */ }
   }
   return out;
+}
+
+/**
+ * 公開團章（v2.5.0，免 API Key）：由「資料庫」分頁抽 constitution。
+ * 只回 constitution（＋旅團名／版本）—— 名冊、帳目等一概唔會出去。
+ * 只回已經有內容嘅（未寫過團章／未同步過 → found:false，公開頁會用靜態檔後備）。
+ */
+function publicConstitution(unit) {
+  var r;
+  try { r = loadDb(unit); } catch (e) { return { success: false, found: false, error: String(e) }; }
+  if (!r.success) return { success: false, found: false, error: r.error || '' };
+  if (!r.found) return { success: true, found: false };
+  var db = r.db || {};
+  var c = db.constitution;
+  if (!c || !Array.isArray(c.chapters) || !c.chapters.length) return { success: true, found: false };
+  return {
+    success: true, found: true, constitution: c,
+    unitName: (db.profile && db.profile.name) || (db.unit && db.unit.name) || '',
+    version: c.version || '', at: r.at || ''
+  };
 }
 
 /** 通告報名（攤開） */
@@ -1204,7 +1268,32 @@ function writeMemberList(ss, rows) {
 
 /* ============================================================
    公開頁動作：收支申報／物資借用／通告報名
+   ------------------------------------------------------------
+   v2.5.0 起呢三樣嘢**都會寫入「資料庫」分頁**（APP 嘅正本）：
+   以前只係寫報表分頁（收支申報／物資借用／報名），執委部機嘅 APP
+   永遠見唔到 —— 成員送出咗申報，司庫要自己開 Google Sheet 先知有嘢等批。
+   而家寫入資料庫之後，執委部機開住 APP（60 秒 poll／開機拉）就會自動見到。
+   （後端從來未同步過資料庫嘅旅團：照舊淨係寫報表分頁，唔會無中生有起個 db。）
    ============================================================ */
+
+/**
+ * 把一筆紀錄寫入資料庫（要喺 withLock 入面用）。
+ * mutator(db) 改 db；回 false = 唔使存（例如重複報名）。
+ * 回 { found, dbSaved, skip }（後端冇資料庫 → found:false，只寫報表分頁）。
+ */
+function appendIntoDb(unit, mutator) {
+  var r = loadDb(unit);
+  if (!r.success || !r.found || !r.db) return { found: false, dbSaved: false, skip: false };
+  if (mutator(r.db) === false) return { found: true, dbSaved: false, skip: true };
+  /* 用啱啱讀到嘅版本做 baseVersion —— 同一把鎖入面冇人插到隊，實得 */
+  var sv = saveDb({ unit: unit, db: r.db, baseVersion: String(r.version || '') });
+  return { found: true, dbSaved: sv.success === true, skip: false, error: sv.error || '' };
+}
+
+/** 時間戳（同 APP 嘅 nowStamp() 一樣格式） */
+function nowStampGs() {
+  return Utilities.formatDate(new Date(), 'Asia/Hong_Kong', 'yyyy-MM-dd HH:mm:ss');
+}
 
 /** 手機記一筆（成員影相＋選欄目） */
 function appendClaim(body) {
@@ -1223,7 +1312,29 @@ function appendClaim(body) {
     p.category || '', p.item || '', Number(p.amount) || 0, p.byName || '', p.note || '',
     (p.photos || []).length, links.join('\n'), p.id || ''
   ]);
-  return links.length;
+  /* v2.5.0：同時寫入資料庫（APP「財務 → 收支申報」待批清單即刻見到） */
+  var dbR = appendIntoDb(body.unit || '', function (db) {
+    if (!Array.isArray(db.claims)) db.claims = [];
+    if (db.claims.some(function (c) { return c && String(c.id) === String(p.id || ''); })) return false;   // 防重送
+    db.claims.push({
+      id: p.id || ('cl_' + Date.now()),
+      type: p.type === 'income' ? 'income' : 'expense',
+      amount: Number(p.amount) || 0,
+      date: p.date || '',
+      category: p.category || '',
+      item: p.item || '',
+      byName: p.byName || '',
+      memberId: p.memberId || '',
+      note: (p.note || '') + (p.contact ? '（聯絡：' + p.contact + '）' : ''),
+      receipt: !!(p.receipt || (p.photos || []).length),
+      photos: links.map(function (l) { return { name: '', type: 'image/jpeg', link: l }; }),
+      photosOnDrive: links.length > 0,
+      status: 'pending',
+      requestedBy: 'public:entry',
+      requestedAt: nowStampGs()
+    });
+  });
+  return { photos: links.length, dbSaved: dbR.dbSaved, dbFound: dbR.found };
 }
 
 /** 將 base64 相片存去 Drive（未設定資料夾就只記數量） */
@@ -1282,10 +1393,34 @@ function appendLoan(body) {
     body.unit || '', new Date(), p.byName || '', p.contact || '', p.itemCode || '', p.itemName || '',
     Number(p.qty) || 1, p.fromDate || '', p.toDate || '', p.purpose || '', '待批核', p.id || ''
   ]);
-  return 0;
+  /* v2.5.0：同時寫入資料庫（APP「物資 → 借用與批核」即刻見到） */
+  var dbR = appendIntoDb(body.unit || '', function (db) {
+    if (!Array.isArray(db.invLoans)) db.invLoans = [];
+    if (db.invLoans.some(function (l) { return l && String(l.id) === String(p.id || ''); })) return false;   // 防重送
+    db.invLoans.push({
+      id: p.id || ('ln_' + Date.now()),
+      itemId: p.itemId || '',
+      qty: Number(p.qty) || 1,
+      borrowerName: p.byName || '',
+      borrowerId: '',
+      purpose: p.purpose || '',
+      outDate: p.fromDate || '',
+      dueDate: p.toDate || '',
+      returnDate: '',
+      status: 'requested',
+      requestedBy: 'public:borrow',
+      requestedByAccountId: '',
+      requestedAt: nowStampGs(),
+      approvedBy: '',
+      note: p.contact ? '聯絡：' + p.contact : ''
+    });
+  });
+  return { dbSaved: dbR.dbSaved, dbFound: dbR.found };
 }
 
-/** 公開頁即時報名（notice.html） */
+/** 公開頁即時報名（notice.html）。
+    v2.5.0：同時寫入資料庫 —— 執委喺 APP「通告 → 報名紀錄」即刻見到，
+    並按「同一通告＋同一個名」防重複（換裝置重複提交都唔會重複入數）。 */
 function appendSignup(body) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var p = body.payload || {};
@@ -1295,7 +1430,30 @@ function appendSignup(body) {
   if (sh.getLastRow() === 0) {
     sh.appendRow(['旅團', '通告編號', '通告標題', '報名時間', '姓名', '聯絡', '出席與否', '全部欄位(JSON)']).getRange(1, 1, 1, 8).setFontWeight('bold');
   }
+  var dup = false;
+  var dbR = appendIntoDb(body.unit || '', function (db) {
+    if (!Array.isArray(db.notices)) db.notices = [];
+    var n = null;
+    for (var i = 0; i < db.notices.length; i++) {
+      if (String(db.notices[i] && db.notices[i].id) === String(p.noticeId || '')) { n = db.notices[i]; break; }
+    }
+    if (!n) return false;                                   // 資料庫未有你張通告（未同步過）→ 淨係寫報表分頁
+    if (!Array.isArray(n.signups)) n.signups = [];
+    var who = String(v.name || '').trim();
+    if (who && n.signups.some(function (s) { return s && String(s.name || (s.values && s.values.name) || '').trim() === who; })) {
+      dup = true;
+      return false;                                         // 同一通告＋同名 → 唔好重複入數
+    }
+    n.signups.push({
+      id: 'sg_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
+      at: p.at || nowStampGs(),
+      name: who,
+      values: v
+    });
+  });
+  if (dup) return { success: true, duplicate: true, dbSaved: false };
   sh.appendRow([body.unit || '', p.noticeId || '', p.noticeTitle || '', p.at || new Date(), v.name || '', v.contact || '', attendOf(v), JSON.stringify(v)]);
+  return { success: true, duplicate: false, dbSaved: dbR.dbSaved, dbFound: dbR.found };
 }
 
 /* ============================================================

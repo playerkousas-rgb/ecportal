@@ -15,6 +15,73 @@ const DB_CHUNK = 45000;
 let sheet = [];
 /* 模擬「待批完成」分頁（addRequest / myRequests） */
 const requests = [];
+/* 模擬「進度追蹤」分頁（save / reviewRequest；同一個後端、兩個前端共用） */
+const progressRows = [];          // { ymis, itemId, date, confirmer, note }
+/* 模擬「成員名單」分頁（saveDb 會由名冊更新 —— 同真 Code.gs syncMembers） */
+const progressMembers = [];       // { ymis, name }
+
+/* saveDb 之後同步「成員名單」（同真 Code.gs：唔會刪人，進度紀錄對得返） */
+function syncProgressMembers(db) {
+  (db.members || []).forEach(m => {
+    const ymis = String(m.ymis || '').trim();
+    if (!ymis) return;
+    const hit = progressMembers.find(x => x.ymis === ymis);
+    if (hit) hit.name = String(m.name || hit.name);
+    else progressMembers.push({ ymis, name: String(m.name || '') });
+  });
+}
+
+/* GET ?action=load —— 同真 Code.gs loadProgressData 同一種格式（兩個前端共用） */
+function loadProgress() {
+  const progress = {}, flat = {};
+  progressRows.forEach(r => {
+    if (!progress[r.ymis]) { progress[r.ymis] = {}; flat[r.ymis] = {}; }
+    progress[r.ymis][r.itemId] = { date: r.date || '', confirmer: r.confirmer || '' };
+    flat[r.ymis][r.itemId] = r.date || '';
+  });
+  return {
+    ok: true, success: true,
+    members: progressMembers.map(m => ({ ymis: m.ymis, name: m.name })),
+    progress, flatProgress: flat,
+    pendingRequests: requests.filter(r => r.status === 'pending').map(r => ({ ...r })),
+    otherBadges: {}, logs: [], logsSupported: true, logRequests: [], logRequestsSupported: true,
+    at: new Date().toISOString()
+  };
+}
+
+/* POST action=save（進度前端／執委系統直接勾；同真 saveProgress） */
+function saveProgress(body) {
+  let processed = 0;
+  (body.changes || []).forEach(c => {
+    const ymis = String(c.ymis || '').trim();
+    const itemId = String(c.itemId || '').trim();
+    if (!ymis || !itemId) return;
+    const i = progressRows.findIndex(r => r.ymis === ymis && r.itemId === itemId);
+    if (c.uncomplete) { if (i >= 0) progressRows.splice(i, 1); processed++; return; }
+    if (i >= 0) progressRows[i] = { ymis, itemId, date: c.date || '', confirmer: body.confirmer || c.confirmer || '', note: c.note || '' };
+    else progressRows.push({ ymis, itemId, date: c.date || '', confirmer: body.confirmer || c.confirmer || '', note: c.note || '' });
+    processed++;
+  });
+  return { ok: true, success: true, processed };
+}
+
+/* POST action=reviewRequest（執委批核；同真 reviewProgressRequest） */
+function reviewRequest(body) {
+  const reqId = String(body.request_id || '');
+  const r = requests.find(x => x.request_id === reqId);
+  if (!r) return { ok: false, success: false, error: '搵唔到申請（可能已經處理）' };
+  if (r.status !== 'pending') return { ok: false, success: false, error: '呢個申請已經處理過' };
+  const decision = body.decision === 'approved' ? 'approved' : 'rejected';
+  r.status = decision;
+  r.review_note = String(body.review_note || '');
+  r.reviewer = String(body.reviewer || '');
+  r.confirmed_date = String(body.confirmed_date || '') || r.requested_date || new Date().toISOString().slice(0, 10);
+  if (decision !== 'approved') return { ok: true, success: true, message: '已拒絕' };
+  const i = progressRows.findIndex(p => p.ymis === r.ymis && p.itemId === r.item_id);
+  const row = { ymis: r.ymis, itemId: r.item_id, date: r.confirmed_date, confirmer: r.reviewer, note: '由申請轉入：' + r.review_note };
+  if (i >= 0) progressRows[i] = row; else progressRows.push(row);
+  return { ok: true, success: true, message: '已批准並寫入進度' };
+}
 
 function saveDb(body) {
   const unit = String(body.unit || 'UNKNOWN');
@@ -35,6 +102,7 @@ function saveDb(body) {
   for (let p = 0, i = 1; p < text.length; p += DB_CHUNK, i++) {
     sheet.push([unit, i, text.substring(p, p + DB_CHUNK), now, version]);
   }
+  syncProgressMembers(body.db || {});                  // 名冊 → 「成員名單」分頁
   return { ok: true, success: true, bytes: text.length, chunks: Math.ceil(text.length / DB_CHUNK), at: now, version };
 }
 
@@ -142,12 +210,18 @@ http.createServer((req, res) => {
   req.on('end', () => {
     let body = {};
     try { body = JSON.parse(raw || '{}'); } catch { /* ignore */ }
+    /* GET ?action=load —— 進度前端／團員入口「我的進度」讀同一份資料 */
+    let qAction = '';
+    try { qAction = new URL(req.url, 'http://localhost').searchParams.get('action') || ''; } catch { /* */ }
     let out;
-    const a = body.action || '';
+    const a = qAction || body.action || '';
     const key = body.apiKey || body.apikey || '';
-    const needsKey = a === 'saveDb' || a === 'loadDb' || a === 'dbInfo' || a === 'saveDbPart' || a === 'saveDbCommit';
+    const needsKey = a === 'saveDb' || a === 'loadDb' || a === 'dbInfo' || a === 'saveDbPart' || a === 'saveDbCommit'
+      || a === 'save' || a === 'saveOtherBadge' || a === 'reviewRequest' || a === 'reviewLogRequest';
 
-    if (EXPECTED_KEY && needsKey && key !== EXPECTED_KEY) {
+    if (a === 'load') {
+      out = loadProgress();
+    } else if (EXPECTED_KEY && needsKey && key !== EXPECTED_KEY) {
       out = { ok: false, success: false, error: '未授權：API Key 唔正確' };
     } else if (a === 'saveDb') out = saveDb(body);
     else if (a === 'saveDbPart') out = saveDbPart(body);
@@ -175,7 +249,75 @@ http.createServer((req, res) => {
       }
     } else if (a === 'myRequests') {
       out = { ok: true, success: true, requests: requests.filter(r => r.ymis === String(body.ymis || '')).slice(0, 60) };
-    } else if (a === 'status' || a === 'ping') out = { ok: true, success: true, msg: 'pong' };
+    } else if (a === 'save' || a === 'saveOtherBadge') {
+      out = saveProgress(body);
+    } else if (a === 'reviewRequest') {
+      out = reviewRequest(body);
+    } else if (a === 'status' || a === 'ping') out = { ok: true, success: true, msg: 'pong', backendVersion: 'v2.5.0' };
+    /* v2.5.0 公開團章：由「資料庫」抽 constitution（同真 Code.gs 一樣） */
+    else if (a === 'constitution') {
+      const r = loadDb(String(body.unit || ''));
+      const db = (r.found && r.db) || {};
+      const c = db.constitution;
+      if (r.found && c && Array.isArray(c.chapters) && c.chapters.length) {
+        out = { ok: true, success: true, found: true, constitution: c,
+          unitName: (db.profile && db.profile.name) || (db.unit && db.unit.name) || '', version: c.version || '' };
+      } else out = { ok: true, success: true, found: false, constitution: null };
+    }
+    /* v2.5.0 公開通告：由「資料庫」讀（同真 Code.gs 一樣） */
+    else if (a === 'notices') {
+      const r = loadDb(String(body.unit || ''));
+      const fromDb = (r.found && Array.isArray(r.db.notices))
+        ? r.db.notices.filter(n => n && n.status === 'published' && n.id) : [];
+      out = { ok: true, success: true, notices: fromDb };
+    }
+    /* v2.5.0 公開頁報名：寫入資料庫（同真 Code.gs 一樣，同名防重複） */
+    else if (a === 'noticeSignup') {
+      const p = body.payload || {};
+      const v = p.values || {};
+      const r = loadDb(String(body.unit || ''));
+      let dup = false, saved = false;
+      if (r.found && r.db && Array.isArray(r.db.notices)) {
+        const n = r.db.notices.find(x => String(x && x.id) === String(p.noticeId || ''));
+        if (n) {
+          if (!Array.isArray(n.signups)) n.signups = [];
+          const who = String(v.name || '').trim();
+          if (who && n.signups.some(s => String((s && s.name) || ((s.values || {}).name) || '').trim() === who)) dup = true;
+          else {
+            n.signups.push({ id: 'sg_' + Date.now(), at: p.at || new Date().toISOString(), name: who, values: v });
+            const sv = saveDb({ unit: body.unit, db: r.db, baseVersion: String(r.version || '') });
+            saved = sv.success === true;
+          }
+        }
+      }
+      out = { ok: true, success: true, duplicate: dup, dbSaved: saved, msg: dup ? '已經記錄過呢份報名' : '已記錄報名' };
+    }
+    /* v2.5.0 公開收支申報／物資借用：寫入資料庫 */
+    else if (a === 'claim' || a === 'loan') {
+      const p = body.payload || {};
+      const r = loadDb(String(body.unit || ''));
+      let saved = false;
+      if (r.found && r.db) {
+        if (a === 'claim') {
+          if (!Array.isArray(r.db.claims)) r.db.claims = [];
+          if (!r.db.claims.some(c => String(c && c.id) === String(p.id || ''))) {
+            r.db.claims.push({ id: p.id || ('cl_' + Date.now()), type: p.type === 'income' ? 'income' : 'expense',
+              amount: Number(p.amount) || 0, date: p.date || '', category: p.category || '', item: p.item || '',
+              byName: p.byName || '', note: p.note || '', status: 'pending', requestedBy: 'public:entry', requestedAt: new Date().toISOString() });
+          }
+        } else {
+          if (!Array.isArray(r.db.invLoans)) r.db.invLoans = [];
+          if (!r.db.invLoans.some(l => String(l && l.id) === String(p.id || ''))) {
+            r.db.invLoans.push({ id: p.id || ('ln_' + Date.now()), itemId: p.itemId || '', qty: Number(p.qty) || 1,
+              borrowerName: p.byName || '', purpose: p.purpose || '', outDate: p.fromDate || '', dueDate: p.toDate || '',
+              returnDate: '', status: 'requested', requestedBy: 'public:borrow', requestedAt: new Date().toISOString(), approvedBy: '', note: '' });
+          }
+        }
+        const sv = saveDb({ unit: body.unit, db: r.db, baseVersion: String(r.version || '') });
+        saved = sv.success === true;
+      }
+      out = { ok: true, success: true, msg: '已記錄，等批核', dbSaved: saved };
+    }
     else out = { ok: false, success: false, error: '未知 action：' + a };
 
     res.statusCode = 200;

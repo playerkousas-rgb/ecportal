@@ -79,6 +79,25 @@ try {
       store.add('transactions', { date: step.date, type: step.type, item: step.item, amount: step.amount });
       out.steps.push({ op: 'addTx', total: store.load().transactions.length });
     }
+    /* 設置測試資料（tests/hub.mjs 用）：一次過放入活動／通告／連結等 */
+    if (step.op === 'put') {
+      const db = store.load();
+      db[step.coll] = step.rows;
+      store.commit();
+      out.steps.push({ op: 'put', coll: step.coll, n: (step.rows || []).length });
+    }
+    if (step.op === 'patchSettings') {
+      const db = store.load();
+      db.settings = { ...(db.settings || {}), ...step.patch };
+      store.commit();
+      out.steps.push({ op: 'patchSettings', keys: Object.keys(step.patch || {}) });
+    }
+    if (step.op === 'setConstitution') {
+      const db = store.load();
+      db.constitution = step.obj;
+      store.commit();
+      out.steps.push({ op: 'setConstitution', version: step.obj?.version || '' });
+    }
     if (step.op === 'push') {
       const r = await remote.pushDb({ silent: true });
       out.steps.push({ op: 'push', ok: r.ok, error: r.error || '', bytes: r.bytes || 0, parts: r.parts || 0, pending: Number(store.load().sync?.pending || 0) });
@@ -147,6 +166,24 @@ try {
       out.steps.push({
         op: 'checksync', ok: !!r?.ok, updated: !!r?.updated, merged: !!r?.merged, upToDate: !!r?.upToDate,
         members: (db?.members || []).length, names: (db?.members || []).map(m => m.name),
+        pending: Number(db?.sync?.pending || 0)
+      });
+    }
+    /* 跨視窗同步（2026-09-19）：部機開住、隊友喺另一部機推咗新版，
+       用家「撳返呢個視窗」（focus）→ 1.2 秒內自動對版本、拉隊友嘅改動。
+       （前一個 step 通常係 teammatePush —— 模擬「另一個視窗／無痕視窗做咗嘢」） */
+    if (step.op === 'watchAndFocus') {
+      remote.arm();
+      remote.startVisibilityWatch();
+      await new Promise(r => setTimeout(r, 300));                 // 等 watcher 綁好
+      window.dispatchEvent(new window.Event('focus'));            // 模擬切返呢個視窗
+      await new Promise(r => setTimeout(r, step.waitMs || 2600)); // 等 1.2s debounce＋拉取
+      const db = store.tryLoad();
+      out.steps.push({
+        op: 'watchAndFocus',
+        members: (db?.members || []).length,
+        names: (db?.members || []).map(m => m.name),
+        lastSyncedVersion: String(db?.sync?.lastSyncedVersion || ''),
         pending: Number(db?.sync?.pending || 0)
       });
     }

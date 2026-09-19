@@ -136,7 +136,9 @@ if (MODE === 'real') {
 
 if (MODE === 'mock') {
   section('示範資料');
-  ok('示範團員 11 人（全部假名）', db.members.length === 11, String(db.members.length));
+  ok('示範團員 12 人（全部假名；11 現役＋1 舊團員）',
+    db.members.length === 12 && db.members.filter(m => m.status !== 'alumni').length === 11,
+    `${db.members.length}（現役 ${db.members.filter(m => m.status !== 'alumni').length}）`);
   ok('示範帳目 12 筆', db.transactions.length === 12, String(db.transactions.length));
   ok('示範物資 10 件', db.invItems.length === 10, String(db.invItems.length));
   ok('示範借用 3 宗', db.invLoans.length === 3);
@@ -235,8 +237,20 @@ if (MODE === 'mock') {
 section('生日提示');
 const b = model.birthdaySummary();
 if (MODE === 'mock') {
-  ok('7 日內有生日提示', b.in7.length >= 1, b.in7.map(x => `${x.name}:${x.days}`).join(', '));
-  ok('本月生日有清單', b.month.length >= 1, String(b.month.length));
+  /* 種子嘅生日係寫死日子（09-05／09-16／09-18…）—— 過咗嗰幾日測試就會假失敗。
+     為咗任何日子跑都穩定：臨時將一位示範團員嘅生日設做「今日」，驗完還原。 */
+  const bmem = db.members.find(m => m.status !== 'alumni' && m.birthday);
+  const origBday = bmem?.birthday;
+  if (bmem) {
+    const now = new Date();                                  // 本地時間（同 todayISO() 一致）
+    const md = `${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    bmem.birthday = `${String(bmem.birthday).slice(0, 4)}-${md}`;
+    store.commit();
+  }
+  const b2 = model.birthdaySummary();
+  ok('7 日內有生日提示', b2.in7.some(x => x.name === bmem?.name), b2.in7.map(x => `${x.name}:${x.days}`).join(', '));
+  ok('本月生日有清單', b2.month.some(x => x.name === bmem?.name), String(b2.month.length));
+  if (bmem) { bmem.birthday = origBday; store.commit(); }
 } else {
   ok('真實資料可計出生日（本月/7日內）', Array.isArray(b.month) && Array.isArray(b.in7));
 }
@@ -390,18 +404,21 @@ section('團費收款紀錄');
   store.load().fees = before.filter(f => f.period !== 'TEST-27');
   store.commit();
 
-  /* 新旅團由空白開始 —— 自己整兩個測試團員，唔靠 82 旅嘅名冊 */
-  while (model.members().filter(m => m.status !== 'alumni').length < 2) {
+  /* 新旅團由空白開始 —— 自己整兩個測試團員，唔靠 82 旅嘅名冊。
+     （收費表唔包領袖——feeExempt——所以測試團員要揀非領袖，否則 mock
+      示範名冊第一個係「示範領袖」，收款表搵唔返佢條紀錄。） */
+  const feeable = () => model.members().filter(m => m.status !== 'alumni' && !model.feeExempt(m));
+  while (feeable().length < 2) {
     store.add('members', { name: `測試團員 ${model.members().length + 1}`, identity: 'member' });
   }
   const active = model.members().filter(m => m.status !== 'alumni');
-  const m1 = active[0], m2 = active[1];
+  const m1 = feeable()[0], m2 = feeable()[1];
 
   const f1 = store.add('fees', { id: 'fee-t1', memberId: m1.id, period: 'TEST-27', label: 'TEST-27 團費', amount: 360, due: '2026-09-30', paid: false });
   const f2 = store.add('fees', { id: 'fee-t2', memberId: m2.id, period: 'TEST-27', label: 'TEST-27 團費', amount: 360, due: '2026-09-30', paid: false });
 
   const g = model.feeGrid('TEST-27');
-  ok('收款表列出所有現役團員', g.length === active.length, `${g.length} vs ${active.length}`);
+  ok('收款表列出所有要收費嘅現役團員（領袖免收）', g.length === feeable().length, `${g.length} vs ${feeable().length}`);
   ok('未交嘅人顯示未收', g.filter(r => !r.paid).length === g.length - 0 || true);
   ok('金額預設 $360', g.every(r => r.amount === 360), JSON.stringify([...new Set(g.map(r => r.amount))]));
   ok('認得出哪位團員交了（feeGrid 對應 memberId）', g.some(r => r.member.id === m1.id && r.id === 'fee-t1'));
@@ -727,7 +744,7 @@ section('通告（開一張・分享・報名）');
   if ((store.load().notices || []).length < 2) {
     store.add('notices', {
       title: { zh: '測試通告（smoke）', en: 'Test Notice' }, status: 'published',
-      needSignup: true, eventDate: '2026-10-01', body: { zh: '內容', en: 'Body' }
+      needSignup: true, eventDate: '2026-10-01', deadline: '2026-09-30', body: { zh: '內容', en: 'Body' }
     });
     store.add('notices', {
       title: { zh: '測試通告二（smoke）', en: 'Test Notice 2' }, status: 'published',
@@ -751,6 +768,8 @@ section('通告（開一張・分享・報名）');
   // 分享對話框（QR Code）
   const shareBtn = doc.querySelector('[data-share]');
   ok('清單有分享掣', !!shareBtn);
+  /* 清單畫面係按日期排（唔一定等於 store 順序）—— 斷言要以「實際分享嗰張」做準 */
+  const shared = shareBtn ? (store.find('notices', shareBtn.dataset.share) || first) : first;
   if (shareBtn) {
     shareBtn.click();
     await new Promise(r => setTimeout(r, 60));
@@ -763,12 +782,13 @@ section('通告（開一張・分享・報名）');
     ok('分享對話框有「儲存 QR 圖」掣（貼落 WhatsApp 用）', !!ov && !!ov.querySelector('[data-sh="img"]'));
     ok('分享文字可以自己改（textarea 預覽）', !!ov && !!ov.querySelector('#sh-text'));
     const preview = ov?.querySelector('#sh-text')?.value || '';
-    ok('分享文字有標題 / 日期 / 報名連結同截止提示',
-      /通告|Notice|活動/.test(preview) && preview.includes('notice.html') && /截止|報名/.test(preview),
+    ok('分享文字有標題 / 日期 / 團員入口連結（有截止日會提埋）',
+      /通告|Notice|活動/.test(preview) && preview.includes('members.html')
+      && (!shared?.deadline ? true : /截止/.test(preview)),
       preview.slice(0, 80));
     ok('WhatsApp 分享連結係 wa.me（一撳開 WhatsApp）',
-      (() => { const t = noticesMod.whatsappShareUrl(first);
-        return /^https:\/\/wa\.me\/\?text=/.test(t) && decodeURIComponent(t).includes('notice.html'); })());
+      (() => { const t = noticesMod.whatsappShareUrl(shared);
+        return /^https:\/\/wa\.me\/\?text=/.test(t) && decodeURIComponent(t).includes('members.html'); })());
     doc.querySelector('.overlay [data-close-x]')?.click();
     await new Promise(r => setTimeout(r, 20));
   }
@@ -989,8 +1009,8 @@ section('快速記帳（影相＋選欄目）');
   await new Promise(r => setTimeout(r, 80));
   const ov2 = doc.querySelector('.overlay');
   ok('彈出 QR 對話框（成員用手機掃）', !!ov2 && !!ov2.querySelector('.qr-box svg'));
-  ok('QR 連結指向 entry.html（帶旅團編號）',
-    (ov2?.querySelector('#es-url')?.value || '').includes('entry.html?u='),
+  ok('QR 連結指向團員入口 members.html（掃一次齊晒；帶旅團編號）',
+    (ov2?.querySelector('#es-url')?.value || '').includes('members.html?u='),
     ov2?.querySelector('#es-url')?.value);
   ok('可以設定 Apps Script 送出網址（寫入總表）', !!ov2?.querySelector('#es-submit'));
   if (MODE === 'real') {
@@ -1368,18 +1388,21 @@ section('開新旅團教學（只限超管）');
     !/開新旅團/.test(leadUnits.textContent) && !/TROOP_/.test(leadUnits.textContent)
     && !/超級管理員/.test(leadUnits.textContent));
 
+  /* 多旅團部署教學而家係超管專用（同 newunit 一樣）—— 領袖睇日常教學就夠 */
+  window.location.hash = '#/docs/start';
+  await new Promise(r => setTimeout(r, 60));
+  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+  await new Promise(r => setTimeout(r, 80));
   window.location.hash = '#/docs/multiunit';
   await new Promise(r => setTimeout(r, 60));
   window.dispatchEvent(new window.HashChangeEvent('hashchange'));
   await new Promise(r => setTimeout(r, 80));
   const multiTxt = doc.getElementById('view').textContent;
-  ok('領袖登入：多旅團章節只講架構，冇接入步驟／Git 步驟',
-    /多旅團架構/.test(multiTxt)
+  ok('領袖登入：多旅團部署教學唔會出現（只限超管，同 newunit 一樣）',
+    !/多旅團架構（每個旅團一個後端）/.test(multiTxt)
     && !/Commit & push/.test(multiTxt)
     && !/新旅團點接入（推薦/.test(multiTxt)
     && !/ADMIN_ONBOARDING/.test(multiTxt));
-  ok('領袖登入：指路去登入前嘅「部署指南」（毋須登入都睇得到）',
-    /部署指南/.test(multiTxt) && /毋須登入/.test(multiTxt));
 
   /* 直接打網址／亂入 #/docs/newunit 一樣唔會見到教學內容 */
   window.location.hash = '#/docs/newunit';

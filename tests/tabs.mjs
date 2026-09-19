@@ -100,7 +100,8 @@ async function clickTab(tabId) {
    ① 每個有分頁列嘅 section，逐粒掣真係撳落去
    ============================================================ */
 const SUITES = [
-  { name: '帳號與系統', home: '#/admin', tabs: ['perms', 'unit', 'data', 'audit', 'mock'] },
+  /* 「mock」分頁係 super 限定（下面特登驗：leader 見唔到、super 見到） */
+  { name: '帳號與系統', home: '#/admin', tabs: ['perms', 'unit', 'data', 'audit'] },
   { name: '通告', home: '#/notices', tabs: ['signups', 'settings'] },
   { name: '表格與同步', home: '#/tables', tabs: ['sync', 'source', 'data'] },
   { name: '財政', home: '#/finance', tabs: ['reports', 'fees', 'claims', 'budgets', 'import'] },
@@ -126,7 +127,6 @@ const RENDER = [
   ['#/admin', 'perms', '權限'],
   ['#/admin', 'unit', '旅團'],
   ['#/admin', 'data', '備份'],
-  ['#/admin', 'mock', '示範'],
   ['#/tables', 'sync', '總表同步'],
   ['#/notices', 'signups', '報名']
 ];
@@ -136,6 +136,29 @@ for (const [home, tab, needle] of RENDER) {
   const txt = doc.getElementById('view')?.textContent || '';
   ok(`撳完 ${home}/${tab} 見到「${needle}」`, txt.includes(needle),
     txt.replace(/\s+/g, ' ').slice(0, 90));
+}
+
+/* ============================================================
+   ②b 「示範資料（MOCK）」分頁＝super 限定
+       （2026-09 起 admin 嘅 mock 分頁淨係 super 見到 ——
+         leader 見唔到係預期，唔係分掣壞咗）
+   ============================================================ */
+section('mock 分頁＝super 限定');
+{
+  await goTo('#/admin');
+  ok('leader 見唔到 mock 分頁（super 限定）', !doc.querySelector('#view [data-tab="mock"]'));
+
+  /* 轉 super 身份再驗一次：個掣喺度、撳得、render 到「示範」 */
+  auth.logout();
+  const r = await auth.login('super', 'sheep', '0728');
+  ok('super 登入到', r.ok === true, JSON.stringify(r));
+  await goTo('#/');            /* 離開 #/admin 先，之後先會觸發 hashchange 返去 */
+  await goTo('#/admin');
+  ok('super 見到 mock 分頁', !!doc.querySelector('#view [data-tab="mock"]'));
+  const c = await clickTab('mock');
+  ok('super 撳「mock」→ 去到 #/admin/mock', c.found && c.hash === '#/admin/mock',
+    c.found ? `個 hash 仲係 ${c.hash}` : '搵唔到粒掣');
+  ok('render 到「示範」內容', (doc.getElementById('view')?.textContent || '').includes('示範'));
 }
 
 /* ============================================================

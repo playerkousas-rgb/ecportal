@@ -191,7 +191,10 @@ export function getRegistry() {
       backendTrusted: isTrustedExecUrl(gasUrl),
       /* 呢個旅團係唔係靠伺服器端 env 開（Git 未加 JSON） */
       fromEnv: fromEnvOnly,
-      progressServerSide: !!(progressBackend && progressKey)
+      /* 「一個後端、兩個前端」：進度後端＝旅團後端本身。設咗 PROGRESSBACKEND
+         專用變數固然係 server-side；淨係設咗 BACKEND＋APIKEY（開團嗰對）都算
+         —— getProgressRegistryEntry 會自動用返同一個 /exec，前端乜都唔使填。 */
+      progressServerSide: !!((progressBackend && progressKey) || (gasUrl && apiKey))
     };
   }
   return out;
@@ -268,13 +271,15 @@ export function getTrustedUnit(id) {
 export function getProgressRegistryEntry(id) {
   /* 一個後端、兩個前端：進度資料就係旅團自己嘅後端（GAS /exec）。
      伺服器端可以設定 TROOP_<id>_PROGRESSBACKEND / _PROGRESSAPIKEY（可選覆蓋；
-     一般情況喺前端「進度 → 設定」填就得），設定咗就優先於前端輸入（API Key 唔使落前端）。 */
+     一般情況喺前端「進度 → 設定」填就得），設定咗就優先於前端輸入（API Key 唔使落前端）。
+     2026-09-19：冇設進度專用變數、但旅團有主後端（TROOP_<id>_BACKEND＋_APIKEY）
+     → 自動用返同一個 /exec（團員入口「我的進度」零設定接通）。 */
   const out = { backend: '', apiKey: '', catalog: '' };
   if (typeof id !== 'string' || !/^[0-9A-Za-z_-]{1,32}$/.test(id)) return out;
   const pick = (key) => troopEnv(id, key);
-  const backend = pick('PROGRESSBACKEND').trim();
+  const backend = pick('PROGRESSBACKEND').trim() || pick('BACKEND').trim() || troopShorthand(id);
   out.backend = isTrustedExecUrl(backend) ? backend : '';
-  out.apiKey = pick('PROGRESSAPIKEY').trim();
+  out.apiKey = pick('PROGRESSAPIKEY').trim() || pick('APIKEY').trim();
   // 可選：自訂考核項目定義（預設用 app 內建 data/progress/items.json）
   const catalog = pick('PROGRESSCATALOG').trim();
   if (catalog && /^https:\/\//i.test(catalog)) out.catalog = catalog;

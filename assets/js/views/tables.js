@@ -1230,8 +1230,12 @@ export function mount(root, params) {
            所以順手用 dbInfo 驗埋「有冇寫入權」。 */
         const remote = await import('../lib/remote.js');
         const auth = await remote.remoteInfo();
+        /* 後端版本（v2.5.0+ 會回報）：舊版後端係「睇唔到／同步唔到」嘅常見死因 */
+        let st = null;
+        try { st = await remote.testConnection(); } catch (e) { st = null; }
+        const ver = String(st?.backendVersion || '');
         if (res.ok && auth?.ok) {
-          toast('連線成功，而且寫得入後端', 'ok');
+          toast('連線成功，而且寫得入後端' + (ver ? `（後端 ${ver}）` : ''), 'ok');
         } else if (res.ok && auth?.hint) {
           await modal({
             title: '連得到後端，但寫唔入',
@@ -1242,6 +1246,16 @@ export function mount(root, params) {
           });
         } else {
           toast(res.ok ? '連線成功（但讀唔到資料庫狀態）' : '連線失敗：' + res.msg, res.ok ? 'warn' : 'err');
+        }
+        /* 連得通但冇版本報告 → 張 Sheet 仲行緊好舊嘅 Code.gs */
+        if ((res.ok || auth?.ok) && !ver) {
+          await modal({
+            title: '後端 Apps Script 係舊版',
+            body: `<div class="note-box warn">${icon('alert', 15)}<div><b>你嘅後端連到、但回報唔到版本</b> —— 即係仲行緊 v2.4.0 之前嘅舊 Code.gs。</div></div>
+              <p class="sm mt-12">舊版後端冇「資料庫」讀寫／分件儲存／公開團章呢啲功能，症狀就係：<b>兩部機同步唔到、團章發布咗公開頁睇唔到、無痕視窗讀唔到資料</b>。</p>
+              <p class="sm mt-8">解決：喺下面「後端 Apps Script 範本」撳<b>「下載 Code.gs」</b>→ 開你張 Google Sheet →「擴充功能 → Apps Script」→ 全選貼上 → 儲存 →「部署 → 管理部署作業 → 編輯（鉛筆）→ 版本：新版本 → 部署」（網址唔會變）。</p>`,
+            actions: [{ label: '知道喇', class: 'btn-primary', value: true }]
+          });
         }
         refresh();
       }

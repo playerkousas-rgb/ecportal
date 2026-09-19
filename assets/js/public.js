@@ -19,6 +19,26 @@ async function loadJson(url) {
   return r.json();
 }
 
+/** 由旅團後端（Apps Script「資料庫」）讀已發布團章 —— 經同源 /api/proxy，
+    免登入、唔使 API Key（後端只回 constitution，唔會漏其他資料）。
+    呢個係 2026-09-18 嘅正路：以前公開頁淨係讀靜態檔
+    data/units/<編號>/constitution.json —— 但旅團資料而家全部住喺
+    旅團自己嘅 Google Sheet，領袖喺 APP 撳「發布」之後，靜態檔根本
+    冇人幫佢更新（個網站係平台管理員先可以上載）→ 公開頁永遠 404。 */
+async function fetchBackendConstitution() {
+  try {
+    const r = await fetch('api/proxy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'constitution', unit: unitCode })
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    if (j?.ok && j.found && j.constitution) return j;
+    return null;
+  } catch (e) { return null; }
+}
+
 async function boot() {
   try {
     let registry = null;
@@ -27,9 +47,30 @@ async function boot() {
       if (!q.get('u') && registry.defaultUnit) unitCode = registry.defaultUnit;
       meta = registry.units[unitCode] || {};
     }
-    // 支援 ?src= 直接指向任何一張 constitution.json（例如 GitHub raw）
-    const src = q.get('src') || (meta.dataPath ? `${meta.dataPath}constitution.json` : `data/units/${unitCode}/constitution.json`);
-    c = await loadJson(src);
+    /* 伺服器 Registry（環境變數開嘅旅團）都要知個名 */
+    if (!meta || !meta.name) {
+      try {
+        const srv = await loadJson('api/units');
+        if (srv?.units?.[unitCode]) meta = { ...(srv.units[unitCode] || {}), ...(meta || {}) };
+      } catch (e) { /* 靜態部署冇 API：略過 */ }
+    }
+    if (q.get('src')) {
+      /* ?src= 直接指向任何一張 constitution.json（例如 GitHub raw） */
+      c = await loadJson(q.get('src'));
+    } else {
+      /* ① 旅團後端（APP「發布」咗 + 已同步 → 即刻睇到最新版） */
+      const fromBackend = await fetchBackendConstitution();
+      if (fromBackend) {
+        c = fromBackend.constitution;
+        if (fromBackend.unitName) meta.name = fromBackend.unitName;
+      }
+      /* ② 後端冇 → 試靜態檔（data/units/<編號>/，舊式上載做法） */
+      if (!c) {
+        const src = meta.dataPath ? `${meta.dataPath}constitution.json` : `data/units/${unitCode}/constitution.json`;
+        try { c = await loadJson(src); } catch (e) { c = null; }
+      }
+      if (!c) throw new Error('後端同靜態檔都讀唔到團章');
+    }
     if (!meta.name && c.unitName) meta.name = c.unitName;
     document.title = `${(c.title && c.title.zh) || '團章'} · ${meta.name || unitCode}`;
     render();
@@ -37,8 +78,10 @@ async function boot() {
     app.innerHTML = `<div class="paper">
       <h1 style="font-size:20px">暫時讀唔到團章</h1>
       <p class="sm muted mt-8">可能係未發布，或者網址唔正確。技術訊息：<code>${esc(e.message)}</code></p>
-      <p class="sm muted mt-12">管理人請到系統「團章 → 匯出發布檔（constitution.json）」，上載到
-        <code>data/units/${esc(unitCode)}/constitution.json</code>，重新整理即可。</p>
+      <p class="sm muted mt-12">管理人請檢查：① 喺系統「團章 → 發布新版本」；
+        ② 右上角同步狀態係咪「已存到後端」（資料要同步咗上去，公開頁先讀到）；
+        ③ 後端 Apps Script 要係 v2.5.0 或之後（帶「constitution」公開讀取）。
+        舊式做法（上載 <code>data/units/${esc(unitCode)}/constitution.json</code>）照樣支援。</p>
       <a class="btn btn-sm mt-16" href="./">返回系統</a>
     </div>`;
   }
