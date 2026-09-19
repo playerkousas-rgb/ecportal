@@ -481,6 +481,105 @@ section('會議模式：右上「立即儲存」掣＋自動睇隊友更新');
   const financeSrc = fs.readFileSync(path.join(ROOT, 'assets/js/views/finance.js'), 'utf8');
   ok('APP 內申報相片會先試 uploadPhotos 上 Drive（失敗先本地存）',
     /uploadPhotos\(photos/.test(financeSrc) && /photosOnDrive/.test(financeSrc));
+
+  /* 2026-09-19 跨視窗同步（「同一帳戶，無痕同普通視窗見到唔同嘢」） */
+  const pollBody = (remoteSrc.match(/export function startPolling[\s\S]*?\nexport function stopPolling/) || [''])[0];
+  ok('60 秒 poll 唔會因為本機有未存改動而停（有 pending 都照對版本，checkRemote 會合併）',
+    /export function startPolling/.test(remoteSrc) && !/hasPending\(\)/.test(pollBody));
+  ok('remote.js 有 startVisibilityWatch（focus／visibilitychange 即刻對版本）',
+    /export function startVisibilityWatch/.test(remoteSrc) && /visibilitychange/.test(remoteSrc));
+  const hubSrc = fs.readFileSync(path.join(ROOT, 'assets/js/public-hub.js'), 'utf8');
+  ok('main.js 同團員入口都有開 visibility watch',
+    /startVisibilityWatch\?\.\(\)/.test(mainSrc) && /startVisibilityWatch\?\.\(\)/.test(hubSrc));
+  ok('checkRemote 識得驗「舊版後端」（連版本號都冇 → 警告重新部署）',
+    /oldBackend: true/.test(remoteSrc) && /warnOldBackend/.test(remoteSrc));
+}
+
+/* ============================================================
+   ④.6 跨視窗同步（2026-09-19 團長回報：「同一帳戶，無痕同普通視窗
+   見到嘅嘢都唔同」）—— 一切返個視窗就即刻對版本，唔使等 60 秒
+   ============================================================ */
+section('跨視窗：切返視窗（focus）即刻拉隊友更新（唔使等 60 秒 poll）');
+{
+  const { spawn } = await import('node:child_process');
+  const net0 = await import('node:net');
+  const freePort = () => new Promise((resolve, reject) => {
+    const srv = net0.createServer();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => { const { port } = srv.address(); srv.close(() => resolve(port)); });
+  });
+  const GAS_PORT = await freePort();
+  const WEB_PORT = await freePort();
+  const BASE = `http://127.0.0.1:${WEB_PORT}`;
+  const FAKE_EXEC = `http://127.0.0.1:${GAS_PORT}/exec`;
+
+  const procs = [];
+  const spawnBg = (args, env = {}) => {
+    const p = spawn(process.execPath, args, { cwd: ROOT, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    procs.push(p);
+    return p;
+  };
+  const waitPort = async (port, ms = 8000) => {
+    const net = await import('node:net');
+    const t = Date.now();
+    while (Date.now() - t < ms) {
+      const up = await new Promise(r => {
+        const s = net.connect(port, '127.0.0.1');
+        s.on('connect', () => { s.destroy(); r(true); });
+        s.on('error', () => r(false));
+      });
+      if (up) return true;
+      await new Promise(r => setTimeout(r, 120));
+    }
+    return false;
+  };
+  const runDevice = (plan) => new Promise((resolve) => {
+    const p = spawn(process.execPath, [path.join(ROOT, 'tests', '_device.mjs'), BASE, JSON.stringify(plan)],
+      { cwd: ROOT, env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let buf = '', err = '';
+    p.stdout.on('data', d => { buf += d; });
+    p.stderr.on('data', d => { err += d; });
+    const done = (r) => { try { p.kill('SIGKILL'); } catch { /* ignore */ } resolve(r); };
+    const guard = setTimeout(() => done({ ok: false, error: '裝置逾時（30 秒）' }), 30000);
+    p.on('close', () => {
+      clearTimeout(guard);
+      const m = buf.match(/@@RESULT@@([\s\S]*?)@@END@@/);
+      if (!m) return resolve({ ok: false, error: (err || buf).slice(-600) });
+      try { resolve(JSON.parse(m[1])); } catch (e) { resolve({ ok: false, error: 'parse: ' + e.message }); }
+    });
+  });
+
+  try {
+    spawnBg([path.join(ROOT, 'tests', '_fakegas.mjs'), String(GAS_PORT)]);
+    spawnBg([path.join(ROOT, 'dev-server.mjs')], {
+      TROOP_0082_BACKEND: FAKE_EXEC,
+      TROOP_0082_APIKEY: 'test_key_0082',
+      V82_PROXY_TEST: '1',
+      PORT: String(WEB_PORT)
+    });
+    ok('假後端＋dev-server 已啟動', await waitPort(GAS_PORT) && await waitPort(WEB_PORT));
+
+    /* 呢部機（＝無痕視窗）開住、同步咗 v1（陳大文）；
+       之後「隊友」（另一個視窗）推咗 v2（加咗王五）→ 撳返呢個視窗 → 應該即刻拉到 */
+    const W = await runDevice({ steps: [
+      { op: 'wipe' },
+      { op: 'addMember', name: '陳大文', ymis: '2026000001' },
+      { op: 'push' },
+      { op: 'pull' },                                              // v1 同步好（＝視窗開住嘅狀態）
+      { op: 'teammatePush', name: '王五', ymis: '2026000009' },    // 「另一個視窗」推咗 v2
+      { op: 'watchAndFocus', waitMs: 3000 },                       // 用家切返嚟（focus）
+      { op: 'snapshot' }
+    ] });
+    const wf = (W.steps || []).find(s => s.op === 'watchAndFocus');
+    ok('focus 之後 3 秒內自動拉咗隊友嘅新版本（王五出現）',
+      (wf?.names || []).includes('王五') && (wf?.names || []).includes('陳大文'),
+      JSON.stringify(wf?.names));
+    ok('拉完之後 lastSyncedVersion 對齊後端（下次 focus 唔會重複拉）', !!wf?.lastSyncedVersion, wf?.lastSyncedVersion || '');
+    const snapW = (W.steps || []).find(s => s.op === 'snapshot');
+    ok('本機資料同後端一致（2 個團員）', snapW?.members === 2, JSON.stringify(snapW?.names));
+  } finally {
+    procs.forEach(p => { try { p.kill('SIGKILL'); } catch { /* ignore */ } });
+  }
 }
 
 /* ============================================================

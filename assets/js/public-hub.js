@@ -1,33 +1,113 @@
-/* 團員入口：掃一次見到全部公開功能。名可選填，存瀏覽器。 */
+/* ============================================================
+   public-hub.js — 團員入口（members.html）
+   ------------------------------------------------------------
+   2026-09-18 深夜大修（團長回報 6 項問題嘅 1／2／4／5／6）：
+   ① 開機會由旅團後端（Google Sheet）拉最新資料 —— 以前淨係讀本機
+     localStorage，新裝置／無痕視窗／團員手機全部空白（登入都唔得、
+     IG／FB連結／活動／通告全部「未公開」）。而家同執委版一樣：
+     開機對版本 → 拉後端 → 有改動自動存返上去 → 60 秒睇隊友更新。
+   ② 回覆出席／交卷直接用登入身份（YMIS 登入咗就知你係邊個）——
+     以前要「填自己個名」，但個名欄原來冇 render 到，結果次次
+     都彈「請填名」而根本冇位填（= 報出席永遠失敗）。
+   ③ 登入狀態由 sessionStorage 改做 localStorage（hub-session.js），
+     返轉頭唔使重新登入。
+   ④ 截止咗報名嘅通告／過去咗嘅活動唔會排先做「提醒」，但**內容照顯示**
+     （擺後＋標「已截止／已完結」）—— 報咗名嘅想睇返內容、遲咗想報嘅
+     可以搵領袖／執委跟進。草稿先係完全唔出街。
+   ============================================================ */
 import { loadRegistry, defaultUnitCode } from './lib/units.js';
 import { init, load, update } from './lib/store.js';
-import { memberLinks, profile, publicEvents, RSVP, quizzes, activeMembers, publicPageUrl, troopPublicLinks, identityOf, IDENTITIES } from './lib/model.js';
-import { loadMe, saveMe, identityForSubmit } from './lib/member-me.js';
+import { profile, publicEvents, RSVP, quizzes, activeMembers, publicPageUrl, troopPublicLinks, identityOf, IDENTITIES } from './lib/model.js';
+import { loadMe, saveMe } from './lib/member-me.js';
 import { loadHubAuth, saveHubAuth, clearHubAuth } from './lib/hub-session.js';
 import { loginMember, changeMemberOwnPassword, TEMP_PASSWORD } from './lib/auth.js';
 import { progressConfigured, loadRemote, loadItems, flattenItems, memberDetail, submitProgressRequest, loadMyRequests } from './lib/progress.js';
 import { esc, icon, toast, todayISO, modal } from './lib/util.js';
 
 const app = document.getElementById('app');
-let pending = null; /* { kind, id, extra } 等填完名再做 */
+let syncReady = false;      /* 後端拉完（或者確定唔使拉）先畀登入 */
+
+/* 通告係咪已過報名截止（冇截止日／唔使報名＝未截止） */
+function closedN(n, today) {
+  return !!(n.needSignup && n.deadline && String(n.deadline) < today);
+}
 
 async function boot() {
   const u = new URLSearchParams(location.search);
   const code = (u.get('u') || '').trim() || defaultUnitCode();
   await loadRegistry();
   await init({ mode: 'real', unit: code });
-  try {
-    const remoteApi = await import('./lib/remote.js');
-    const store = await import('./lib/store.js');
-    if (remoteApi.remoteConfigured?.()) {
-      store.setSaveHook(() => remoteApi.scheduleSave());
-      remoteApi.arm?.();
-    }
-  } catch { /* */ }
   paint();
+  /* 後端先係資料正本：拉完先至有得登入（名冊喺後端度）。
+     失敗都唔會死 —— 照用本機資料，狀態條會話畀你知。 */
+  syncBoot();
+}
+
+/* 開機對一對後端（同 main.js 嘅 syncBoot 同一套邏輯，呢度係 hub 版） */
+async function syncBoot() {
+  let remoteApi = null;
+  try {
+    remoteApi = await import('./lib/remote.js');
+    const store = await import('./lib/store.js');
+    if (!remoteApi.remoteConfigured?.()) { syncReady = true; paint(); return; }
+    store.setSaveHook(() => remoteApi.scheduleSave());
+    try {
+      const info = await remoteApi.remoteInfo();
+      if (info?.ok && info.found) {
+        const remoteAt = String(info.version || info.at || '');
+        const lastSynced = store.lastSyncedVersion();
+        if (remoteAt && remoteAt !== lastSynced) {
+          const got = await remoteApi.pullDb();
+          if (got?.ok && got.found && got.db) {
+            const merged = Number(store.tryLoad()?.sync?.pending || 0) > 0;
+            store.adoptRemote(got.db, { version: String(got.version || ''), merge: merged });
+          }
+        }
+      }
+    } catch (e) { console.warn('[hub] 開機拉後端失敗（照用本機資料）', e); }
+    remoteApi.arm?.();
+    remoteApi.startPolling?.();
+    remoteApi.startVisibilityWatch?.();
+    /* 隊友（執委／其他團員）更新咗後端 → 60 秒 poll 會彈 v82:refresh */
+    window.addEventListener('v82:refresh', () => {
+      /* 交緊卷／開緊彈窗／打緊字就唔好重繪（會食走佢啲答案） */
+      if (document.querySelector('.overlay')) return;
+      if (document.querySelector('[data-ans]')) return;
+      const tag = String(document.activeElement?.tagName || '').toUpperCase();
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      paint();
+    });
+    window.addEventListener('v82:sync', paintSyncBadge);
+  } catch { /* remote 模組載入唔到 —— 照用本機 */ }
+  syncReady = true;
+  paint();          /* 拉完資料重新畫（登入閘／主頁內容都可能變咗） */
+  paintSyncBadge();
 }
 
 function code() { return load().unitCode; }
+
+/* 頂部右邊嘅同步狀態（等團員／領袖一眼睇到「資料係咪最新」） */
+function paintSyncBadge() {
+  const el = document.getElementById('hubSync');
+  if (!el) return;
+  import('./lib/remote.js').then(r => {
+    if (!r.remoteConfigured()) { el.innerHTML = `<span class="badge b-warn">${icon('alert', 11)} 未連後端</span>`; return; }
+    const s = r.syncState();
+    const pending = Number(load()?.sync?.pending || 0);
+    const map = {
+      saving: ['b-warn', 'cloud', '儲存緊…'],
+      saved: ['b-ok', 'check', '已同步'],
+      pending: ['b-warn', 'clock', pending ? `未儲存（${pending}）` : '未儲存'],
+      loading: ['b-info', 'cloud', '讀取緊…'],
+      error: ['b-danger', 'alert', '同步失敗'],
+      conflict: ['b-warn', 'alert', '撞版'],
+      offline: ['b-warn', 'alert', '離線'],
+      idle: ['b-ok', 'check', '已同步']
+    };
+    const [cls, ic, label] = map[s.state] || ['b-grey', 'cloud', ''];
+    el.innerHTML = `<span class="badge ${cls}" title="資料同步狀態（後端＝旅團 Google Sheet）">${icon(ic, 11)} ${label}</span>`;
+  }).catch(() => { el.innerHTML = ''; });
+}
 
 function paint() {
   const p = profile();
@@ -42,18 +122,22 @@ function paint() {
   <div class="hub-top">
     <div class="hub-wrap">
       <div class="xs" style="opacity:.8">團員入口 · ${esc(identL)} · 掃一次齊晒</div>
-      <div style="font-size:22px;font-weight:800;margin-top:4px">${esc(p.name || '深資童軍團')}</div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:4px">
+        <div style="font-size:22px;font-weight:800">${esc(p.name || '深資童軍團')}</div>
+        <div id="hubSync" style="margin-left:auto"></div>
+      </div>
       <div class="xs" style="opacity:.85;margin-top:6px">你好，<b>${esc(auth.name)}</b>（YMIS ${esc(auth.ymis || '—')}）
         · <button class="btn btn-xs" type="button" id="hubLogout" style="color:#fff;border-color:rgba(255,255,255,.35)">登出</button></div>
     </div>
   </div>
   <div class="hub-wrap">
-    ${sec === 'cal' && id ? eventDetail(id)
-      : sec === 'quiz' && id ? quizFill(id)
+    ${sec === 'cal' && id ? eventDetail(id, auth)
+      : sec === 'quiz' && id ? quizFill(id, auth)
       : sec === 'progress' ? progressPage(auth)
-      : home()}
+      : home(auth)}
   </div>`;
-  bind();
+  bind(auth);
+  paintSyncBadge();
   if (sec === 'progress') fillProgressPage(auth);
 }
 
@@ -63,7 +147,10 @@ function paintGate() {
   <div class="hub-top">
     <div class="hub-wrap">
       <div class="xs" style="opacity:.8">團員入口 · 要 YMIS＋密碼</div>
-      <div style="font-size:22px;font-weight:800;margin-top:4px">${esc(p.name || '深資童軍團')}</div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:4px">
+        <div style="font-size:22px;font-weight:800">${esc(p.name || '深資童軍團')}</div>
+        <div id="hubSync" style="margin-left:auto"></div>
+      </div>
       <div class="xs" style="opacity:.85;margin-top:6px">外人入唔到。首次密碼係 ${TEMP_PASSWORD}，入去要改。</div>
     </div>
   </div>
@@ -74,9 +161,11 @@ function paintGate() {
       <div class="field mt-12"><label class="label">密碼</label>
         <input class="input" id="hPass" type="password" placeholder="首次：${TEMP_PASSWORD}" autocomplete="current-password"></div>
       <div id="hErr" class="err mt-8"></div>
-      <button class="btn btn-primary btn-block mt-16" type="submit">${icon('key', 16)} 進入</button>
+      ${syncReady ? '' : `<div class="hint mt-8">${icon('cloud', 13)} 正在由旅團後端載入名冊…</div>`}
+      <button class="btn btn-primary btn-block mt-16" type="submit" ${syncReady ? '' : 'disabled'}>${icon('key', 16)} 進入</button>
     </form>
   </div>`;
+  paintSyncBadge();
   app.querySelector('#hubLogin')?.addEventListener('submit', async e => {
     e.preventDefault();
     const err = app.querySelector('#hErr');
@@ -94,29 +183,27 @@ function paintGate() {
   });
 }
 
-function idBar() {
-  const me = loadMe();
-  const roster = activeMembers();
-  return `<div class="card card-pad mb-16">
-    <div class="semibold sm mb-8">我叫咩名？（可留空，入去先填都得）</div>
-    <div class="field">
-      <select class="select" id="hubPick">
-        <option value="">— 名冊上嘅名 —</option>
-        ${roster.map(m => `<option value="${esc(m.id)}" ${m.id === me.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}
-      </select>
-    </div>
-    <div class="field mt-8"><label class="label">或者自己打（唔喺名冊都得）</label>
-      <input class="input" id="hubName" placeholder="例：陳大文" value="${esc(me.name)}">
-    </div>
-    <button class="btn btn-sm mt-10" type="button" id="hubSaveName">${icon('save', 14)} 記住喺呢部機</button>
-    ${me.name ? `<button class="btn btn-xs btn-ghost mt-8" type="button" id="hubClearName">清除記住嘅名</button>` : ''}
-  </div>`;
-}
-
-function home() {
-  const evs = publicEvents();
+/* ============================================================
+   主頁
+   ============================================================ */
+function home(auth) {
+  const today = todayISO();
+  /* ① 活動：分「即將舉行」同「過往」—— 過往嘅唔會排先做提醒，
+     但**內容照留得住**：報咗名嘅團員想睇返詳情、遲咗想參加嘅可以
+     搵領袖／執委跟進，都唔會搵唔返。 */
+  const evAll = publicEvents();
+  const isPast = e => {
+    const end = String(e.dateEnd || e.date || '').slice(0, 10);
+    return !!end && end < today;
+  };
+  const evs = evAll.filter(e => !isPast(e));
+  const pastEvs = evAll.filter(isPast).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+  /* ② 試卷：closed 嘅唔顯示（同以前一樣） */
   const qz = quizzes().filter(q => q.status !== 'closed');
-  const notices = (load().notices || []).filter(n => n.status === 'published');
+  /* ③ 通告：已發布嘅全部顯示 —— 截止咗報名嘅會擺後＋標「已截止」，
+     內容照開得到（成員遲咗想報就問領袖／執委）；草稿先係完全唔出街。 */
+  const notices = (load().notices || []).filter(n => n.status === 'published')
+    .sort((a, b) => Number(closedN(a, today)) - Number(closedN(b, today)));
   const links = troopPublicLinks();
   const u = code();
   const LINK_ICON = { drive: 'cloud', album: 'image', instagram: 'instagram', facebook: 'facebook', website: 'globe', whatsapp: 'whatsapp' };
@@ -133,7 +220,7 @@ function home() {
           <span class="stat-ic">${icon(t.icon, 18)}</span>
           <div class="grow"><div class="semibold">${esc(t.title)}</div><div class="xs muted mt-4">${esc(t.desc)}</div></div>
         </button>`
-      : `<a class="hub-card" href="${esc(withName(t.href))}">
+      : `<a class="hub-card" href="${esc(withName(t.href, auth))}">
           <span class="stat-ic">${icon(t.icon, 18)}</span>
           <div class="grow"><div class="semibold">${esc(t.title)}</div><div class="xs muted mt-4">${esc(t.desc)}</div></div>
         </a>`).join('')}
@@ -152,7 +239,7 @@ function home() {
 
     <div class="semibold mt-24 mb-8">活動行事曆</div>
     ${evs.length ? evs.map(e => {
-      const st = myRsvp(e);
+      const st = myRsvp(e, auth);
       const overnight = e.dateEnd && e.dateEnd !== e.date;
       return `<button class="hub-card" type="button" data-open="#/cal/${e.id}" style="width:100%;text-align:left">
         <span class="stat-ic">${icon('calendar', 18)}</span>
@@ -160,7 +247,20 @@ function home() {
           <div class="xs muted mt-4">${overnight ? `${esc(e.date)} 至 ${esc(e.dateEnd)}` : esc(e.date)} ${esc(e.time || '')} · ${esc(e.venue || '')}</div>
           ${st ? `<div class="xs mt-4"><span class="badge ${RSVP[st]?.cls || ''}">已回覆：${esc(RSVP[st]?.label)}</span></div>` : ''}</div>
       </button>`;
-    }).join('') : '<div class="card card-pad muted">暫時未有團員可見活動。</div>'}
+    }).join('') : '<div class="card card-pad muted">暫時未有即將舉行嘅活動。</div>'}
+
+    ${pastEvs.length ? `
+    <div class="semibold mt-24 mb-8">過往活動</div>
+    <div class="xs muted mb-8">完咗嘅活動 —— 想睇返內容就入去睇；遲咗想參加同類型活動可以留意下一個</div>
+    ${pastEvs.map(e => {
+      const st = myRsvp(e, auth);
+      return `<button class="hub-card" type="button" data-open="#/cal/${e.id}" style="width:100%;text-align:left;opacity:.78">
+        <span class="stat-ic">${icon('calendar', 18)}</span>
+        <div class="grow"><div class="semibold">${esc(e.title)} <span class="badge b-grey">已完結</span></div>
+          <div class="xs muted mt-4">${esc(e.date)}${e.dateEnd && e.dateEnd !== e.date ? ' 至 ' + esc(e.dateEnd) : ''} ${esc(e.venue || '')}</div>
+          ${st ? `<div class="xs mt-4"><span class="badge ${RSVP[st]?.cls || ''}">已回覆：${esc(RSVP[st]?.label)}</span></div>` : ''}</div>
+      </button>`;
+    }).join('')}` : ''}
 
     <div class="semibold mt-24 mb-8">試卷</div>
     ${qz.length ? qz.map(q => `<button class="hub-card" type="button" data-open="#/quiz/${q.id}" style="width:100%;text-align:left">
@@ -172,58 +272,68 @@ function home() {
     <div class="semibold mt-24 mb-8">通告</div>
     ${notices.length ? notices.map(n => {
       const href = publicPageUrl('notice.html', { u, n: n.id });
-      return `<a class="hub-card" href="${esc(withName(href))}">
+      const closed = closedN(n, today);
+      return `<a class="hub-card" href="${esc(withName(href, auth))}" ${closed ? 'style="opacity:.78"' : ''}>
         <span class="stat-ic">${icon('megaphone', 18)}</span>
-        <div class="grow"><div class="semibold">${esc(n.title?.zh || n.id)}</div>
-          <div class="xs muted mt-4">${esc(n.eventDate || '')} ${n.needSignup ? '· 可回覆出席' : ''}</div></div>
+        <div class="grow"><div class="semibold">${esc(n.title?.zh || n.id)}${closed ? ' <span class="badge b-grey">已截止</span>' : ''}</div>
+          <div class="xs muted mt-4">${esc(n.eventDate || '')} ${n.needSignup
+            ? (closed ? '· 報名已截止（想報就搵領袖／執委）' : (n.deadline ? `· 截止 ${esc(n.deadline)}` : '· 可回覆出席'))
+            : ''}</div></div>
       </a>`;
     }).join('') : '<div class="card card-pad muted">暫時未有已發布通告。</div>'}
   `;
 }
 
-function withName(url) {
+function withName(url, auth) {
   const me = loadMe();
-  if (!me.name) return url;
+  const name = me.name || auth?.name || '';
+  if (!name) return url;
   try {
     const u = new URL(url, location.href);
-    u.searchParams.set('name', me.name);
-    if (me.id) u.searchParams.set('mid', me.id);
+    u.searchParams.set('name', name);
+    if (me.id || auth?.id) u.searchParams.set('mid', me.id || auth.id);
     return u.toString();
   } catch { return url; }
 }
 
-function myRsvp(e) {
-  const ident = identityForSubmit(activeMembers());
-  if (!ident.id) return '';
+/* ============================================================
+   回覆出席／交卷 —— 直接用登入身份（登入咗就知你係邊個）
+   ============================================================ */
+function whoAmI(auth) {
+  if (auth?.id) {
+    const m = activeMembers().find(x => x.id === auth.id) || null;
+    return { id: auth.id, name: m?.name || auth.name || '' };
+  }
+  return null;
+}
+
+function myRsvp(e, auth) {
+  const ident = whoAmI(auth);
+  if (!ident?.id) return '';
   const v = (e.rsvp || {})[ident.id];
   return v?.status || v || '';
 }
 
-function needName(kind, id, extra) {
-  persistNameFromBar();
-  const ident = identityForSubmit(activeMembers());
-  if (ident.name) return ident;
-  pending = { kind, id, extra };
-  toast('請喺上面填／揀你嘅名，再撳「記住」', 'warn');
-  app.querySelector('#hubName')?.focus();
-  return null;
-}
-
-function eventDetail(id) {
+function eventDetail(id, auth) {
   const e = (load().events || []).find(x => x.id === id);
   if (!e || e.visibility === 'exco') return '<div class="card card-pad">搵唔到呢個活動。</div>';
-  const st = myRsvp(e);
+  const st = myRsvp(e, auth);
   const overnight = e.dateEnd && e.dateEnd !== e.date;
+  const ended = String(e.dateEnd || e.date || '').slice(0, 10) && String(e.dateEnd || e.date).slice(0, 10) < todayISO();
   return `<button class="btn btn-ghost btn-sm mb-12" type="button" data-open="#/home">${icon('chevronL', 14)} 返回</button>
     <div class="card card-pad">
       <div class="page-title" style="font-size:20px">${esc(e.title)}</div>
       <div class="sm muted mt-4">${overnight ? `${esc(e.date)} 至 ${esc(e.dateEnd)}（${esc(e.time || '')} 起步）` : `${esc(e.date)} ${esc(e.time || '')}`} · ${esc(e.venue || '')}</div>
       <div class="sm mt-12" style="white-space:pre-wrap">${esc(e.detail || '未有詳細內容')}</div>
-      <div class="semibold sm mt-16">我會…（未填名都可以先睇；回覆先要名）</div>
+      ${ended
+        ? `<div class="badge b-grey mt-16">活動已結束</div>`
+        : `<div class="semibold sm mt-16">我會…</div>
       <div class="row wrap gap-8 mt-8">
         ${Object.entries(RSVP).map(([k, v]) =>
           `<button class="btn btn-sm ${st === k ? 'btn-primary' : ''}" type="button" data-eid="${e.id}" data-rsvp="${k}">${v.label}</button>`).join('')}
       </div>
+      ${st ? `<div class="xs mt-10"><span class="badge ${RSVP[st]?.cls || ''}">已回覆：${esc(RSVP[st]?.label || st)}</span>
+        <span class="faint">· 撳另一個掣可以改</span></div>` : ''}`}
     </div>`;
 }
 
@@ -332,11 +442,11 @@ async function claimProgressDialog(auth, itemId, itemName) {
   else toast(res.error || '申報失敗，一陣再試', 'err');
 }
 
-function quizFill(id) {
+function quizFill(id, auth) {
   const q = quizzes().find(x => x.id === id);
   if (!q) return '<div class="card card-pad">搵唔到試卷</div>';
-  const ident = identityForSubmit(activeMembers());
-  const prev = ident.id ? (q.responses || {})[ident.id] : null;
+  const ident = whoAmI(auth);
+  const prev = ident?.id ? (q.responses || {})[ident.id] : null;
   return `<button class="btn btn-ghost btn-sm mb-12" type="button" data-open="#/home">${icon('chevronL', 14)} 返回</button>
     <div class="card card-pad">
       <div class="page-title" style="font-size:20px">${esc(q.title)}</div>
@@ -356,48 +466,19 @@ function quizFill(id) {
     </div>`;
 }
 
-function persistNameFromBar() {
-  const pick = app.querySelector('#hubPick')?.value || '';
-  let name = app.querySelector('#hubName')?.value.trim() || '';
-  if (pick) {
-    const m = activeMembers().find(x => x.id === pick);
-    name = m?.name || name;
-    saveMe({ id: pick, name });
-  } else {
-    saveMe({ id: '', name });
-  }
-}
-
-function bind() {
+function bind(auth) {
   app.querySelector('#hubLogout')?.addEventListener('click', () => {
     clearHubAuth(code());
     paint();
   });
-  app.querySelector('#hubPick')?.addEventListener('change', e => {
-    const m = activeMembers().find(x => x.id === e.target.value);
-    if (m) {
-      const inp = app.querySelector('#hubName');
-      if (inp) inp.value = m.name;
-    }
-  });
-  app.querySelector('#hubSaveName')?.addEventListener('click', () => {
-    persistNameFromBar();
-    toast(loadMe().name ? '已記住：' + loadMe().name : '已清除名', 'ok');
-    if (pending) {
-      const p = pending; pending = null;
-      if (p.kind === 'rsvp') rsvp(p.id, p.extra);
-      if (p.kind === 'quiz') submitQuiz(p.id);
-    } else paint();
-  });
-  app.querySelector('#hubClearName')?.addEventListener('click', () => { saveMe({}); paint(); });
   app.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => { location.hash = b.dataset.open; paint(); }));
-  app.querySelectorAll('[data-rsvp]').forEach(b => b.addEventListener('click', () => rsvp(b.dataset.eid, b.dataset.rsvp)));
-  app.querySelector('[data-quiz-submit]')?.addEventListener('click', () => submitQuiz(location.hash.split('/')[2] || location.hash.split('/')[1]));
+  app.querySelectorAll('[data-rsvp]').forEach(b => b.addEventListener('click', () => rsvp(b.dataset.eid, b.dataset.rsvp, auth)));
+  app.querySelector('[data-quiz-submit]')?.addEventListener('click', () => submitQuiz(location.hash.split('/')[2] || location.hash.split('/')[1], auth));
 }
 
-function rsvp(eid, status) {
-  const ident = needName('rsvp', eid, status);
-  if (!ident) return;
+function rsvp(eid, status, auth) {
+  const ident = whoAmI(auth);
+  if (!ident) { toast('請先登入再回覆', 'warn'); return; }
   const e = (load().events || []).find(x => x.id === eid);
   if (!e) return;
   const map = { ...(e.rsvp || {}) };
@@ -407,9 +488,9 @@ function rsvp(eid, status) {
   paint();
 }
 
-function submitQuiz(id) {
-  const ident = needName('quiz', id);
-  if (!ident) return;
+function submitQuiz(id, auth) {
+  const ident = whoAmI(auth);
+  if (!ident) { toast('請先登入再交卷', 'warn'); return; }
   const q = quizzes().find(x => x.id === id);
   if (!q) return;
   const answers = {};

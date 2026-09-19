@@ -160,6 +160,9 @@ async function syncBoot() {
   remoteApi.arm();
   /* 會議模式：每 60 秒靜靜問一次後端有冇隊友更新（一齊睇／一齊做嘢用） */
   remoteApi.startPolling();
+  /* 跨視窗／跨機：一切返呢個視窗就即刻對一次版本（同一帳戶無痕＋普通視窗
+     都會即時見到對方嘅改動，唔使等 60 秒） */
+  remoteApi.startVisibilityWatch?.();
   paintSyncChip();
 
   /* 離開頁面前，仲有嘢未存就即刻試多次 */
@@ -1138,9 +1141,11 @@ function render() {
       </div>
 
       <div style="padding:10px 10px 0">
-        <div class="unit-chip" style="width:100%;justify-content:space-between;cursor:default">
+        <button type="button" id="unitSwitch" class="unit-chip" style="width:100%;justify-content:space-between"
+          title="切換旅團（示範模式下揀真實旅團＝離開示範）">
           <span>${icon('flag', 13)} ${esc(currentUnit())}</span>
-        </div>
+          <span class="faint xs">${icon('chevronR', 13)}</span>
+        </button>
       </div>
 
       <div class="sb-nav">
@@ -1344,6 +1349,9 @@ document.addEventListener('click', async e => {
   if (!(t instanceof HTMLElement)) return;
   if (t.id === 'mockExit') { exitMock(); return; }
   if (t.id === 'mockBackReal') { exitMockToUnit(); return; }
+  /* 側邊欄旅團徽章＝切換旅團入口（unitPicker 會列晒登記咗嘅旅團，
+     示範模式揀真實旅團會即時離開示範 —— 逃生門之一） */
+  if (t.closest('#unitSwitch')) { unitPicker(); return; }
   if (t.id === 'mockReset') {
     if (await confirmDlg({ title: '重設示範資料', okText: '確定重設', message: '會把示範資料還原成 <code>data/mock/</code> 嘅初始內容。' })) {
       clearMockData();

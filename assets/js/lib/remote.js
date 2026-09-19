@@ -417,7 +417,10 @@ export async function checkRemote({ silent = false } = {}) {
     }
     if (!info.found) return { ok: true, found: false };
     const remoteAt = String(info.version || info.at || '');
-    if (!remoteAt || remoteAt === store.lastSyncedVersion()) {
+    /* 後端連版本／時間戳都冇回 ＝ 舊版 Code.gs —— 版本對唔到，兩邊視窗
+       永遠唔會知對方有更新（正正係「同一帳戶見到唔同嘢」嘅其中一個成因）。 */
+    if (!remoteAt) return { ok: true, oldBackend: true };
+    if (remoteAt === store.lastSyncedVersion()) {
       return { ok: true, upToDate: true };
     }
     const got = await pullDb();
@@ -438,15 +441,20 @@ export async function checkRemote({ silent = false } = {}) {
  * 有 → 拉落嚟；如果用家**唔係打緊字**（冇 input／textarea focus）
  * 就即刻重繪畫面 —— 一齊睇嗰陣大家都會見到對方嘅最新改動。
  * 用家打緊字就只彈提示，唔會炸走佢個表單。
+ *
+ * 2026-09-19（團長回報：同一帳戶，無痕同普通視窗見到唔同嘢）：
+ * 本機有未存好嘅改動都照樣 poll —— checkRemote 會「拉後端＋聯集合併」，
+ * 本機未存嘅改動原封不動照樣排隊存，唔會再因為 push 失敗而永遠唔拉人哋嘢。
  */
 export function startPolling(intervalMs = 60000) {
   if (pollTimer) return;
   pollTimer = setInterval(async () => {
     try {
       if (!armed || isMock() || !remoteConfigured()) return;
-      if (inFlight || checkBusy || hasPending()) return;     // 自己未存好就唔好撈亂
+      if (inFlight || checkBusy) return;             // 撞正自己存取就等下一轉
       if (typeof document !== 'undefined' && document.hidden) return;
       const r = await checkRemote({ silent: true });
+      if (r?.oldBackend) { warnOldBackend(); return; }
       if (!r?.updated) return;
       const util = await import('./util.js').catch(() => null);
       const tag = typeof document !== 'undefined' ? String(document.activeElement?.tagName || '').toUpperCase() : '';
@@ -461,6 +469,51 @@ export function startPolling(intervalMs = 60000) {
   }, Math.max(20000, intervalMs));
 }
 export function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+
+/* ============================================================
+   跨視窗／跨機同步（2026-09-19）
+   無痕視窗同普通視窗各有各嘅 localStorage —— 同一帳戶兩邊開，
+   以前要等最多 60 秒 poll 先會拉到對方嘅改動。而家：
+   一切返呢個視窗（visibilitychange / focus）就 1.2 秒內即刻對一次版本，
+   你撳過嚟嗰下就已經係最新。
+   ============================================================ */
+let visTimer = null;
+let oldBackendWarned = false;
+
+async function warnOldBackend() {
+  if (oldBackendWarned) return;
+  oldBackendWarned = true;
+  try {
+    const util = await import('./util.js');
+    util?.toast?.('後端係舊版 Code.gs（冇版本號）—— 兩邊視窗會對唔到料。請去「總表同步」下載新版重新部署', 'err');
+  } catch { /* */ }
+}
+
+export function startVisibilityWatch() {
+  if (typeof document === 'undefined' || typeof window === 'undefined') return;
+  const poke = () => {
+    if (document.hidden) return;
+    clearTimeout(visTimer);
+    visTimer = setTimeout(async () => {
+      try {
+        if (!armed || isMock() || !remoteConfigured()) return;
+        if (inFlight || checkBusy) return;
+        const tag = String(document.activeElement?.tagName || '').toUpperCase();
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;   // 打緊字唔搞
+        const r = await checkRemote({ silent: true });
+        if (r?.oldBackend) { warnOldBackend(); return; }
+        if (r?.updated) {
+          try { window.dispatchEvent(new CustomEvent('v82:refresh')); } catch { /* */ }
+          const util = await import('./util.js').catch(() => null);
+          try { util?.toast?.('已載入最新資料', 'ok'); } catch { /* */ }
+        }
+      } catch { /* 靜靜地失敗 */ }
+    }, 1200);
+  };
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) poke(); });
+  window.addEventListener('focus', poke);
+  window.addEventListener('pageshow', poke);
+}
 
 /* ============================================================
    分件儲存（v2.4.0 長壽命架構）

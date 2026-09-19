@@ -35,6 +35,8 @@ const ALLOWED_ACTIONS = new Set([
   'saveDb', 'loadDb', 'dbInfo', 'verifySetupKey', 'saveDbPart', 'saveDbCommit',
   /* 公開通告：免登入讀旅團自己後端嘅「通告全文」（只回已發布） */
   'notices',
+  /* 公開團章（v2.5.0）：免登入讀旅團後端「資料庫」入面已發布嘅 constitution */
+  'constitution',
   'submitRegistration'
 ]);
 

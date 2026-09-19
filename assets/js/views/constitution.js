@@ -107,9 +107,10 @@ export function render(params) {
         <div style="padding:16px 18px" class="steps">
           <div class="step"><div><div class="sm semibold">編輯條文</div><div class="xs muted">切換到「編輯」改內容</div></div></div>
           <div class="step"><div><div class="sm semibold">發布新版本</div><div class="xs muted">輸入版本號同修改摘要</div></div></div>
-          <div class="step"><div><div class="sm semibold">下載發布檔</div><div class="xs muted">「匯出發布檔」→ 上載去 <code>data/units/${esc(load().unitCode)}/constitution.json</code></div></div></div>
+          <div class="step"><div><div class="sm semibold">等同步存到後端</div><div class="xs muted">右上角「已存到後端」之後，公開閱讀頁（constitution.html）即刻顯示新版 —— 唔使人手上載檔案</div></div></div>
           <div class="step"><div><div class="sm semibold">派 QR Code</div><div class="xs muted">團員掃描即睇最新版</div></div></div>
         </div>
+        <div style="padding:0 18px 16px"><div class="hint">${icon('info', 13)} 舊式做法（下載 constitution.json 叫管理員上載 <code>data/units/</code>）仍然支援，但已經唔需要 —— 只要後端 Apps Script 係 <b>v2.5.0</b> 或之後就得。</div></div>
       </div>
     </div>
   </div>`;
@@ -402,7 +403,7 @@ async function publish() {
       </div>
       <div class="field mt-12"><label class="label">修訂摘要</label>
         <input class="input" id="q-note" placeholder="例：修訂第 8 條團費金額、新增附件 B"></div>
-      <div class="hint mt-12">發布後記得下載「發布檔（constitution.json）」並上載到 <code>data/units/${esc(load().unitCode)}/</code>，公開閱讀頁同 QR Code 就會顯示新版。</div>`,
+      <div class="hint mt-12">發布之後等右上角同步狀態變「已存到後端」，公開閱讀頁（constitution.html）同 QR Code 就會即刻顯示新版 —— 唔使再人手上載檔案（後端 Apps Script v2.5.0+）。</div>`,
     actions: [{ label: '取消', class: 'btn', value: null },
       { label: '發布', class: 'btn-primary', onClick: el => ({
         version: el.querySelector('#q-ver').value.trim(),
@@ -579,7 +580,7 @@ function exportJson(auto = false) {
   const out = { ...c, unitCode: load().unitCode, exportedAt: new Date().toISOString() };
   const name = `constitution.json`;
   dlFile(name, JSON.stringify(out, null, 2), 'application/json');
-  toast(`已下載 ${name} —— 上載去 data/units/${load().unitCode}/ 就會更新公開頁`, 'ok');
+  toast(`已下載 ${name}（備份用；發布＋同步之後公開頁會自動更新，唔使上載）`, 'ok');
 }
 
 function publicUrl() {

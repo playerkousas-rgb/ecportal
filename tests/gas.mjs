@@ -54,10 +54,11 @@ function makeSheet(name, headers) {
     setFontSize: () => chain, setBorder: () => chain, clearContent: () => chain, setFontFamily: () => chain
   });
   Object.assign(chain, range(1, 1));
-  return {
+  const sheet = {
     _rows: rows,
     getName: () => name,
-    appendRow: (r) => { rows.push(r.slice()); },
+    /* 真 GAS 嘅 appendRow 會回返個 Sheet（可以連住 .getRange()）—— stub 要一樣 */
+    appendRow: (r) => { rows.push(r.slice()); return sheet; },
     getDataRange: () => ({ getValues: () => rows.map(r => r.slice()), clearContent: () => { rows.length = 0; } }),
     getLastRow: () => rows.length,
     getLastColumn: () => rows.reduce((m, r) => Math.max(m, r.length), 0),
@@ -68,6 +69,7 @@ function makeSheet(name, headers) {
     clear: () => { rows.length = 0; }, clearContents: () => { rows.length = 0; },
     getSheetId: () => 1, hideSheet: () => {}, showSheet: () => {}, setTabColor: () => {}, getFilter: () => null
   };
+  return sheet;
 }
 
 function makeGas({ apiKey = null } = {}) {
@@ -120,7 +122,12 @@ function makeGas({ apiKey = null } = {}) {
     const out = sandbox.doPost({ postData: { contents: JSON.stringify(body) } });
     try { return JSON.parse(out.getContent()); } catch { return { _raw: out.getContent() }; }
   };
-  return { sandbox, post, props, sheets };
+  /* GET（doGet：?action=load 讀進度 —— 進度前端／團員入口用） */
+  const get = (params = {}) => {
+    const out = sandbox.doGet({ parameter: params });
+    try { return JSON.parse(out.getContent()); } catch { return { _raw: out.getContent() }; }
+  };
+  return { sandbox, post, get, props, sheets };
 }
 
 /* 一份似真嘅資料庫（財政 + 生日 —— 正正係用家話入唔到嗰啲） */
@@ -430,6 +437,146 @@ section('分件儲存：saveDbPart／saveDbCommit（長壽命架構）');
   const upF = g.post({ action: 'uploadPhotos', unit: '0082', folderId: 'https://drive.google.com/drive/folders/ABC123',
     payload: { id: 'c_f1', photos: [{ name: 'b.jpg', type: 'image/jpeg', dataUrl: 'data:image/jpeg;base64,BBBB' }] } });
   ok('uploadPhotos 帶 folderId 免 key 用到（契約唔爆）', upF.ok === true && Array.isArray(upF.links), JSON.stringify(upF).slice(0, 140));
+}
+
+
+/* ============================================================
+   ⑨ v2.5.0 公開頁：團章／通告讀「資料庫」正本＋公開頁送出寫入資料庫
+   （團長回報：團章發布咗公開頁睇唔到、成員送出嘅嘢執委見唔到）
+   ============================================================ */
+section('v2.5.0：公開團章／通告讀正本、公開頁送出寫入資料庫');
+{
+  const g = makeGas();
+  /* 種一份有已發布團章＋通告嘅資料庫 */
+  const db = sampleDb();
+  db.profile = { name: '第八十二旅深資童軍團' };
+  db.constitution = { version: '3.1', status: 'published', chapters: [{ heading: { zh: '總則' }, articles: [] }] };
+  db.notices = [
+    { id: 'n1', title: { zh: '開放報名' }, status: 'published', needSignup: true, signups: [] },
+    { id: 'n2', title: { zh: '草稿' }, status: 'draft', signups: [] }
+  ];
+  ok('種資料入後端', g.post({ action: 'saveDb', unit: '0082', db }).ok === true);
+
+  const ping = g.post({ action: 'status' });
+  ok('status 回報 backendVersion（APP 可以驗後端係咪舊版）',
+    /^v2\./.test(String(ping.backendVersion || '')), JSON.stringify(ping.backendVersion));
+
+  const cons = g.post({ action: 'constitution', unit: '0082' });
+  ok('公開團章：免 key 讀到已發布版（發布＋同步即刻見到）',
+    cons.ok === true && cons.found === true && cons.constitution?.version === '3.1', JSON.stringify(cons).slice(0, 120));
+  ok('公開團章：有旅團名', cons.unitName === '第八十二旅深資童軍團', cons.unitName);
+  ok('公開團章：只回 constitution，唔會漏名冊／帳目',
+    !JSON.stringify(cons).includes('陳大文') && cons.db === undefined);
+
+  const nt = g.post({ action: 'notices', unit: '0082' });
+  ok('公開通告：由資料庫正本讀（淨係 published；唔使再手動「總表同步」）',
+    (nt.notices || []).length === 1 && nt.notices[0]?.id === 'n1',
+    JSON.stringify((nt.notices || []).map(n => n.id)));
+
+  /* 公開頁報名 → 寫入資料庫（同名防重複） */
+  const sg1 = g.post({ action: 'noticeSignup', unit: '0082', payload: { noticeId: 'n1', noticeTitle: '開放報名', values: { name: '陳大文', attend: '出席' } } });
+  ok('公開頁報名成功', sg1.ok === true && sg1.duplicate === false, JSON.stringify(sg1));
+  const sg2 = g.post({ action: 'noticeSignup', unit: '0082', payload: { noticeId: 'n1', values: { name: '陳大文', attend: '出席' } } });
+  ok('同一通告同名再報 → 防重複（換裝置重複提交都唔會重複入數）',
+    sg2.ok === true && sg2.duplicate === true, JSON.stringify(sg2));
+  const back1 = g.post({ action: 'loadDb', unit: '0082' });
+  const n1 = (back1.db?.notices || []).find(n => n.id === 'n1');
+  ok('報名寫入咗資料庫（執委部機開住 APP 就會拉到）',
+    (n1?.signups || []).length === 1 && n1.signups[0]?.name === '陳大文', JSON.stringify(n1?.signups));
+
+  /* 公開收支申報 → 寫入 db.claims（pending） */
+  const cl = g.post({ action: 'claim', unit: '0082', payload: { id: 'cl_x1', type: 'expense', amount: 100, date: '2026-09-18', item: '物資', byName: '陳大文', photos: [] } });
+  ok('公開收支申報送到', cl.ok === true, JSON.stringify(cl));
+  g.post({ action: 'claim', unit: '0082', payload: { id: 'cl_x1', type: 'expense', amount: 100, date: '2026-09-18', item: '物資', byName: '陳大文', photos: [] } });
+  const back2 = g.post({ action: 'loadDb', unit: '0082' });
+  const claims = back2.db?.claims || [];
+  const clRec = claims.find(c => c.id === 'cl_x1');
+  ok('收支申報寫入資料庫（APP「財務→收支申報」待批清單即刻見到）',
+    clRec?.status === 'pending' && clRec?.byName === '陳大文', JSON.stringify(clRec));
+  ok('重送同一筆申報唔會重複入數', claims.length === 1, String(claims.length));
+
+  /* 公開借用 → 寫入 db.invLoans（requested） */
+  const ln = g.post({ action: 'loan', unit: '0082', payload: { id: 'ln_x1', itemId: 'gi01', qty: 2, byName: '陳大文', fromDate: '2026-10-01', toDate: '2026-10-03', purpose: '露營', contact: '12345678' } });
+  ok('公開借用申請送到', ln.ok === true, JSON.stringify(ln));
+  const back3 = g.post({ action: 'loadDb', unit: '0082' });
+  const lnRec = (back3.db?.invLoans || []).find(l => l.id === 'ln_x1');
+  ok('借用寫入資料庫（APP「物資→借用與批核」即刻見到）',
+    lnRec?.status === 'requested' && lnRec?.qty === 2, JSON.stringify(lnRec));
+
+  /* 旅團隔離＋未發布團章 → found:false */
+  const db2 = sampleDb();
+  db2.constitution = { version: '0.1', status: 'draft', chapters: [] };
+  g.post({ action: 'saveDb', unit: '0099', db: db2 });
+  const cons99 = g.post({ action: 'constitution', unit: '0099' });
+  ok('未發布團章 → found:false（公開頁會用靜態檔後備）', cons99.ok === true && cons99.found === false, JSON.stringify(cons99).slice(0, 100));
+  const cons88 = g.post({ action: 'constitution', unit: '0088' });
+  ok('後端冇資料嘅旅團 → found:false（唔會撈錯隔籬旅）', cons88.ok === true && cons88.found === false);
+}
+
+
+/* ============================================================
+   ⑩ 寫入衝突模擬（2026-09-19 團長問題：「團員入口做進度追蹤，
+   兩個系統會唔會寫入衝突？密碼唔同、YMIS 一樣得唔得？」）
+   答案嘅根據 —— 三條寫入路線各寫各嘅分頁：
+     執委系統 saveDb →「資料庫」分頁（成個 app db）
+     進度前端 save →「進度追蹤」分頁（要 API Key＝執委身份）
+     團員入口 addRequest →「待批完成」分頁（免 key、只可 append）
+   模擬三邊輪流＋穿插咁寫，驗證冇任何一邊嘅資料被蓋走。
+   ============================================================ */
+section('寫入衝突模擬：執委 db ＋ 進度前端 ＋ 團員入口三路齊寫');
+{
+  const g = makeGas({ apiKey: 'K1' });
+  g.sandbox.initializeSheets();                        // 建齊分頁（資料庫／進度追蹤／待批完成…）
+  const KEY = g.props.get('API_KEY') || 'K1';
+
+  /* ① 執委系統：saveDb 推名冊（陳大文＋李小明） */
+  const db1 = sampleDb();
+  ok('① 執委 saveDb 推名冊成功', g.post({ action: 'saveDb', unit: '0082', db: db1, apiKey: KEY }).ok === true);
+
+  /* ② 兩個團員（唔同密碼都好，身份靠 YMIS）同時申報完成 —— 免 key */
+  const a1 = g.post({ action: 'addRequest', unit: '0082', ymis: '2008-001', name: '陳大文', item_id: 'L1-ACT-01', item_name: '參加六次活動', requested_date: '2026-09-01', evidence: 'A' });
+  const a2 = g.post({ action: 'addRequest', unit: '0082', ymis: '2009-002', name: '李小明', item_id: 'L1-ACT-01', item_name: '參加六次活動', requested_date: '2026-09-02', evidence: 'B' });
+  ok('② 兩個團員各自申報成功（免 key，各有一條 request_id）',
+    a1.ok === true && a2.ok === true && a1.request_id !== a2.request_id,
+    JSON.stringify([a1.request_id, a2.request_id]));
+
+  /* ③ 進度前端（執委身份）同時直接勾另一項 —— 要 key */
+  const s1 = g.post({ action: 'save', unit: '0082', apiKey: KEY, changes: [{ ymis: '2008-001', itemId: 'L1-SRV-01', date: '2026-08-30' }], confirmer: '陳領袖' });
+  ok('③ 進度前端直接勾項成功（API Key＝執委身份）', s1.ok === true && s1.processed === 1, JSON.stringify(s1));
+  const sBad = g.post({ action: 'save', unit: '0082', apiKey: '錯key', changes: [{ ymis: '2008-001', itemId: 'X', date: '2026-08-30' }] });
+  ok('③ 冇 key／錯 key 想直接勾 → 拒（團員入口只能夠申報，等批）', sBad.ok === false);
+
+  /* ④ 執委再推新版成個資料庫（團員申報緊嘅時候） */
+  const info1 = g.post({ action: 'dbInfo', unit: '0082', apiKey: KEY });
+  const db2 = sampleDb();
+  db2.members.push({ id: 'm3', name: '新團員', birthday: '2010-06-01', identity: 'member' });
+  const sv2 = g.post({ action: 'saveDb', unit: '0082', db: db2, apiKey: KEY, baseVersion: String(info1.version || '') });
+  ok('④ 執委再推新版 db（全份覆寫「資料庫」分頁）成功', sv2.ok === true, JSON.stringify(sv2).slice(0, 100));
+
+  /* ★ 關鍵：db 覆寫之後，三邊資料全部原封不動 */
+  const ld = g.get({ action: 'load' });
+  ok('★ db 覆寫後：進度追蹤紀錄仲喺度（唔會被 saveDb 蓋走）',
+    ld.progress?.['2008-001']?.['L1-SRV-01']?.date === '2026-08-30', JSON.stringify(ld.progress));
+  ok('★ db 覆寫後：兩個團員嘅申報仲喺度（pendingRequests 2 條）',
+    (ld.pendingRequests || []).length === 2, JSON.stringify((ld.pendingRequests || []).map(r => r.ymis)));
+  ok('★ db 覆寫後：loadDb 名冊係新版（3 人）',
+    (g.post({ action: 'loadDb', unit: '0082', apiKey: KEY }).db?.members || []).length === 3);
+
+  /* ⑤ 執委批核陳大文嘅申請 → 寫入進度追蹤 */
+  const rv = g.post({ action: 'reviewRequest', unit: '0082', apiKey: KEY, request_id: a1.request_id, decision: 'approved', review_note: 'OK', reviewer: '陳領袖', confirmed_date: '2026-09-19' });
+  ok('⑤ 執委批核成功（批准＝寫入進度追蹤）', rv.ok === true, JSON.stringify(rv));
+  const my1 = g.post({ action: 'myRequests', unit: '0082', ymis: '2008-001' });
+  const my2 = g.post({ action: 'myRequests', unit: '0082', ymis: '2009-002' });
+  ok('⑤ 陳大文見到自己申請「已批准」', my1.requests?.[0]?.status === 'approved', JSON.stringify(my1.requests?.[0]));
+  ok('⑤ myRequests 只回自己（李小明仲係 pending，見唔到陳大文嘅）',
+    my2.requests?.length === 1 && my2.requests[0]?.status === 'pending', JSON.stringify(my2.requests?.map(r => r.status)));
+  const ld2 = g.get({ action: 'load' });
+  ok('★ 批核寫入咗進度追蹤：陳大文 L1-ACT-01 有日期＋批核人（兩個前端都即刻見到）',
+    ld2.progress?.['2008-001']?.['L1-ACT-01']?.confirmer === '陳領袖', JSON.stringify(ld2.progress?.['2008-001']));
+
+  /* ⑥ 同一項再批一次 → 拒（防重複入數） */
+  const rv2 = g.post({ action: 'reviewRequest', unit: '0082', apiKey: KEY, request_id: a1.request_id, decision: 'approved', reviewer: '陳領袖' });
+  ok('⑥ 同一申請批兩次 → 拒（唔會重複入數）', rv2.ok === false, JSON.stringify(rv2));
 }
 
 
