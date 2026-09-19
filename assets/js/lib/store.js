@@ -355,6 +355,18 @@ export async function init(opts = {}) {
   }
   lsSet(K.unit, code);
   lsSet(K.mode, state.mode);
+  /* ★ 三方合併基準：呢部機嘅「起始狀態」指紋。
+     一定要喺**種子建立嗰陣**就記低 —— 如果等到第一次同步先至記，
+     一部全新機「開機 → 填 IG／FB → 撳同步」就會因為未有 base
+     而被當成「本機冇改過」，填嘢被後端蓋返（團長回報嘅正是呢個）。
+     有 base 之後就分得清楚：
+       · 團章冇掂過  → 指紋同 base 一樣 → 後端贏（種子機唔會蓋走已發布團章）
+       · settings 改過 → 指紋唔同      → 本機贏（填嘅 IG／FB 出到街）
+     已經有 base 嘅舊裝置唔好覆蓋（佢嘅 base 先至準）。 */
+  if (!state.db.sync?.baseObjHash) {
+    state.db.sync = { ...(state.db.sync || {}), baseObjHash: snapshotObjHashes(state.db) };
+    persistLocalOnly();
+  }
   state.ready = true;
   return state.db;
 }
@@ -621,6 +633,10 @@ export function adoptRemote(remoteDb, { version = '', merge = false } = {}) {
   if (local?.sync?.unit) state.db.sync.unit = local.sync.unit;
   if (local?.sync?.auto !== undefined) state.db.sync.auto = local.sync.auto;
   if (local?.backend) state.db.backend = local.backend;
+  /* ★ 記低「三方合併基準」：呢一刻本機＝後端已對齊，
+     之後邊個物件欄位變咗就代表**本機真係改過**（見 mergeObjectField()）。
+     呢一行係團章／IG-FB「POST 唔到出街」嗰個 bug 嘅另一半修復。 */
+  state.db.sync.baseObjHash = snapshotObjHashes(state.db);
   state.seedFailed = false;
   state.seedSource = merge ? '（後端＋本機合併）' : '（後端：旅團自己嘅 Google Sheet）';
   state.db.meta = { ...(state.db.meta || {}), seedSource: state.seedSource };
@@ -679,6 +695,9 @@ function mergeArrayById(rv, lv) {
 /** 匯出畀測試等需要合併語意嘅地方用（純函數，唔會寫入） */
 export function mergeDbs(remote, local) {
   const out = { ...remote };
+  /* 三方合併嘅「基準」：上次同後端對齊嗰陣，每個物件欄位嘅內容指紋。
+     冇佢就分唔到「本機真係改過」同「本機淨係有一份舊／種子副本」。 */
+  const base = local?.sync?.baseObjHash || null;
   Object.keys(local).forEach(key => {
     if (key === 'sync' || key === 'meta' || key === 'backend' || key === 'unitCode') return;
     const lv = local[key];
@@ -687,10 +706,117 @@ export function mergeDbs(remote, local) {
       out[key] = mergeArrayById(rv || [], lv);
     } else if (lv !== undefined && rv === undefined) {
       out[key] = lv;            // 後端完全冇呢個 key（舊版後端）→ 用本機
+    } else if (isPlainObj(lv) && isPlainObj(rv)) {
+      /* 2026-09-19 團長回報兩件事：
+           「團章我都一直 POST 唔到出尼」
+           「IG／FB 公開資料 …… 團員登入後完全見唔到」
+         死因就喺呢度。舊 code 呢一格係「兩邊都有嘅物件 → 保持 remote」，
+         即係**本機改咗嘅 settings／constitution 一律被後端蓋返**。
+         於是：執委填完 IG／FB → 撳同步 → 合併嗰下自己填嘅嘢被掉咗 →
+         寫上後端嘅係冇 troopLinks 嗰份 → 團員永遠睇唔到。團章同一個死法。
+
+         但「一律本機贏」都唔得 —— 我試過，一部**全新種子**裝置（本機團章係
+         seed 嘅 v0.1 draft）一同步就把已發布嘅 v3.1 蓋走（tests/hub.mjs 即刻紅）。
+         所以要做**三方合併**：靠 sync.baseObjHash（上次同步嗰陣嘅內容指紋）
+         判斷「本機有冇真係改過呢個物件」。見 mergeObjectField()。 */
+      out[key] = mergeObjectField(rv, lv, base?.[key]);
     }
-    /* 兩邊都有嘅物件（settings／constitution…）→ 保持 remote（已在 out） */
+    /* 純量／其他型態兩邊都有 → 保持 remote（已在 out） */
   });
   return out;
+}
+
+function isPlainObj(v) {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
+/**
+ * 深層合併兩個物件（後端版 remote ＋ 本機版 local）。
+ *
+ * 規則：
+ *   · 淨係一邊有嗰個 key → 用嗰邊（兩邊嘅欄位都唔會冇咗）
+ *   · 兩邊都係物件 → 逐層落去
+ *   · 兩邊都係陣列 → mergeArrayById（按 id 聯集，兩邊紀錄都保留）
+ *   · 兩邊都係純量而唔同 → **本機贏**
+ *
+ * 最後嗰條係有意識嘅取捨：撳「立即同步」嘅人，就係而家手上有嘢想發布嘅人。
+ * 舊行為（後端贏）會令佢嘅改動靜靜地消失 —— 團長回報嘅「POST 唔到」就係咁嚟。
+ * 代價係：如果兩部機同一秒改**同一格**，後撳嗰個會蓋先撳嗰個。
+ * 呢個同「兩邊都保留但其中一邊靜靜地冇咗」比，係明顯較可預期嘅行為。
+ */
+function deepMerge(remote, local) {
+  const out = { ...remote };
+  Object.keys(local).forEach(k => {
+    const lv = local[k];
+    const rv = remote ? remote[k] : undefined;
+    if (lv === undefined) return;
+    if (Array.isArray(lv) && (Array.isArray(rv) || rv === undefined)) {
+      out[k] = mergeArrayById(rv || [], lv);
+    } else if (isPlainObj(lv) && isPlainObj(rv)) {
+      out[k] = deepMerge(rv, lv);
+    } else {
+      out[k] = lv;              // 本機贏（包括「後端冇呢格」同「兩邊純量唔同」）
+    }
+  });
+  return out;
+}
+
+/**
+ * 內容指紋（用嚟判斷「本機有冇真係改過呢個物件」）。
+ * 唔使密碼學強度 —— 只要穩定、夠敏感。
+ */
+export function objHash(v) {
+  if (v === undefined || v === null) return '';
+  let str;
+  try { str = JSON.stringify(v); } catch { return ''; }
+  if (!str) return '';
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+  return String(h >>> 0) + ':' + str.length;
+}
+
+/**
+ * push 成功之後调用：而家本機＝後端，把三方合併基準更新到呢一刻。
+ * 只應該喺「冇剩低未同步改動」嗰陣调用 —— 如果送出期間又改咗嘢，
+ * 嗰啲改動仲未入後端，更新基準會令佢哋之後被當成「本機冇改過」而俾後端蓋返。
+ */
+export function markBaseAligned() {
+  if (!state.db) return;
+  state.db.sync = state.db.sync || {};
+  state.db.sync.baseObjHash = snapshotObjHashes(state.db);
+}
+
+/** 為 db 入面所有物件型態嘅頂層欄位計指紋（存入 sync.baseObjHash） */
+function snapshotObjHashes(db) {
+  const out = {};
+  if (!db) return out;
+  Object.keys(db).forEach(k => {
+    if (k === 'sync' || k === 'meta' || k === 'backend' || k === 'unitCode') return;
+    if (isPlainObj(db[k])) out[k] = objHash(db[k]);
+  });
+  return out;
+}
+
+/**
+ * 合併一個「兩邊都有嘅物件欄位」（settings／constitution …）—— 三方合併。
+ *
+ * @param rv    後端版
+ * @param lv    本機版
+ * @param baseH 上次同步嗰陣呢個欄位嘅指紋（可能冇）
+ *
+ * 判斷：
+ *   · 冇 baseH           → 呢部機**從未同後端對齊過**呢個欄位（全新／種子機）。
+ *                          佢手上嘅唔算「改動」，只係一份舊副本 → **後端贏**。
+ *                          （實測：冇呢條，一部種子機一同步就把已發布團章 v3.1
+ *                            蓋返做 seed 嘅 v0.1 draft —— tests/hub.mjs 即刻紅。）
+ *   · objHash(lv)===baseH → 本機**冇改過** → **後端贏**（後端嘅新嘢照入）
+ *   · 其他               → 本機**真係改過** → 深層合併，衝突嗰格**本機贏**
+ *                          （呢個先係團長要嘅「我撳發布 ＝ 出街」）
+ */
+function mergeObjectField(rv, lv, baseH) {
+  if (!baseH) return rv;                        // 從未對齊 → 後端贏
+  if (objHash(lv) === baseH) return rv;         // 本機冇改 → 後端贏
+  return deepMerge(rv, lv);                     // 本機改過 → 深層合併，本機優先
 }
 
 /** 本機已知嘅「後端版本」（上次 pull／push 成功嗰個）—— push 時做樂觀鎖 baseVersion 用 */

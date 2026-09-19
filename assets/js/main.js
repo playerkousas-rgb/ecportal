@@ -21,7 +21,7 @@ import {
   loginSetupKey, applyAccount
 } from './lib/auth.js';
 import { pendingMeetings, overdueFees, pendingClaims, pendingLoans, profile, notices, onLegacyHost, canonicalUrl } from './lib/model.js';
-import { esc, icon, toast, modal, confirmDlg } from './lib/util.js';
+import { esc, icon, toast, toastAction, modal, confirmDlg } from './lib/util.js';
 import { parse, go } from './lib/router.js';
 
 import * as dashboard from './views/dashboard.js';
@@ -109,6 +109,9 @@ async function boot() {
      之後 → 任何改動 debounce 幾秒自動寫返後端
    ============================================================ */
 let remoteApi = null;
+/* 開機問唔到後端嗰陣嘅原因（同一個資訊都會經 remote.syncState() 傳去界面，
+   呢度只係留返做 log／除錯用） */
+let bootSyncWarn = null;
 export function remoteMod() { return remoteApi; }
 
 async function syncBoot() {
@@ -128,38 +131,49 @@ async function syncBoot() {
     return;
   }
 
+  /* 2026-09-19 團長回報（第三次同一個病徵，今次講到正題）：
+       「其他 APP 都係暫存喺瀏覽器、撳同步先一次過 SAVE；呢個成日自動
+         SAVE 就變相蓋咗佢 …… A 開佢未讀後端就已經複寫，B 開又係 ——
+         永遠自己睇自己。」
+     死因喺呢個 try/catch：佢食咗 remoteInfo() 嘅失敗（網絡慢／逾時／平台
+     未登記）就繼續行 arm()，而 arm() 一見到 pending 就 scheduleSave()
+     → 2.5 秒後 push。**未讀後端就已經寫後端**，兩部機輪流盲蓋。
+     而家開機、60 秒 poll、切返視窗、同**每次 push 之前**一律行同一個
+     remote.reconcile()：先讀後端版本 → 有新版就拉＋合併 → 讀到先至准寫。 */
   try {
-    const info = await remoteApi.remoteInfo();
-    if (info?.ok && info.found) {
-      /* 2026-09-18 修復：以前用「時間戳邊個新」決定使唔使拉後端 ——
-         但本機 meta.updatedAt 喺離線改動嗰陣都會更新，搞到過時裝置
-         永遠「以為自己較新」→ 唔拉 → 一改嘢就把過時資料盲蓋上後端
-         （「另一邊讀不到」「一登入後端就清空」嘅死因）。
-         而家用「版本內容」判斷：後端版本 ≠ 本機上次同步過嘅版本
-         → 即係我手上嘅唔係最新內容 → 拉落嚟；本機有未同步改動就合併。 */
-      const remoteAt = String(info.version || info.at || '');
-      const lastSynced = store.lastSyncedVersion();
-      if (remoteAt && remoteAt !== lastSynced) {
-        const got = await remoteApi.pullDb();
-        if (got?.ok && got.found && got.db) {
-          try {
-            const merged = Number(store.tryLoad()?.sync?.pending || 0) > 0;
-            store.adoptRemote(got.db, { version: String(got.version || ''), merge: merged });
-            applyTheme(load()?.unit?.theme);
-            render();
-            toast(merged ? '後端有另一部機嘅新版本 —— 已同本機改動合併' : '已由後端載入最新資料', 'ok');
-          } catch (e) { console.warn('[sync] 採用後端資料失敗', e); }
-        }
-      }
+    const rc = await remoteApi.reconcile({ silent: true });
+    if (rc?.ok && rc.updated) {
+      try {
+        applyTheme(load()?.unit?.theme);
+        render();
+        toast(rc.merged ? '後端有另一部機嘅新版本 —— 已同本機改動合併' : '已由後端載入最新資料', 'ok');
+      } catch (e) { console.warn('[sync] 採用後端資料失敗', e); }
+    } else if (rc?.ok && rc.oldBackend) {
+      bootSyncWarn = { ok: false, reason: 'old_backend', error: '後端未更新 —— 讀唔到版本' };
+      toastAction('後端版本舊咗 —— 睇唔到隊友嘅改動', '點樣更新？', () => go('#/tables/sync'), 'err');
+    } else if (!rc?.ok) {
+      /* 問唔到後端 —— 唔好靜靜雞當冇事。最常見係平台伺服器端未登記呢個旅團
+         （TROOP_<編號>_BACKEND / _APIKEY 未設定），而呢個用家自己貼 /exec
+         就即刻救得返，所以一定要即刻話佢知去邊度撳邊粒掣。
+         同時 pushDb 嘅硬保險已經生效：讀唔到後端就一律唔會寫，改動留喺
+         本機排隊重試，唔會蓋走另一部機嘅資料。 */
+      bootSyncWarn = rc;
+      toastAction(
+        rc?.reason === 'not_registered'
+          ? '連唔到旅團後端 —— 你嘅改動而家淨係喺呢部機'
+          : '讀唔到旅團後端 —— 已暫停寫入（避免蓋走另一部機嘅資料）',
+        '點樣修？', () => go('#/tables/sync'), 'err');
     }
   } catch (e) {
-    console.warn('[sync] 開機對資料失敗（照用本機資料）', e);
+    console.warn('[sync] 開機對資料失敗（改動留喺本機，唔會盲寫後端）', e);
   }
 
   /* 開機流程完成先至開始自動儲存（避免種子資料一載入就寫返上去） */
   remoteApi.arm();
-  /* 會議模式：每 60 秒靜靜問一次後端有冇隊友更新（一齊睇／一齊做嘢用） */
-  remoteApi.startPolling();
+  /* 2026-09-19 團長指示「唔好不停讀」：會議模式（每 60 秒背景問後端）而家係
+     **opt-in**，預設唔會行。要一齊睇／一齊做嘢就喺「總表同步」剔「會議模式」。
+     冇開嗰陣，讀後端淨係發生喺：開機一次 ＋ 你自己撳「立即同步」。 */
+  if (remoteApi.remoteCfg?.().poll) remoteApi.startPolling();
   /* 跨視窗／跨機：一切返呢個視窗就即刻對一次版本（同一帳戶無痕＋普通視窗
      都會即時見到對方嘅改動，唔使等 60 秒） */
   remoteApi.startVisibilityWatch?.();
@@ -168,7 +182,10 @@ async function syncBoot() {
   /* 離開頁面前，仲有嘢未存就即刻試多次 */
   window.addEventListener('beforeunload', (e) => {
     if (remoteApi?.hasPending?.()) {
-      remoteApi.flush();
+      /* 2026-09-19 團長指示「唔好比佢有機會出事」：連關視窗都**唔會**寫後端。
+         以前呢度一有 pending 就 flush() —— 等如用家關個 tab 都被動寫咗一次，
+         正正係佢唔想嘅「不停寫」。而家淨係提醒佢有嘢未存。
+         注意：**冇** e.preventDefault() 以外嘅動作，尤其冇 flush()。 */
       e.preventDefault();
       e.returnValue = '仲有改動未儲存到後端，真係要離開？';
       return e.returnValue;
@@ -205,13 +222,21 @@ function paintSyncChip() {
     loading: ['b-warn', 'cloud', '讀取緊…'],
     conflict:['b-warn', 'alert', '同步撞版：已自動合併'],
     error:   ['b-danger', 'alert', '儲存失敗'],
+    /* 問唔到後端（最常見：平台未登記呢個旅團）—— 唔可以扮「已連後端」 */
+    unreachable: ['b-danger', 'alert', '連唔到後端'],
     idle:    ['b-ok', 'cloud', '已連後端']
   };
   const [cls, ic, label] = map[s.state] || map.idle;
   const needSave = pending > 0 || s.state === 'error' || s.state === 'conflict' || s.state === 'offline';
+  /* 手動模式（同步方式揀咗「撳同步先存」）：掣要叫「立即同步」，因為佢真係
+     一次過做齊「讀後端 → 合併 → 寫後端」，而唔係淨係單向推。 */
+  const manual = tryLoad()?.sync?.auto === false;
+  const actLabel = needSave
+    ? `${manual ? '立即同步' : '立即儲存'}${pending > 1 ? `（${pending}）` : ''}`
+    : '立即同步';
   el.innerHTML = `<span class="badge ${cls}" title="${esc(s.msg || label)}">${icon(ic, 12)} ${esc(label)}</span>
-    <button class="btn btn-xs ${needSave ? 'btn-primary' : ''}" id="syncActBtn" title="${needSave ? '即刻把呢部機嘅改動寫入後端' : '睇下隊友有冇新改動，有就拉落嚟'}">
-      ${icon(needSave ? 'save' : 'refresh', 12)} ${needSave ? `立即儲存${pending > 1 ? `（${pending}）` : ''}` : '立即同步'}</button>`;
+    <button class="btn btn-xs ${needSave ? 'btn-primary' : ''}" id="syncActBtn" title="一次過：先讀後端最新版本（有隊友新改動就拉落嚟合併），再把呢部機嘅改動寫返上去">
+      ${icon(needSave ? 'save' : 'refresh', 12)} ${esc(actLabel)}</button>`;
   el.style.cursor = 'default';
   const badge = el.querySelector('.badge');
   if (badge) badge.style.cursor = 'pointer';
@@ -220,8 +245,15 @@ function paintSyncChip() {
     const btn = el.querySelector('#syncActBtn');
     if (btn) { btn.disabled = true; btn.textContent = '處理中…'; }
     if (needSave) {
-      const r = await remoteApi.flush();
-      toast(r.ok ? '已儲存到後端 ✓' : '儲存失敗：' + (r.error || '未知錯誤') + (r.hint ? '（' + r.hint + '）' : ''), r.ok ? 'ok' : 'err');
+      /* 2026-09-19：改由 syncNow() —— 先讀後端再寫，唔會淨係單向推上去蓋走
+         另一部機嘅資料（團長：「A 開佢未讀後端就已經複寫」）。 */
+      const r = await remoteApi.syncNow();
+      const pulled = r?.pulled ? (r.mergedPull ? '已同你本機改動合併隊友新版本' : '已載入隊友最新改動') : '';
+      toast(r.ok
+        ? [pulled, r.pushed ? '已寫入後端 ✓' : '後端已經係最新，冇嘢要寫'].filter(Boolean).join('，')
+        : '同步失敗：' + (r.error || '未知錯誤') + (r.hint ? '（' + r.hint + '）' : ''),
+        r.ok ? 'ok' : 'err');
+      if (r.ok && r.pulled) render();
     } else {
       const r = await remoteApi.checkRemote();
       if (r?.upToDate) toast('已經係最新 —— 後端冇隊友新改動', 'ok');

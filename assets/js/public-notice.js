@@ -9,13 +9,17 @@
 import { esc, icon, toast, uid } from './lib/util.js';
 import { todayISO } from './lib/dates.js';
 import { noticeInfoRows } from './lib/notice-fields.js';
+import { postBackend, beFromQuery, proxyUsable } from './lib/gateway.js';
 
 const q = new URLSearchParams(location.search);
 const app = document.getElementById('app');
-const unitCode = q.get('u') || '0082';
+/* 注意：一定要係 let —— 下面 boot() 會喺「網址冇帶 ?u=」時改用 Registry 嘅 defaultUnit。
+   （以前寫 const，真係行到嗰行會即場 TypeError 成頁死。） */
+let unitCode = q.get('u') || '0082';
 const noticeId = q.get('n') || '';
 let notice = null, meta = {}, sent = false;
 let registryData = null;   // data/units.json 讀返嚟嘅 Registry（表單送出要用嚟解析目的地）
+let backendNote = '';      // 讀唔到後端嘅真正原因（顯示用）
 
 const LOCAL_KEY = `venture82.pub.signup.${unitCode}.${noticeId}`;
 
@@ -25,17 +29,16 @@ async function loadJson(url) {
   return r.json();
 }
 
-/** 由旅團自己後端讀已發布通告（經同源 /api/proxy；免登入、冇 API Key） */
+/** 由旅團自己後端讀已發布通告（免登入、冇 API Key）。
+    ① 同源 /api/proxy（平台登記咗旅團）② 連結帶嘅 ?be=<旅團自己嘅 /exec>。 */
 async function fetchBackendNotices() {
   try {
-    const r = await fetch('api/proxy', {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'notices', unit: unitCode })
-    });
-    const j = await r.json();
-    return Array.isArray(j?.notices) ? j.notices : [];
-  } catch (e) { return []; }
+    const r = await postBackend({ action: 'notices' }, { unit: unitCode, execUrl: beFromQuery() });
+    if (Array.isArray(r.json?.notices)) return r.json.notices;
+    backendNote = r.error || r.json?.error || (r.reason === 'not_registered'
+      ? '平台未登記呢個旅團，連結亦冇帶後端網址（?be=）' : '讀唔到後端');
+    return [];
+  } catch (e) { backendNote = e?.message || String(e); return []; }
 }
 
 async function boot() {
@@ -255,28 +258,33 @@ function bindSignup(n, { closed, full }) {
       at: new Date().toISOString(), values, unit: unitCode
     };
 
-    /* 目的地：① 通告／旅團公開設定嘅網址 ② 同源 /api/proxy（伺服器端解析旅團後端） */
-    /* 嚴格隔離：只可以用「呢個旅團自己」登記嘅後端。
+    /* 目的地（嚴格隔離：只可以用「呢個旅團自己」嘅後端 ——
        以前會 fallback 去 registryData.backend（共用 ＝ 82 旅張 Sheet），
-       等於把 A 旅嘅報名寫咗入 B 旅張表 —— 所以唔再借用。 */
+       等於把 A 旅嘅報名寫咗入 B 旅張表，所以唔再借用）：
+       ① 通告／旅團設定明確填咗嘅網址
+       ② 同源 /api/proxy（平台伺服器端登記咗旅團）
+       ③ 連結帶嘅 ?be=<旅團自己嘅 /exec>（平台未登記時嘅自助路線） */
     const mine = registryData?.units?.[unitCode] || null;
-    const direct = n.submitUrl || meta.notice?.submitUrl
+    const explicit = n.submitUrl || meta.notice?.submitUrl
       || (mine ? (mine.backend?.gasUrl || '') : '') || '';
-    const endpoint = direct || (canUseProxy() ? 'api/proxy' : '');
     let delivered = false, serverMsg = '';
-    if (endpoint) {
+    if (explicit) {
       try {
-        const res = await fetch(endpoint, {
+        const res = await fetch(explicit, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },   // 避免 CORS preflight
           body: JSON.stringify({ action: 'noticeSignup', unit: unitCode, source: '82venture', payload: row })
         });
-        const txt = await res.text();
         delivered = res.ok;
-        serverMsg = txt.slice(0, 120);
-      } catch (err2) {
-        delivered = false; serverMsg = err2.message;
-      }
+        serverMsg = (await res.text()).slice(0, 120);
+      } catch (err2) { delivered = false; serverMsg = err2.message; }
+    } else {
+      try {
+        const r = await postBackend({ action: 'noticeSignup', source: '82venture', payload: row },
+          { unit: unitCode, execUrl: beFromQuery(), timeoutMs: 45000 });
+        delivered = !!r.ok && r.json?.ok !== false && r.json?.success !== false;
+        serverMsg = String(r.error || r.json?.error || '').slice(0, 120);
+      } catch (err2) { delivered = false; serverMsg = err2.message; }
     }
     if (!delivered) {
       const list = localSignups();
@@ -290,7 +298,10 @@ function bindSignup(n, { closed, full }) {
 
     sent = true;
     render();
-    if (!delivered && endpoint) toast('未能連線到總表，已暫存喺你呢部裝置', 'warn');
+    /* 有得送（明確網址／平台代理／連結帶嘅 ?be=）而送唔到 → 明確話畀團員知
+       而家只係暫存喺佢部機；根本冇路送就唔好嚇佢。 */
+    const reachable = !!explicit || proxyUsable() || !!beFromQuery();
+    if (!delivered && reachable) toast('未能連線到總表，已暫存喺你呢部裝置', 'warn');
   });
 }
 

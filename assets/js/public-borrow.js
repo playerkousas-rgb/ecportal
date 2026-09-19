@@ -11,6 +11,12 @@
 
 import { esc, icon, uid, todayISO, toast, copyText } from './lib/util.js';
 import { loadMe, saveMe } from './lib/member-me.js';
+import { postBackend, beFromQuery, proxyUsable } from './lib/gateway.js';
+
+/* 「送唔送到總表」唔可以再淨係睇 settings.publicBorrow.submitUrl ——
+   平台用 Vercel 環境變數登記嘅旅團，公開頁讀唔到任何設定檔，嗰格永遠係空，
+   於是明明經 /api/proxy（或者連結帶嘅 ?be=）送得到，個頁都係話「會存喺你呢部裝置」。 */
+const connected = () => !!(cfg.submitUrl || beFromQuery() || proxyUsable());
 
 const q = new URLSearchParams(location.search);
 const app = document.getElementById('app');
@@ -91,7 +97,7 @@ function render() {
       <div class="logo">${esc((meta.short || unitCode).slice(0, 3))}</div>
       <div class="grow"><div style="font-weight:800;font-size:16px">${esc(meta.name || unitCode)}</div>
         <div class="xs" style="color:#EBC6CE">${cfg.title || '物資借用申請 · 免登入'}</div></div>
-      ${cfg.submitUrl ? '<span class="badge b-grey" title="已連接旅團總表">已連接總表</span>' : ''}
+      ${connected() ? '<span class="badge b-grey" title="已連接旅團總表">已連接總表</span>' : ''}
     </div>
   </div>
 
@@ -153,7 +159,7 @@ function render() {
 
       <div class="pe-err" id="pb-err"></div>
       <button class="btn btn-primary pe-big-btn" type="submit" ${items.length ? '' : 'disabled'}>${icon('send', 18)} 送出借用申請</button>
-      <div class="hint mt-10">${cfg.submitUrl
+      <div class="hint mt-10">${connected()
         ? '送出後會<b>直接記錄到旅團總表</b>（待批核），執委批准之後就可以攞。'
         : '送出後會存喺你呢部裝置；按「複製內容」就可以傳送畀執委。'}</div>
     </form>
@@ -260,6 +266,18 @@ async function submit(e) {
     } catch (err) {
       uncertain = true;
       msg = err.message;
+    }
+  } else {
+    /* 冇明確設定嘅送出網址 → 行統一入口（lib/gateway.js）：
+       ① 同源 /api/proxy ② 連結帶嘅 ?be=<旅團自己嘅 /exec> */
+    try {
+      const r = await postBackend({ action: 'loan', source: '82venture', payload },
+        { unit: unitCode, execUrl: beFromQuery(), timeoutMs: 60000 });
+      delivered = !!r.ok && r.json?.ok !== false && r.json?.success !== false;
+      msg = String(r.error || r.json?.error || '').slice(0, 120);
+      if (!delivered && r.via === 'direct') uncertain = true;
+    } catch (err) {
+      uncertain = true; msg = err.message;
     }
   }
   const rows = localRows();

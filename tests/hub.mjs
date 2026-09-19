@@ -234,6 +234,43 @@ try {
   }
   ok('後端收到陳大文嘅「出席」回覆（以團員 id 記錄）', rsvpSeen?.status === 'present', JSON.stringify(rsvpSeen));
 
+  /* ---- 交卷都一樣要即刻入後端 ----
+     2026-09-19 團長問：「除咗交卷之外，報出席同交單唔係都會係即刻寫咩？」
+     係。出席同交卷兩樣都係入站資料（團員部機交完就關，永遠唔會有人撳「立即同步」），
+     所以兩樣都即刻寫。之前呢度**淨係測到出席**，交卷係冇驗證嘅 —— 補返。 */
+  section('交卷即刻寫返後端（同出席一樣，唔會困喺團員部機）');
+  /* 而家仲喺活動詳情頁（RSVP 嗰下入咗去）—— 先撳「返回」返首頁，
+     再撳試卷卡。兩下都係用返 app 自己嘅 data-open 導航（會 hash ＋ paint）。 */
+  const backBtn = [...doc.querySelectorAll('[data-open]')].find(b => b.dataset.open === '#/home');
+  ok('詳情頁有「返回」掣', !!backBtn);
+  backBtn?.click();
+  await wait(200);
+  const qzBtn = [...doc.querySelectorAll('[data-open]')].find(b => b.dataset.open === '#/quiz/qz1');
+  ok('首頁有試卷卡', !!qzBtn);
+  qzBtn?.click();
+  await wait(200);
+  /* 注意：type='single' 渲染出嚟係 **radio**（data-ans ＋ value），
+     submitQuiz() 讀嘅係 `[data-ans]:checked`。所以要「剔選」嗰個選項，
+     唔係改 input.value（改 value 唔會令佢變 checked → 讀返嚟係空）。 */
+  const radios = [...doc.querySelectorAll('[data-ans="qq1"]')];
+  ok('試卷頁有得答（single 題出到選項）', radios.length === 2, String(radios.length));
+  const pick = radios.find(r => r.value === '2');
+  ok('有「2」呢個選項', !!pick);
+  if (pick) pick.checked = true;
+  const quizSubmit = doc.querySelector('[data-quiz-submit]');
+  ok('有「交卷」掣', !!quizSubmit);
+  quizSubmit?.click();
+  let quizSeen = null;
+  for (let i = 0; i < 40; i++) {
+    await wait(250);
+    const r = await proxyCall({ action: 'loadDb', unit: '0082' });
+    const q = (r.db?.quizzes || []).find(x => x.id === 'qz1');
+    const mem = (r.db?.members || []).find(m => m.ymis === '2026000001');
+    if (q?.responses && mem && q.responses[mem.id]) { quizSeen = q.responses[mem.id]; break; }
+  }
+  ok('★ 後端收到陳大文嘅答卷（以團員 id 記錄）',
+    !!quizSeen && quizSeen?.answers?.qq1 === '2', JSON.stringify(quizSeen));
+
   /* ============ 我的進度（團員登入後做齊進度追蹤）＋ 兩個系統寫入衝突模擬 ============ */
   section('我的進度（登入後自己申報 —— 唔使分兩個 APP）');
   {

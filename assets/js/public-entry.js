@@ -11,6 +11,13 @@
 import { esc, icon, uid, todayISO, toast, copyText } from './lib/util.js';
 import { photoPicker, bindPhotoPicker } from './views/ui.js';
 import { loadMe, saveMe } from './lib/member-me.js';
+import { postBackend, beFromQuery, proxyUsable } from './lib/gateway.js';
+
+/* 「送唔送到總表」唔可以再淨係睇 settings.publicEntry.submitUrl ——
+   平台用 Vercel 環境變數登記嘅旅團，公開頁讀唔到任何設定檔，
+   嗰格永遠係空，於是明明經 /api/proxy（或者連結帶嘅 ?be=）送得到，
+   個頁都係話「會存喺你呢部裝置」。 */
+const connected = () => !!(cfg.submitUrl || beFromQuery() || proxyUsable());
 
 const q = new URLSearchParams(location.search);
 const app = document.getElementById('app');
@@ -85,7 +92,7 @@ function render() {
       <div class="logo">${esc((meta.short || unitCode).slice(0, 3))}</div>
       <div class="grow"><div style="font-weight:800;font-size:16px">${esc(meta.name || unitCode)}</div>
         <div class="xs" style="color:#EBC6CE">${cfg.hero || '手機記一筆 · 影相＋揀欄目就交得'}</div></div>
-      ${cfg.submitUrl ? '<span class="badge b-grey" title="已連接旅團總表">已連接總表</span>' : ''}
+      ${connected() ? '<span class="badge b-grey" title="已連接旅團總表">已連接總表</span>' : ''}
     </div>
   </div>
 
@@ -145,7 +152,7 @@ function render() {
 
       <div class="pe-err" id="pe-err"></div>
       <button class="btn btn-primary pe-big-btn" type="submit">${icon('send', 18)} 送出畀司庫</button>
-      <div class="hint mt-10">${cfg.submitUrl
+      <div class="hint mt-10">${connected()
         ? '送出後會<b>直接記錄到旅團總表</b>（待批核），司庫批准就自動入帳。'
         : '送出後會存喺你呢部裝置；按「複製內容」就可以傳送畀司庫。'}</div>
     </form>
@@ -252,6 +259,20 @@ async function submit(e) {
       delivered = false;
       uncertain = true;      // 送出咗，但瀏覽器唔畀讀回應（Apps Script 常見）
       msg = err.message;
+    }
+  } else {
+    /* 冇明確設定嘅送出網址 → 行統一入口（lib/gateway.js）：
+       ① 同源 /api/proxy（平台伺服器端登記咗旅團）
+       ② 連結帶嘅 ?be=<旅團自己嘅 /exec>（平台未登記時嘅自助路線）
+       兩條都唔得先至真的「淨係存喺本機」。 */
+    try {
+      const r = await postBackend({ action: 'claim', source: '82venture', payload },
+        { unit: unitCode, execUrl: beFromQuery(), timeoutMs: 60000 });
+      delivered = !!r.ok && r.json?.ok !== false && r.json?.success !== false;
+      msg = String(r.error || r.json?.error || '').slice(0, 120);
+      if (!delivered && r.via === 'direct') uncertain = true;   // 直打 GAS：可能已收到但讀唔到回應
+    } catch (err) {
+      delivered = false; uncertain = true; msg = err.message;
     }
   }
   const rows = localRows();
