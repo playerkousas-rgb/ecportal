@@ -98,20 +98,130 @@ try {
       store.commit();
       out.steps.push({ op: 'setConstitution', version: step.obj?.version || '' });
     }
+    /* 領袖喺「總表同步 → 同步設定」貼 /exec ＋ API Key（自助路線） */
+    if (step.op === 'setSync') {
+      /* 2026-09-19：自動寫入已剷走（remoteCfg().auto 寫死 false），
+         所以呢度冇 auto／autoModel 可設 —— 剩「會議模式」（淨係讀）一個開關。 */
+      const db = store.load();
+      db.sync = {
+        ...(db.sync || {}), url: step.url || '', apiKey: step.apiKey || '',
+        unit: step.unit || '0082', poll: step.poll === true
+      };
+      store.commit();
+      const cfg = remote.remoteCfg();
+      out.steps.push({
+        op: 'setSync', url: cfg.url, hasKey: !!cfg.apiKey, viaProxy: cfg.viaProxy,
+        ok: cfg.ok, auto: cfg.auto, poll: cfg.poll
+      });
+    }
+    /* 「同步診斷」：逐格驗成條鏈 */
+    if (step.op === 'diagnose') {
+      const d = await remote.remoteDiagnose();
+      out.steps.push({
+        op: 'diagnose', ok: d.ok, route: d.route, backendVersion: d.backendVersion,
+        summary: d.summary || '', blockers: (d.blockers || []).map(b => b.id),
+        stages: (d.stages || []).map(s => `${s.id}:${s.state}`)
+      });
+    }
     if (step.op === 'push') {
       const r = await remote.pushDb({ silent: true });
-      out.steps.push({ op: 'push', ok: r.ok, error: r.error || '', bytes: r.bytes || 0, parts: r.parts || 0, pending: Number(store.load().sync?.pending || 0) });
+      out.steps.push({ op: 'push', ok: r.ok, error: r.error || '', reason: r.reason || '', hint: (r.hint || '').slice(0, 400), bytes: r.bytes || 0, parts: r.parts || 0, pending: Number(store.load().sync?.pending || 0) });
+    }
+    /* 2026-09-19「讀唔到後端就唔准寫」硬保險：呢個 session 對唔對到後端版本 */
+    if (step.op === 'reconciled') {
+      out.steps.push({ op: 'reconciled', reconciled: remote.isReconciled(), state: remote.syncState().state, pending: Number(store.load().sync?.pending || 0) });
+    }
+    /* 「實際生效」嘅同步模式（唔係 db 入面存咗乜，而係 remoteCfg() 點解）——
+       用來釘死 2026-09-19 團長指示：預設手動、舊遺留 auto:true 都當手動。 */
+    if (step.op === 'syncMode') {
+      const db = store.load();
+      const cfg = remote.remoteCfg();
+      out.steps.push({
+        op: 'syncMode',
+        storedAuto: db.sync?.auto === undefined ? 'undefined' : String(db.sync?.auto),
+        storedAutoModel: String(db.sync?.autoModel ?? 'none'),
+        effAuto: cfg.auto, effPoll: cfg.poll
+      });
+    }
+    /* 模擬「舊版本遺留落嚟嘅 db.sync.auto:true」（舊 checkbox 預設剔住，
+       用家一撳儲存設定就明寫 auto:true）—— 新預設必須仍然係手動。 */
+    if (step.op === 'legacyAuto') {
+      const db = store.load();
+      db.sync = { ...(db.sync || {}), auto: true };
+      delete db.sync.autoModel;
+      store.commitMeta();
+      const cfg = remote.remoteCfg();
+      out.steps.push({ op: 'legacyAuto', effAuto: cfg.auto, effPoll: cfg.poll });
+    }
+    /* 團長要嘅「撳同步」：一次過 先讀後端（拉＋合併）→ 再寫後端 */
+    if (step.op === 'syncNow') {
+      const r = await remote.syncNow();
+      const db = store.tryLoad();
+      out.steps.push({
+        op: 'syncNow', ok: !!r?.ok, error: r?.error || '', reason: r?.reason || '', stage: r?.stage || '',
+        pulled: !!r?.pulled, mergedPull: !!r?.mergedPull, pushed: !!r?.pushed, upToDate: !!r?.upToDate,
+        members: (db?.members || []).length, names: (db?.members || []).map(m => m.name).sort(),
+        pending: Number(db?.sync?.pending || 0)
+      });
+    }
+    /* 劇本中途直接問後端而家有咩（唔信前端自己講）——
+       要喺兩個 step **之間**取樣先有意義，例如證明「手動模式下未撳同步
+       之前，後端真係一個字都未收到」。 */
+    if (step.op === 'backendPeek') {
+      const cfg = remote.remoteCfg();
+      const r = await fetch(cfg.url, {
+        method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action: 'dbInfo', unit: cfg.unit || '0082', apiKey: cfg.apiKey })
+      });
+      const j = await r.json().catch(() => ({}));
+      out.steps.push({
+        op: 'backendPeek', http: r.status, found: !!j.found,
+        members: Number(j.counts?.members || 0), version: String(j.version || '')
+      });
+    }
+    /* 手動模式：改動淨係暫存，等 debounce 過咗都唔應該自動寫 */
+    if (step.op === 'manualStage') {
+      const db0 = store.load();
+      db0.sync = { ...(db0.sync || {}), auto: false };
+      store.commit();
+      remote.arm();
+      store.add('members', { name: step.name, ymis: step.ymis, identity: 'member' });
+      remote.scheduleSave();
+      await new Promise(r => setTimeout(r, step.waitMs || 4000));
+      out.steps.push({
+        op: 'manualStage', pending: Number(store.load().sync?.pending || 0),
+        state: remote.syncState().state, msg: remote.syncState().msg || '',
+        members: (store.load().members || []).length
+      });
     }
     if (step.op === 'autosave') {
-      /* 模擬「改完自動存」：arm 之後改一筆，等 debounce 過咗 */
+      /* 2026-09-19 團長指示「自動會有機會出事就唔好比佢有得選」——
+         自動寫入已經**剷走**，所以呢個 op 而家測嘅係反過來嘅嘢：
+         「改完嘢、arm 咗、等足 debounce 時間，都**唔會**自動寫後端」。
+         仲刻意把 db.sync.auto 強行設做 true（模擬舊遺留值／有人手改 db），
+         證明就算咁都寫唔到 —— 因為 remoteCfg().auto 係寫死嘅 false。 */
+      const dbA = store.load();
+      dbA.sync = { ...(dbA.sync || {}), auto: true };
+      store.commitMeta();
       remote.arm();
       store.add('members', { name: step.name, ymis: step.ymis, identity: 'member' });
       await new Promise(r => setTimeout(r, step.waitMs || 4000));
       out.steps.push({ op: 'autosave', pending: Number(store.load().sync?.pending || 0), state: remote.syncState().state });
     }
+    /* 「成員連結」頁會派出去嘅公開連結（驗 ?be= 自助後端附埋入 link） */
+    if (step.op === 'links') {
+      const model = await import('../assets/js/lib/model.js');
+      const route = model.publicLinkRoute();
+      const list = model.memberLinks();
+      out.steps.push({
+        op: 'links', route: route.route, label: route.label, routeOk: route.ok,
+        selfServeExec: model.selfServeExec(),
+        urls: list.slice(0, 6).map(l => ({ id: l.id, url: l.url }))
+      });
+    }
     if (step.op === 'info') {
       const i = await remote.remoteInfo();
-      out.steps.push({ op: 'info', ok: i.ok, found: !!i.found, counts: i.counts || null, at: i.at || '' });
+      out.steps.push({ op: 'info', ok: i.ok, found: !!i.found, reason: i.reason || '', error: (i.error || '').slice(0, 80), counts: i.counts || null, at: i.at || '' });
     }
     if (step.op === 'pull') {
       const g = await remote.pullDb();

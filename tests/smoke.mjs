@@ -949,6 +949,33 @@ google.visualization.Query.setResponse({"version":"0.6","reqId":"0","status":"ok
     ok('示範模式仍然有共用掣（只係未設定網址）', !!doc.querySelector('#y-share'));
   }
 
+  /* 2026-09-19 回歸（團長回報「有啲嘢把解決方法封死」）：
+     平台用 Vercel 環境變數登記嘅旅團，`db.backend` **一定**係 null ——
+     前端 Registry（data/units.json／／api/units／焗名單）基於安全永遠唔會帶 gasUrl。
+     以前「儲存狀態」成張卡（連同「立即儲存到後端」「由後端還原資料」
+     「睇後端有咩資料」「體積檢查」）用 `backend ? … : …` 閘住 → 全部收埋，
+     用家根本撳唔到文件叫佢撳嘅嗰啲掣，只見到「未設定後端」。
+     而家改用 remoteConfigured()（有同源代理＋旅團編號就算接得通）。 */
+  if (MODE === 'real') {
+    const db0 = store.load();
+    const savedBackend = db0.backend;
+    db0.backend = null;
+    store.commitMeta();
+    window.dispatchEvent(new window.Event('v82:refresh'));
+    await new Promise(r => setTimeout(r, 40));
+    const viewTxt = () => doc.getElementById('view')?.textContent || '';
+    ok('平台登記嘅旅團（本機冇 backend 記錄）照樣見到「立即儲存到後端」',
+      !!doc.querySelector('[data-act="push-db"]'));
+    ok('…照樣見到「由後端還原資料」同「睇後端有咩資料」',
+      !!doc.querySelector('[data-act="pull-db"]') && !!doc.querySelector('[data-act="db-info"]'));
+    ok('…有「同步診斷」掣（逐格驗成條鏈）', !!doc.querySelector('[data-act="diagnose"]'));
+    ok('唔會再誤報「未設定後端」（明明經平台代理接得到）', !/未設定後端 ——/.test(viewTxt()), viewTxt().slice(0, 80));
+    db0.backend = savedBackend;
+    store.commitMeta();
+    window.dispatchEvent(new window.Event('v82:refresh'));
+    await new Promise(r => setTimeout(r, 40));
+  }
+
   // 測試連線（jsdom fetch 係本機 shim → 應該優雅失敗，唔會拋錯）
   const { pushToMaster } = tablesMod;
   const pushRes = await pushToMaster({ silent: true });
@@ -1153,7 +1180,9 @@ section('防呆（暫存 → 確認 → 可還原）');
 
   // 後端儲存：真實資料每次改動都會排隊寫入後端；示範資料永遠唔會送出
   const dbx = store.load();
-  dbx.sync = { ...(dbx.sync || {}), auto: true, pending: 0 };
+  /* 2026-09-19：自動寫入已剷走，呢度唔再設 auto（設咗都冇用）。
+     呢個斷言測嘅係「改動會排隊（pending 累加）」—— 即係暫存，唔係自動寫。 */
+  dbx.sync = { ...(dbx.sync || {}), pending: 0 };
   store.commit();
   if (MODE === 'mock') {
     ok('示範資料永遠唔會排隊送去後端（唔會污染真實 Sheet）',

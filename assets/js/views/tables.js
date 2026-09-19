@@ -16,7 +16,7 @@ import { toCSV, toWord, download as dlFile, stamp } from '../lib/exporter.js';
 import { go, parse, setQuery } from '../lib/router.js';
 import { can, current } from '../lib/auth.js';
 import { profile, settings } from '../lib/model.js';
-import { fmtBytes } from '../lib/remote.js';
+import { fmtBytes, remoteCfg, remoteConfigured, remoteDiagnose, syncState } from '../lib/remote.js';
 import { pageHead, tabs, stat, empty, noteBox, kv, storageBar } from './ui.js';
 
 let tab = 'design';
@@ -478,9 +478,64 @@ function shortUrl(u) {
   if (!u) return '';
   return String(u).replace('https://script.google.com/macros/s/', '…/s/').slice(0, 46) + (String(u).length > 60 ? '…' : '');
 }
+/* 「同步診斷」結果（撳掣先至跑；呢度淨係畫返上次結果） */
+let lastDiag = null;
+let diagRunning = false;
+
+function diagCard() {
+  const d = lastDiag;
+  const badge = { ok: ['b-ok', '正常'], warn: ['b-warn', '留意'], bad: ['b-danger', '斷咗'] };
+  return `<div class="card mb-16"><div class="card-head">
+    <div><div class="card-title">${icon('search', 15)} 同步診斷</div>
+      <div class="card-sub">逐格驗成條鏈：旅團編號 → 平台登記 → 你自己貼嘅 /exec → 後端回應 → 讀寫權 → 本機</div></div>
+    ${diagRunning ? '<span class="badge b-info"><span class="dot"></span>診斷緊…</span>'
+      : d ? (d.ok ? '<span class="badge b-ok"><span class="dot"></span>成條鏈正常</span>'
+        : `<span class="badge b-danger"><span class="dot"></span>${d.blockers.length} 格斷咗</span>`) : ''}
+  </div>
+  <div style="padding:12px 16px" class="sm muted">
+    ${!d ? `<div class="row gap-8 wrap" style="align-items:center">
+        <span class="grow">唔知點解同步唔到？撳一下，佢會如實話你知<b>邊一格斷咗、要邊個做咩</b>（只讀，唔會寫後端）。</span>
+        <button class="btn btn-sm btn-primary" data-act="diagnose">${icon('search', 15)} 開始診斷</button>
+      </div>`
+      : `<div class="note-box ${d.ok ? '' : 'danger'} mb-12">${icon(d.ok ? 'check' : 'alert', 15)}<div>${esc(d.summary || '')}</div></div>
+      <div class="col gap-8">
+        ${d.stages.map(st => {
+          const [cls, label] = badge[st.state] || ['b-grey', '?'];
+          return `<div style="display:grid;grid-template-columns:190px 1fr;gap:10px;align-items:start">
+            <span><span class="badge ${cls}"><span class="dot"></span>${label}</span> <b>${esc(st.label)}</b></span>
+            <span>${esc(st.detail)}${st.fix ? `<div class="xs faint mt-4">→ ${esc(st.fix)}</div>` : ''}</span>
+          </div>`;
+        }).join('')}
+      </div>
+      <div class="row gap-8 mt-12 wrap">
+        <button class="btn btn-sm" data-act="diagnose">${icon('search', 15)} 再診斷一次</button>
+        <button class="btn btn-sm" data-act="copy-diag">${icon('copy', 15)} 複製診斷結果</button>
+      </div>`}
+  </div></div>`;
+}
+
+/** 診斷結果純文字（複製去 WhatsApp／電郵交畀管理員用） */
+export function diagText(d) {
+  if (!d) return '';
+  const tag = { ok: '[正常]', warn: '[留意]', bad: '[斷咗]' };
+  return [`執委管理系統 同步診斷（旅團 ${d.unit}）`, `結論：${d.summary}`, '']
+    .concat(d.stages.map(s => `${tag[s.state] || ''} ${s.label}：${s.detail}${s.fix ? `\n      → ${s.fix}` : ''}`))
+    .join('\n');
+}
+
 function syncView() {
   const s = load().sync || {};
   const backend = load().backend || null;
+  /* 「有冇接後端」唔可以再淨係睇 db.backend —— 佢只喺**前端** Registry 有 gasUrl
+     嗰陣先會 set，而平台用 Vercel 環境變數登記嘅旅團（正路做法）永遠唔會有。
+     結果：個頁話「未設定後端」，連「立即儲存到後端」「由後端還原資料」
+     「睇後端有咩資料」「體積檢查」全部一齊收埋 —— 用家根本撳唔到
+     文件叫佢撳嘅嗰啲掣（2026-09-19 團長回報「有嘢把解決方法封死」）。
+     而家改用 remoteConfigured()（有同源代理＋旅團編號就算接得通）。 */
+  const wired = !!backend || remoteConfigured();
+  /* 2026-09-19：自動寫入已剷走（remoteCfg().auto 寫死 false），
+     所以界面唔再有「同步方式」選擇 —— 只剩「會議模式」（淨係讀）呢個開關。 */
+  const pollOn = !!remoteCfg().poll;
   const log = s.log || [];
   const pending = Number(s.pending || 0);
   const lastPush = s.lastPushAt ? String(s.lastPushAt).slice(0, 19).replace('T', ' ') : '';
@@ -494,7 +549,7 @@ function syncView() {
     同一個後端仲會處理 <b>成員手機記帳</b>（entry.html）同 <b>通告報名</b>（notice.html）。</span>
   </div></div>
 
-  ${backend ? `<div class="card mb-16"><div class="card-head">
+  ${wired ? `<div class="card mb-16"><div class="card-head">
     <div><div class="card-title">${icon('shield', 15)} 儲存狀態</div>
       <div class="card-sub">資料有冇真係入咗後端</div></div>
     ${pending ? `<span class="badge b-warn"><span class="dot"></span>${pending} 項改動未儲存</span>`
@@ -518,6 +573,7 @@ function syncView() {
       <button class="btn btn-primary btn-sm" data-act="push-db">${icon('cloud', 15)} 立即儲存到後端</button>
       <button class="btn btn-sm" data-act="pull-db">${icon('download', 15)} 由後端還原資料</button>
       <button class="btn btn-sm" data-act="db-info">${icon('search', 15)} 睇後端有咩資料</button>
+      <button class="btn btn-sm" data-act="diagnose">${icon('search', 15)} 同步診斷</button>
       <button class="btn btn-sm" data-act="migrate-check">${icon('shield', 15)} 搬遷檢查</button>
     </div>
     ${(() => {
@@ -539,6 +595,20 @@ function syncView() {
     請喺下面填你旅團嘅 Apps Script <code>/exec</code> 網址。
   </div></div>`}
 
+  ${(() => {
+    /* 開機／poll 問唔到後端 —— 直接喺頁頂講清楚（唔使等撳「同步診斷」先知）。
+       最常見就係平台伺服器端未登記呢個旅團。 */
+    const st = syncState();
+    if (st.state !== 'unreachable') return '';
+    return `<div class="note-box danger mb-16">${icon('alert', 15)}<div>
+      <b>而家連唔到旅團後端</b> —— 你嘅改動暫時淨係存喺呢部機嘅瀏覽器。
+      <div class="xs mt-4">原因：<code>${esc(st.msg || '未知')}</code></div>
+      <div class="xs mt-4">撳下面「同步診斷」，佢會逐格話你知邊一格斷咗、要邊個做咩。</div>
+    </div></div>`;
+  })()}
+
+  ${diagCard()}
+
   ${backend ? `<div class="card mb-16"><div class="card-head">
     <div><div class="card-title">${icon('check', 15)} 後端已連接${backend.shared ? '（跟 Registry 共用）' : '（本旅團專用）'}</div>
       <div class="card-sub">${esc(backend.name)}${backend.updated ? ` · 更新 ${esc(backend.updated)}` : ''}</div></div>
@@ -548,7 +618,18 @@ function syncView() {
     <div class="kv-row"><span>總表同步</span><code>${esc(shortUrl(backend.gasUrl))}</code></div>
     <div class="kv-row"><span>手機記帳送出</span><code>${esc(shortUrl(load().settings?.publicEntry?.submitUrl || '')) || '（未設定）'}</code></div>
     <div class="kv-row"><span>通告報名送出</span><code>${esc(shortUrl(load().settings?.notice?.submitUrl || '')) || '（未設定）'}</code></div>
-  </div></div>` : ''}
+  </div></div>` : (wired ? `<div class="card mb-16"><div class="card-head">
+    <div><div class="card-title">${icon('cloud', 15)} 後端接線方式</div>
+      <div class="card-sub">呢個旅團經平台伺服器端接線（唔使喺瀏覽器打 Key）</div></div>
+    <span class="badge b-info"><span class="dot"></span>經 /api/proxy</span>
+  </div>
+  <div style="padding:12px 16px" class="sm muted">
+    平台用 Vercel 環境變數 <code>TROOP_${esc(load().unitCode || '編號')}_BACKEND</code>／
+    <code>_APIKEY</code> 幫你接線 —— 條 Key 留喺伺服器，瀏覽器完全唔會見到，呢個係正路。<br>
+    <span class="xs">如果平台嗰邊未設定好（或者你等唔切），你可以喺下面「同步設定」
+    貼自己嘅 <code>/exec</code> ＋ API Key <b>即刻自救</b> —— 系統會自動改用你自己嗰條路。
+    邊條路行得通，撳「同步診斷」一目了然。</span>
+  </div></div>` : '')}
 
   <div class="grid g-2-1">
     <div class="card"><div class="card-head"><div><div class="card-title">同步設定</div>
@@ -568,7 +649,16 @@ function syncView() {
           <code>TROOP_${esc(load().unitCode || '編號')}_BACKEND</code>），由伺服器端注入，
           瀏覽器唔會見到。上面兩格<b>淨係</b>喺純靜態部署（冇 <code>/api/proxy</code>，例如 GitHub Pages）先需要填。
         </div>
-        <label class="check mt-12"><input type="checkbox" id="y-auto" ${s.auto !== false ? 'checked' : ''}> <b>改動後自動儲存到後端</b>（強烈建議開；熄咗就要自己撳「立即儲存」，唔記得就會冇咗）</label>
+        <div class="note-box info mt-12">${icon('shield', 15)}<div>
+          <b>同步方式：手動（冇得改，亦唔會再出事）</b><br>
+          改動淨係<b>暫存喺呢部機嘅瀏覽器</b>。要寫入後端，就撳頂部
+          「<b>立即同步（N）</b>」—— 佢會先讀後端最新版本（有隊友新改動就拉落嚟
+          同你嘅合併，兩邊都保留），然後把呢部機<b>而家所有</b>暫存咗嘅改動一次過寫曬。<br>
+          <span class="faint">2026-09-19 起<b>自動寫入已完全剷走</b>（唔係「預設熄咗」，係冇呢條路）。
+          改嘢、等幾秒、關視窗、相片瘦身，全部都<b>唔會</b>偷偷寫後端 ——
+          所以唔會再出現「兩部機互相蓋走對方資料」。</span>
+        </div></div>
+        <label class="check mt-6"><input type="checkbox" id="y-poll" ${pollOn ? 'checked' : ''}> <b>會議模式</b>：每 60 秒自動<b>讀</b>一次後端，睇到有隊友更新就彈提示（多人一齊做嘢先用；<b>淨係讀，永遠唔會寫</b>）</label>
         ${pending ? `<div class="hint" style="color:var(--warn)">有 <b>${pending}</b> 次改動仲未寫入後端。</div>` : ''}
         <label class="check mt-6"><input type="checkbox" id="y-share" ${(load().settings?.publicEntry?.submitUrl || load().settings?.notice?.submitUrl) === s.url ? 'checked' : ''}> <b>同一條網址共用</b>畀「手機記帳」同「通告報名」</label>
         <div class="row gap-8 mt-12 wrap">
@@ -947,11 +1037,9 @@ async function slimClaimPhotos(root) {
   });
   if (!okGo) return;
   commit();
-  toast(`已瘦身：騰出 ${fmtBytes(freed)}，自動儲存中…`, 'ok');
-  try {
-    const remote = await import('../lib/remote.js');
-    if (remote.remoteConfigured?.()) await remote.flush();
-  } catch { /* 照樣交畀自動存 */ }
+  /* 2026-09-19：自動寫入已剷走 —— 連「瘦身」都唔會自動寫後端。
+     改動照樣暫存喺瀏覽器，等團長自己撳頂部「立即同步」。 */
+  toast(`已瘦身：騰出 ${fmtBytes(freed)}（改動已暫存，撳頂部「立即同步」先寫入後端）`, 'ok');
   refresh();
 }
 
@@ -1206,8 +1294,13 @@ export function mount(root, params) {
           url,
           unit: root.querySelector('#y-unit').value.trim() || db.unitCode,
           apiKey: root.querySelector('#y-key').value.trim(),
-          auto: root.querySelector('#y-auto').checked
+          /* 2026-09-19：自動寫入已剷走，呢度唔再存 auto／autoModel。
+             剩返「會議模式」（淨係讀，唔會寫）一個開關。
+             順手清走舊遺留嘅 auto:true —— 免得日後有人睇 db 以為仲有自動寫。 */
+          poll: !!root.querySelector('#y-poll')?.checked
         };
+        delete db.sync.auto;
+        delete db.sync.autoModel;
         const share = root.querySelector('#y-share')?.checked;
         if (share && url) {
           db.settings = { ...(db.settings || {}) };
@@ -1216,7 +1309,15 @@ export function mount(root, params) {
           db.backend = { ...(db.backend || {}), gasUrl: url, apiKey: db.sync.apiKey };
         }
         commit();
-        toast(share && url ? '已儲存，手機記帳／通告報名一齊用同一條網址' : '已儲存同步設定', 'ok');
+        /* 會議模式（60 秒背景讀）即刻生效，唔使重新載入 ——
+           剔咗就開，熄咗就停，用家唔會「改咗但唔知有冇生效」。 */
+        try {
+          const remote = await import('../lib/remote.js');
+          if (db.sync.poll) remote.startPolling?.();
+          else remote.stopPolling?.();
+        } catch { /* 下次開機照 remoteCfg().poll 決定 */ }
+        toast(share && url ? '已儲存，手機記帳／通告報名一齊用同一條網址'
+          : '已儲存同步設定（寫入後端：撳頂部「立即同步」）', 'ok');
         refresh();
       }
       if (act === 'test-sync') {
@@ -1262,6 +1363,26 @@ export function mount(root, params) {
       if (act === 'push-sync') {
         if (!(await confirmDlg({ title: '立即同步', okText: '開始同步', message: '會將全部表格資料送去你嘅 Apps Script（寫入總 Sheet），同時把整個資料庫存入「資料庫」分頁。' }))) return;
         pushToMaster(); refresh();
+      }
+
+      /* ---- 同步診斷（只讀；逐格驗成條鏈，如實話你知邊格斷） ---- */
+      if (act === 'diagnose') {
+        diagRunning = true; refresh();
+        try { lastDiag = await remoteDiagnose(); }
+        catch (e) { lastDiag = { ok: false, unit: load().unitCode || '', route: '', stages: [{ id: 'err', label: '診斷', state: 'bad', detail: e?.message || String(e), fix: '' }], blockers: [{ label: '診斷', detail: e?.message || String(e), fix: '' }], summary: '診斷本身失敗咗：' + (e?.message || '') }; }
+        diagRunning = false;
+        refresh();
+        if (lastDiag?.ok) toast('同步鏈正常' + (lastDiag.backendVersion ? `（後端 ${lastDiag.backendVersion}）` : ''), 'ok');
+        else toast('搵到問題：' + (lastDiag?.summary || '未知'), 'err');
+      }
+      if (act === 'copy-diag') {
+        const txt = diagText(lastDiag);
+        if (!txt) { toast('未診斷過 —— 先撳「開始診斷」', 'warn'); return; }
+        if (await copyText(txt)) toast('已複製診斷結果（可以直接貼畀平台管理員）', 'ok');
+        else {
+          await modal({ title: '診斷結果', body: `<pre class="sm" style="white-space:pre-wrap">${esc(txt)}</pre>`,
+            actions: [{ label: '知道喇', class: 'btn-primary', value: true }] });
+        }
       }
 
       /* ---- 整個資料庫：寫入／還原／檢視（真正嘅後端儲存） ---- */

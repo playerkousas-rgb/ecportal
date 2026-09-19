@@ -4,6 +4,8 @@
    ============================================================ */
 
 import { load, collection, find, commit } from './store.js';
+import { unitEntry } from './units.js';
+import { isExecUrl, normExecUrl } from './gateway.js';
 import { todayISO, parseBirthday, daysUntilBirthday, ageFrom, turningAge } from './dates.js';
 import { agmIsDefault, unitFYOf, scoutFYLabel, scoutFYRange, inRange } from './fiscal.js';
 export * from './fiscal.js';
@@ -48,10 +50,56 @@ export function publicPageUrl(file, params = {}) {
   let url;
   try { url = new URL(target, origin || undefined); }
   catch { return target; }
-  Object.entries(params).forEach(([k, v]) => {
+  const p = { ...params };
+  /* 自助後端（?be=）：平台伺服器端未登記呢個旅團嗰陣，公開頁經 /api/proxy
+     一定 404（「找不到此旅團」）—— 團章／通告／記帳／借用條條都死。
+     而家由領袖呢邊把旅團自己嘅 /exec 附埋入連結（呢啲連結本來就係派畀團員嘅，
+     /exec 本身又係「任何人」存取，所以冇多洩露任何嘢；API Key 永遠唔會附）。
+     平台已經登記好（backendReady）就唔使附，保持網址簡潔。 */
+  if (p.be === undefined) {
+    const be = selfServeExec();
+    if (be) p.be = be;
+  }
+  Object.entries(p).forEach(([k, v]) => {
     if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, v);
   });
   return url.toString();
+}
+
+/**
+ * 領袖自己登記咗嘅後端 /exec（「總表同步 → 同步設定」嗰格）。
+ * 只喺**平台伺服器端未有登記**嗰陣先回傳 —— 平台接線正常就用返正路。
+ * @returns {string} 合格嘅 /exec，或者 ''
+ */
+export function selfServeExec() {
+  try {
+    const db = load();
+    const url = String(db?.sync?.url || db?.backend?.gasUrl || '').trim();
+    if (!isExecUrl(url)) return '';
+    const code = db?.unitCode || '';
+    const entry = code ? unitEntry(code) : null;
+    if (entry?.backendReady === true) return '';       // 平台已登記 → 唔使附
+    return normExecUrl(url);
+  } catch { return ''; }
+}
+
+/** 公開連結而家會行邊條路（「成員連結」頁顯示用，等領袖睇到條 link 係咪真係用得） */
+export function publicLinkRoute() {
+  const db = load();
+  const code = db?.unitCode || '';
+  const entry = code ? unitEntry(code) : null;
+  if (entry?.backendReady === true) {
+    return { route: 'proxy', label: '平台代理', ok: true,
+      detail: '旅團已喺平台伺服器端登記，公開頁經 /api/proxy 讀寫後端（正路）。' };
+  }
+  const be = selfServeExec();
+  if (be) {
+    return { route: 'direct', label: '旅團自己嘅 /exec', ok: true,
+      detail: '平台未登記呢個旅團，所以連結附咗你自己嘅 /exec（?be=）—— 團章／通告／記帳／借用照樣用到。' };
+  }
+  return { route: 'none', label: '未接後端', ok: false,
+    detail: '平台未登記呢個旅團，你自己都未貼 /exec —— 公開頁會讀唔到後端資料。'
+      + '去「帳號與系統 → 資料管理 → 總表同步 → 同步設定」貼 /exec（＋API Key）就會即刻修好。' };
 }
 /** 成員用嘅公開連結清單（「成員連結」頁同 QR 都用呢個） */
 export function memberLinks() {

@@ -241,23 +241,28 @@ section('端到端：換機／清 cache 都唔會冇咗資料（真 HTTP）');
     ok('採用後端資料之後唔會即刻又寫返上去（唔會來回打交）',
       pullB?.adopted?.pending === 0, String(pullB?.adopted?.pending));
 
-    /* ---- 裝置 C：自動儲存（改完唔使撳掣） ---- */
+    /* ---- 裝置 C：改完嘢 → 只係暫存，撳「立即同步」先寫 ----
+       2026-09-19 團長指示「自動會有機會出事就唔好比佢有得選」：
+       自動寫入已剷走。呢個劇本由「改完自動存」改成「改完暫存 → 明確撳同步」。 */
     const C = await runDevice({ steps: [
       { op: 'pull' },                                   // 先拉後端（＝1 個團員）
       { op: 'snapshot' },
-      { op: 'autosave', name: '李小明', ymis: '2026000002', waitMs: 6000 }
+      { op: 'autosave', name: '李小明', ymis: '2026000002', waitMs: 6000 },
+      { op: 'syncNow' }                                 // ← 用家撳「立即同步」
     ] });
     const snapC = (C.steps || []).find(s => s.op === 'snapshot');
     ok('裝置 C 拉完後端之後只有後端嗰 1 個團員（種子資料唔會撈返轉頭）',
       snapC?.members === 1, JSON.stringify(snapC?.names));
     const auto = (C.steps || []).find(s => s.op === 'autosave');
-    ok('改完資料會自動寫入後端（唔使記得撳同步）',
-      auto?.pending === 0 && auto?.state === 'saved', JSON.stringify(auto));
+    ok('★ 改完嘢**唔會**自動寫後端（等足 6 秒都仲喺本機排隊）',
+      auto?.pending >= 1, JSON.stringify(auto));
+    const nowC = (C.steps || []).find(s => s.op === 'syncNow');
+    ok('★ 撳「立即同步」先至寫入', nowC?.ok === true && nowC?.pushed === true, JSON.stringify(nowC));
 
-    /* ---- 裝置 D：確認自動儲存真係入咗後端 ---- */
+    /* ---- 裝置 D：確認撳咗同步之後真係入咗後端 ---- */
     const D = await runDevice({ steps: [{ op: 'info' }, { op: 'pull' }] });
     const pullD = (D.steps || []).find(s => s.op === 'pull');
-    ok('第三部機見到裝置 C 自動儲存嘅新團員（＝自動儲存真係入咗後端）',
+    ok('第三部機見到裝置 C 同步咗嘅新團員（＝撳同步真係入咗後端）',
       pullD?.adopted?.names?.includes('李小明') && pullD?.adopted?.names?.includes('陳大文') &&
       pullD?.adopted?.members === 2,
       JSON.stringify(pullD?.adopted?.names));
@@ -694,18 +699,32 @@ section('API Key 由伺服器端注入（前端唔應該知）');
   ok('前端送空 apiKey 都唔會阻住注入', empty.json?.ok === true, JSON.stringify(empty.json));
   ok('空字串唔會蓋過伺服器端條 key', keySeenByGas === KEY, JSON.stringify(keySeenByGas));
 
-  /* remote.js 呢邊：唔應該把空 key 放入 proxy payload */
+  /* 前端唔應該把空 key 放入 proxy payload。
+     2026-09-19：payload 砌法由 remote.js 搬咗去 lib/gateway.js（兩條路共用），
+     所以呢個性質而家喺 gateway.js 度驗 —— 驗嘅嘢一樣，冇放寬。 */
   const src = fs.readFileSync(path.join(ROOT, 'assets/js/lib/remote.js'), 'utf8');
-  ok('remote.js 只喺有 key 嗰陣先加入 payload（proxy 路線）',
-    /if \(cfg\.apiKey\) \{\s*body\.apiKey/.test(src));
+  const gsrc = fs.readFileSync(path.join(ROOT, 'assets/js/lib/gateway.js'), 'utf8');
+  ok('gateway.js 只喺有 key 嗰陣先加入 payload（proxy 路線）',
+    /if \(apiKey\) \{\s*body\.apiKey/.test(gsrc));
+  ok('remote.js 把路由交畀 gateway（唔會自己砌 proxy payload）',
+    /postBackend\(/.test(src) && !/body\.apiKey/.test(src));
   ok('remote.js 有 proxy 路線就唔再強制要前端填 /exec',
     /viaProxy/.test(src) && /viaProxy && !!unit/.test(src));
 
-  /* 提示文字要指向 Vercel 環境變數，唔可以叫用家喺瀏覽器打 key */
-  ok('bad_key 提示叫人設定 TROOP_<編號>_APIKEY（唔係叫用家自己打）',
-    /TROOP_<[^>]*>_APIKEY/.test(src) && /環境變數/.test(src));
-  ok('bad_key 提示冇再叫用家去「同步設定」填 key',
-    !/總表同步 → 同步設定 → API Key/.test(src));
+  /* 提示文字：**平台代理路線**要指向 Vercel 環境變數，
+     唔可以叫用家喺瀏覽器打 key（2026-09-17 嘅決定，繼續有效）。
+     呢度由 grep 原始碼改成**行為**斷言（hintOf 已 export）。 */
+  const remoteMod = await import('../assets/js/lib/remote.js');
+  const proxyHint = remoteMod.hintOf('未授權：API Key 唔正確', 'proxy');
+  const directHint = remoteMod.hintOf('未授權：API Key 唔正確', 'direct');
+  ok('bad_key 提示（代理路線）叫人設定 TROOP_<編號>_APIKEY（唔係叫用家自己打）',
+    /TROOP_<[^>]*>_APIKEY/.test(proxyHint) && /環境變數/.test(proxyHint), proxyHint.slice(0, 60));
+  ok('bad_key 提示（代理路線）冇叫用家去「同步設定」填 key',
+    !/同步設定/.test(proxyHint), proxyHint.slice(0, 80));
+  /* 2026-09-19 新增：行緊「自己貼 /exec」自助路線嗰陣，條 key 本來就要由瀏覽器帶，
+     提示必須針對呢條路（唔好叫佢搵管理員 —— 佢就係因為搵唔到先至行呢條路）。 */
+  ok('bad_key 提示（自助路線）教用家貼返條 key',
+    /showApiKey/.test(directHint) && /同步設定/.test(directHint), directHint.slice(0, 60));
 
   gas.close();
   if (saved.b === undefined) delete process.env.TROOP_0082_BACKEND; else process.env.TROOP_0082_BACKEND = saved.b;
@@ -986,13 +1005,17 @@ section('分件儲存：真 HTTP（谷大 db → 自動分件 → 另一部機�
     const pullB = (B.steps || []).find(s2 => s2.op === 'pull');
     ok('新機讀返分件儲存嘅資料：1400 個一個唔少', pullB?.adopted?.members === 1400, String(pullB?.adopted?.members));
 
-    /* 分件之後再細改 → 下一鋪自動儲存照行（版本鏈冇斷） */
+    /* 分件之後再細改 → 撳「立即同步」照樣存到（版本鏈冇斷、唔會鎖死） */
     const C = await runDevice({ steps: [
       { op: 'pull' },
-      { op: 'autosave', name: '分件後新團員', ymis: '2026999999', waitMs: 6000 }
+      { op: 'autosave', name: '分件後新團員', ymis: '2026999999', waitMs: 6000 },
+      { op: 'syncNow' }
     ] });
     const autoC = (C.steps || []).find(s2 => s2.op === 'autosave');
-    ok('分件儲存之後自動儲存照行（唔會鎖死）', autoC?.pending === 0 && autoC?.state === 'saved', JSON.stringify(autoC));
+    ok('分件之後改嘢都唔會自動寫（暫存住）', autoC?.pending >= 1, JSON.stringify(autoC));
+    const nowC = (C.steps || []).find(s2 => s2.op === 'syncNow');
+    ok('分件儲存之後撳「立即同步」照樣存到（唔會鎖死）',
+      nowC?.ok === true && nowC?.pushed === true, JSON.stringify(nowC));
     const D = await runDevice({ steps: [{ op: 'pull' }] });
     const pullD = (D.steps || []).find(s2 => s2.op === 'pull');
     ok('分件後嘅新改動都入咗後端', pullD?.adopted?.members === 1401, String(pullD?.adopted?.members));

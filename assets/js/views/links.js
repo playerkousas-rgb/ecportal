@@ -9,7 +9,7 @@
 import { load, commit } from '../lib/store.js';
 import { esc, icon, modal, toast, copyText, qrSvg } from '../lib/util.js';
 import { toWord, printDoc, downloadQrSvg, stamp } from '../lib/exporter.js';
-import { profile, settings, memberLinks, publicPageUrl, findLegacyPublicUrls, migrateLegacyPublicUrls, isLegacyUrl } from '../lib/model.js';
+import { profile, settings, memberLinks, publicPageUrl, findLegacyPublicUrls, migrateLegacyPublicUrls, isLegacyUrl, publicLinkRoute } from '../lib/model.js';
 import { pageHead, empty, noteBox } from './ui.js';
 import { can } from '../lib/auth.js';
 
@@ -38,6 +38,17 @@ export function render() {
     團員可以登記自己叫咩名（瀏覽器記住），唔填都得，入去先打。${backend
       ? '<br><span class="xs">已連接總表：成員一送出就會寫入你嘅 Google Sheet（待批核）。</span>'
       : ''}`, 'brand')}
+
+  ${(() => {
+    /* 公開連結到底行唔行得通，領袖要**即刻睇到** ——
+       以前呢頁乜都冇講，派咗出去先至發現團員開唔到（2026-09-19）。 */
+    const r = publicLinkRoute();
+    const tone = r.ok ? 'info' : 'warn';
+    return noteBox(
+      `<b>呢啲連結行邊條路：${esc(r.label)}</b><div class="xs mt-4">${esc(r.detail)}</div>`
+      + (r.ok ? '' : '<div class="xs mt-4">修好之後<b>重新複製／列印一次</b>下面嘅連結同 QR（舊嘅冇帶後端網址）。</div>'),
+      tone);
+  })()}
 
   ${hub ? `<div class="card mb-16">
     <div class="card-head"><div><div class="card-title">團員入口 QR（請只派呢一張）</div>

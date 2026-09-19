@@ -6,6 +6,7 @@
 import { esc, icon, toast } from './lib/util.js';
 import { toWord, printDoc, toMarkdown } from './lib/exporter.js';
 import { todayISO } from './lib/dates.js';
+import { postBackend, beFromQuery, shortExec } from './lib/gateway.js';
 
 const q = new URLSearchParams(location.search);
 const app = document.getElementById('app');
@@ -25,18 +26,18 @@ async function loadJson(url) {
     data/units/<編號>/constitution.json —— 但旅團資料而家全部住喺
     旅團自己嘅 Google Sheet，領袖喺 APP 撳「發布」之後，靜態檔根本
     冇人幫佢更新（個網站係平台管理員先可以上載）→ 公開頁永遠 404。 */
+let backendNote = '';      /* 讀唔到嘅真正原因（顯示用，唔好淨係話「未發布」） */
 async function fetchBackendConstitution() {
   try {
-    const r = await fetch('api/proxy', {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'constitution', unit: unitCode })
-    });
-    if (!r.ok) return null;
-    const j = await r.json();
-    if (j?.ok && j.found && j.constitution) return j;
+    /* 兩條路：① 同源 /api/proxy（平台登記咗旅團）② 連結帶埋嘅 ?be=<旅團自己嘅 /exec>
+       —— 平台未登記嗰陣，「成員連結」生成嘅連結會附 ?be，公開頁先至真係「公開」。 */
+    const r = await postBackend({ action: 'constitution' }, { unit: unitCode, execUrl: beFromQuery() });
+    if (r.json?.ok && r.json.found && r.json.constitution) return r.json;
+    if (r.json?.ok && !r.json.found) backendNote = '後端未有已發布嘅團章';
+    else backendNote = r.error || r.json?.error || (r.reason === 'not_registered'
+      ? '平台未登記呢個旅團，連結亦冇帶後端網址（?be=）' : '讀唔到後端');
     return null;
-  } catch (e) { return null; }
+  } catch (e) { backendNote = e?.message || String(e); return null; }
 }
 
 async function boot() {
@@ -78,9 +79,12 @@ async function boot() {
     app.innerHTML = `<div class="paper">
       <h1 style="font-size:20px">暫時讀唔到團章</h1>
       <p class="sm muted mt-8">可能係未發布，或者網址唔正確。技術訊息：<code>${esc(e.message)}</code></p>
+      ${backendNote ? `<p class="sm mt-8"><b>後端回覆：</b><code>${esc(backendNote)}</code></p>` : ''}
       <p class="sm muted mt-12">管理人請檢查：① 喺系統「團章 → 發布新版本」；
         ② 右上角同步狀態係咪「已存到後端」（資料要同步咗上去，公開頁先讀到）；
-        ③ 後端 Apps Script 要係 v2.5.0 或之後（帶「constitution」公開讀取）。
+        ③ 後端 Apps Script 要係 v2.5.0 或之後（帶「constitution」公開讀取）；
+        ④ 呢條網址要由系統「成員連結」頁生成 —— 平台未登記旅團嗰陣，
+        連結要帶 <code>?be=</code>（你自己嘅 /exec）先讀到後端${beFromQuery() ? `（而家帶住：<code>${esc(shortExec(beFromQuery()))}</code>）` : ''}。
         舊式做法（上載 <code>data/units/${esc(unitCode)}/constitution.json</code>）照樣支援。</p>
       <a class="btn btn-sm mt-16" href="./">返回系統</a>
     </div>`;

@@ -65,7 +65,7 @@ export function render(params) {
           <button class="btn btn-block" data-act="exp-html">${icon('download', 16)} 單一 HTML（可離線／可上載）</button>
           <button class="btn btn-block" data-act="qr">${icon('qr', 16)} QR Code（畀團員掃）</button>
           <button class="btn btn-block" data-act="copy-link">${icon('link', 16)} 複製公開連結</button>
-          ${can('constitution.publish') ? `<button class="btn btn-block" data-act="exp-json">${icon('save', 16)} 匯出發布檔（constitution.json）</button>` : ''}
+          ${can('constitution.publish') ? `<button class="btn btn-block" data-act="exp-json">${icon('save', 16)} 下載 JSON 備份（純備份用 —— 發布唔使上載任何檔案）</button>` : ''}
         </div>
       </div>
 
@@ -419,9 +419,32 @@ async function publish() {
   db.constitution.history = [{ version: r.version, date: r.date, by: displayName(), note: r.note }, ...(db.constitution.history || [])];
   commit();
   audit('發布團章', `v${r.version} ${r.note}`);
-  toast('已發布 v' + r.version, 'ok');
   refresh();
-  setTimeout(() => exportJson(true), 400);
+
+  /* 2026-09-19 團長回報：「團章我都一直 POST 唔到出尼，我按出 JSON 佢會變
+     JSON 俾我，但要我再上傳番去唔知邊？唔係應該我按 PUSH ＝ 出番去公開
+     俾所有團員睇到？要我下載個檔再上傳？」
+
+     佢講得啱，舊流程係壞嘅，而且壞喺兩處：
+     ① 呢度 `setTimeout(() => exportJson(true), 400)` —— 發布完**自動彈一個
+        constitution.json 落載**。嗰個係 v2.5.0 之前「人手上載去公開頁」嘅遺物；
+        而家公開頁（constitution.html）係直接由後端讀，根本唔使上載任何檔案。
+        淨低個下載淨係令人以為「仲要做啲乜」—— 已經攞走。
+     ② 發布只係 commit() 去本機。手動同步之下，改動會一直留喺呢部機，
+        公開頁永遠睇唔到新版 —— 正正係「POST 唔到出尼」。
+        「發布」本身就係「我要而家出街」嘅明確指令，所以即刻寫後端。 */
+  const remote = await import('../lib/remote.js').catch(() => null);
+  if (remote?.remoteConfigured?.()) {
+    toast(`已發布 v${r.version} —— 正在寫入後端…`, 'ok');
+    const res = await remote.syncNow();
+    toast(res?.ok
+      ? `已發布 v${r.version} ✓ 公開閱讀頁同 QR Code 而家已經係新版`
+      : `已發布 v${r.version}，但暫時寫唔入後端（${res?.error || '未知'}）—— 撳頂部「立即同步」再試`,
+      res?.ok ? 'ok' : 'warn');
+  } else {
+    toast(`已發布 v${r.version}（呢部機未接後端 —— 公開頁要接咗後端先至睇到）`, 'warn');
+  }
+  refresh();
 }
 
 function nextVersion(v) {
@@ -580,7 +603,7 @@ function exportJson(auto = false) {
   const out = { ...c, unitCode: load().unitCode, exportedAt: new Date().toISOString() };
   const name = `constitution.json`;
   dlFile(name, JSON.stringify(out, null, 2), 'application/json');
-  toast(`已下載 ${name}（備份用；發布＋同步之後公開頁會自動更新，唔使上載）`, 'ok');
+  toast(`已下載 ${name}（純備份。發布唔使上載任何檔案 —— 公開頁由後端自動讀最新版）`, 'ok');
 }
 
 function publicUrl() {
@@ -654,7 +677,7 @@ export function mount(root) {
           <button class="btn btn-block" data-exp="pdf">${icon('print', 16)} PDF / 列印</button>
           <button class="btn btn-block" data-exp="md">${icon('download', 16)} Markdown</button>
           <button class="btn btn-block" data-exp="html">${icon('download', 16)} 單一 HTML（可上載／離線）</button>
-          <button class="btn btn-block" data-exp="json">${icon('save', 16)} 發布檔 JSON（更新公開頁用）</button>
+          <button class="btn btn-block" data-exp="json">${icon('save', 16)} JSON 備份（唔使上載 —— 公開頁由後端自動讀）</button>
         </div>`,
         actions: [{ label: '關閉', class: 'btn', value: null }],
         onMount: el => {

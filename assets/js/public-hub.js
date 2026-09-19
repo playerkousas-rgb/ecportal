@@ -26,6 +26,34 @@ import { esc, icon, toast, todayISO, modal } from './lib/util.js';
 
 const app = document.getElementById('app');
 let syncReady = false;      /* 後端拉完（或者確定唔使拉）先畀登入 */
+/* 拉唔到後端嘅真正原因 —— 一定要顯示出嚟。以前淨係 console.warn，
+   團員見到嘅係一個正常嘅登入頁，但名冊係空 → 點都入唔到，
+   完全唔知發生咩事（2026-09-19 團長回報「公開連結冇修好」）。 */
+let syncError = '';
+/* 團員入口嘅 remote 模組引用（syncBoot 入面 assign）。
+   rsvp()／submitQuiz() 要用佢 —— 見 pushSubmit() 註解。 */
+let hubRemote = null;
+
+/**
+ * 團員交嘢（回覆出席／交卷）之後**即刻**寫返後端。
+ *
+ * 點解呢度唔跟團長嘅「手動模式」：手動模式講嘅係**團長自己部機**嘅工作副本 ——
+ * 「我改住先，撳同步先一次過寫」。但團員交嘅嘢係**入站資料**：呢部機係團員嘅，
+ * 佢而家交完就關，永遠唔會有人喺佢部機撳「立即同步」。如果跟手動模式暫存住，
+ * 份回覆就永遠困喺團員部機，團長永遠收唔到 —— 等如冇交過。
+ *
+ * 所以入站提交一律即刻寫。注意佢仍然行 pushDb() 嗰個硬保險（寫之前先讀
+ * 後端合併），所以一樣唔會蓋走執委啲資料。
+ */
+async function pushSubmit(what) {
+  if (!hubRemote?.remoteConfigured?.()) return;
+  try {
+    const r = await hubRemote.flush();
+    if (!r?.ok) toast(`${what}已記低喺呢部機，但暫時送唔到後端（${r?.error || '未知'}）—— 請話畀執委知`, 'warn');
+  } catch (e) {
+    toast(`${what}已記低喺呢部機，但暫時送唔到後端 —— 請話畀執委知`, 'warn');
+  }
+}
 
 /* 通告係咪已過報名截止（冇截止日／唔使報名＝未截止） */
 function closedN(n, today) {
@@ -48,23 +76,37 @@ async function syncBoot() {
   let remoteApi = null;
   try {
     remoteApi = await import('./lib/remote.js');
+    hubRemote = remoteApi;      // 畀 pushSubmit()（團員交嘢即刻寫後端）用
     const store = await import('./lib/store.js');
-    if (!remoteApi.remoteConfigured?.()) { syncReady = true; paint(); return; }
+    if (!remoteApi.remoteConfigured?.()) {
+      syncError = '呢個網址冇帶旅團編號，或者未接後端 —— 請用系統「成員連結」頁生成嘅連結。';
+      syncReady = true; paint(); return;
+    }
     store.setSaveHook(() => remoteApi.scheduleSave());
+    /* 2026-09-19：改用 remote.reconcile() —— 同 main.js 嘅 syncBoot 行同一個
+       函數（「先讀後端版本 → 有新版就拉＋合併」），唔使兩邊各寫一份。
+       最緊要係：reconcile() 讀成功嗰陣會把 remote 標記做「已對版本」，
+       pushDb 先至肯寫。讀唔到就一律唔寫 —— 團員入口呢度雖然多數唯讀，
+       但交卷／借還都會寫，一樣唔可以盲蓋執委啲資料。 */
     try {
-      const info = await remoteApi.remoteInfo();
-      if (info?.ok && info.found) {
-        const remoteAt = String(info.version || info.at || '');
-        const lastSynced = store.lastSyncedVersion();
-        if (remoteAt && remoteAt !== lastSynced) {
-          const got = await remoteApi.pullDb();
-          if (got?.ok && got.found && got.db) {
-            const merged = Number(store.tryLoad()?.sync?.pending || 0) > 0;
-            store.adoptRemote(got.db, { version: String(got.version || ''), merge: merged });
-          }
-        }
+      const rc = await remoteApi.reconcile({ silent: true });
+      if (!rc?.ok) {
+        /* 讀唔到名冊 ＝ 團員一定入唔到。原因如實講（唔好靜靜雞）。
+           團員入口要讀成個資料庫（名冊＋密碼），呢個 action 後端要 API Key，
+           所以**冇得**靠連結帶 ?be= 自救 —— 一定要平台伺服器端登記好。 */
+        syncError = (rc?.error || '讀唔到旅團後端')
+          + (rc?.reason === 'not_registered'
+            ? '（平台伺服器端未登記呢個旅團：要管理員喺 Vercel 加 TROOP_<編號>_BACKEND／_APIKEY 再 Redeploy。'
+              + '團員入口要讀名冊，呢一步冇得由團員自己繞過。）' : '');
+      } else if (rc.found === false) {
+        syncError = '後端仲未有資料庫 —— 執委請先喺系統撳「立即儲存到後端」。';
+      } else if (rc.oldBackend) {
+        syncError = '後端版本舊咗（讀唔到改動版本）—— 執委請更新 Apps Script 去 v2.5.0。';
       }
-    } catch (e) { console.warn('[hub] 開機拉後端失敗（照用本機資料）', e); }
+    } catch (e) {
+      console.warn('[hub] 開機拉後端失敗（照用本機資料）', e);
+      syncError = e?.message || String(e);
+    }
     remoteApi.arm?.();
     remoteApi.startPolling?.();
     remoteApi.startVisibilityWatch?.();
@@ -162,6 +204,10 @@ function paintGate() {
         <input class="input" id="hPass" type="password" placeholder="首次：${TEMP_PASSWORD}" autocomplete="current-password"></div>
       <div id="hErr" class="err mt-8"></div>
       ${syncReady ? '' : `<div class="hint mt-8">${icon('cloud', 13)} 正在由旅團後端載入名冊…</div>`}
+      ${syncError ? `<div class="note-box warn mt-8">${icon('alert', 14)}<div>
+        <b>載入唔到旅團名冊</b> —— 登入多數會失敗。<div class="xs mt-4">${esc(syncError)}</div>
+        <div class="xs faint mt-4">請把呢段訊息截圖傳畀領袖／執委跟進。</div>
+      </div></div>` : ''}
       <button class="btn btn-primary btn-block mt-16" type="submit" ${syncReady ? '' : 'disabled'}>${icon('key', 16)} 進入</button>
     </form>
   </div>`;
@@ -486,6 +532,7 @@ function rsvp(eid, status, auth) {
   update('events', eid, { rsvp: map });
   toast('已回覆：' + RSVP[status].label, 'ok');
   paint();
+  pushSubmit('出席回覆');   // 入站資料：即刻寫後端，唔可以困喺團員部機
 }
 
 function submitQuiz(id, auth) {
@@ -510,6 +557,7 @@ function submitQuiz(id, auth) {
   toast('已交卷', 'ok');
   location.hash = '#/home';
   paint();
+  pushSubmit('答卷');       // 入站資料：即刻寫後端，唔可以困喺團員部機
 }
 
 async function forceMemberPw(memberId) {
