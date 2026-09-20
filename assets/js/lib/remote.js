@@ -529,6 +529,23 @@ export async function remoteDiagnose() {
       info.found
         ? `後端有資料庫：團員 ${c.members ?? '?'} · 帳目 ${c.transactions ?? '?'} · 通告 ${c.notices ?? '?'}（版本 ${String(info.version || info.at || '').slice(0, 19).replace('T', ' ')}）`
         : '後端仲未有資料庫 —— 撳「儲存到後端」推第一筆上去');
+
+    /* ⑤a 後端有冇「舊版留低嘅分件暫存垃圾行」（v2.6.2 起 dbInfo 會報）。
+       呢個先係「一開始得、後来越来越唔得」嗰種死因：
+       v2.6.1 之前嘅 Code.gs 清暫存行嗰陣一梳連續行只刪到一行，
+       所以每次分件儲存（資料庫大過 2.8MB）都會留低成份資料庫嘅複製品
+       喺「資料庫」分頁 —— 分頁越嚟越大、每次 getValues() 越來越慢，
+       最後 saveDb／loadDb 撞 GAS 執行時間／記憶體上限，
+       而 status／ping 照樣話「正常」（所以「測試連線」會呃人）。 */
+    const junk = Number(info.stagingRows || 0);
+    if (junk > 0) {
+      add('junk', '後端暫存垃圾行', 'warn',
+        `「資料庫」分頁有 ${junk} 行舊版分件暫存行（約 ${(Number(info.stagingBytes || 0) / 1048576).toFixed(1)} MB）`
+        + ' —— v2.6.1 之前嘅 Code.gs 漏刪留低嘅。佢哋會令每次讀寫越嚟越慢，最後「儲存唔到去後端／後端讀取唔到」。',
+        '去「總表同步 → 後端 Apps Script 範本」撳「下載 Code.gs」→ 貼入 Apps Script（全部取代）→ 儲存 → '
+        + '「部署 → 管理部署作業 → 編輯（鉛筆）→ 版本：新版本 → 部署」，'
+        + '然後喺 Apps Script 執行一次 cleanStaleStaging() 即刻清走佢哋（正式資料唔會甩）。');
+    }
   }
 
   /* ⑤b 整份資料庫讀取 —— 呢格先係「兩邊視窗對唔到料」嘅真正死因。

@@ -1,0 +1,81 @@
+/* ============================================================
+   tests/_realgas.mjs — 把「真 Code.gs」包做一個 HTTP /exec
+   ------------------------------------------------------------
+   同 tests/_fakegas.mjs 嘅分別（呢個分別就係重點）：
+     · _fakegas.mjs  ＝ 一份**重寫**嘅假後端（作者以為 Code.gs 點樣行）
+     · _realgas.mjs  ＝ **真正執行** apps-script/Code.gs（vm 入面跑真 source）
+   端到端測試打呢度，先至真的驗到「前端 → /api/proxy → 團長會部署嗰份
+   Code.gs → Sheet」成條鏈。以前呢條鏈冇人端到端試過：分件儲存
+   （saveDbPart／saveDbCommit）只有假後端版本嘅測試，真 Code.gs 嗰邊
+   一直冇被驗 —— 而「儲存唔到去後端」正正係死喺呢一度。
+
+   用法：node tests/_realgas.mjs <port>
+   環境：REALGAS_APIKEY ＝ 設定 Script Properties 嘅 API_KEY
+        （真站 initializeSheets() 會自動生成一條，所以要測「有 key」呢種情況）
+   ============================================================ */
+
+import http from 'node:http';
+import { makeGas } from './_gasvm.mjs';
+
+const PORT = Number(process.argv[2] || 8798);
+const KEY = String(process.env.REALGAS_APIKEY || '');
+
+/* 一個 VM ＝ 一個 Script（Script Properties 同 Sheet 都住喺呢度，
+   所以 process 唔熄，資料就一路喺度 —— 同真 Spreadsheet 一樣有狀態）。 */
+const gas = makeGas({ apiKey: KEY || null });
+
+function readBody(req) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', () => resolve(''));
+  });
+}
+
+const server = http.createServer(async (req, res) => {
+  const u = new URL(req.url, 'http://127.0.0.1');
+
+  /* 俾測試直接睇「資料庫」分頁而家真係有幾多行（唔信前端自己講） */
+  if (u.pathname === '/_rows') {
+    const sh = gas.sheets.get(u.searchParams.get('tab') || '資料庫');
+    const rows = sh ? sh._rows : [];
+    const brief = rows.map((r, i) => ({
+      row: i + 1,
+      unit: String(r[0] == null ? '' : r[0]).slice(0, 24),
+      seq: Number(r[1]) || 0,
+      chars: String(r[2] == null ? '' : r[2]).length,
+      version: String(r[4] == null ? '' : r[4]).slice(0, 40)
+    }));
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify({ tab: u.searchParams.get('tab') || '資料庫', rows: brief }));
+  }
+
+  /* 逃生門（v2.6.2）：直接叫後端嘅 cleanStaleStaging()，
+     驗「舊版留低嘅垃圾行清得走、正式資料一行都冇甩」 */
+  if (u.pathname === '/_clean') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(gas.sandbox.cleanStaleStaging()));
+  }
+
+  try {
+    /* 直接叫 sandbox.doPost / doGet —— 原原本本回 Code.gs 嘅輸出字串
+       （唔好經 gas.post() 嗰個 JSON.parse/stringify 往返：呢度要保留
+       真實回應嘅**位元組數**，先至測得到 4.5MB 回應上限嗰類問題）。 */
+    const params = Object.fromEntries(u.searchParams.entries());
+    const out = req.method === 'GET'
+      ? gas.sandbox.doGet({ parameter: params })
+      : gas.sandbox.doPost({ postData: { contents: await readBody(req) }, parameter: params });
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(out.getContent());
+  } catch (e) {
+    /* 真 GAS 撞正未捕捉例外會回一個錯誤頁；呢度回 500 ＋ 原因，
+       測試先睇得到死因（唔係淨係「Empty reply」）。 */
+    res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: false, error: 'realgas harness: ' + String(e && e.stack || e) }));
+  }
+});
+
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`[realgas] 真 Code.gs（vm）listen :${PORT}${KEY ? '（已設 API_KEY）' : '（未設 API_KEY）'}`);
+});

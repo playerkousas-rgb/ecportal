@@ -126,7 +126,35 @@ section('Apps Script 範本（Code.gs）');
   ok('doGet 都讀得（換機時用瀏覽器直接開都拎得返）', /action === 'loadDb' \|\| action === 'dbInfo'/.test(code));
   ok('寫入用 LockService 包住（兩個執委同時改都唔會爛）',
     /withLock\(function \(\) \{ return saveDb\(body\); \}\)/.test(code));
-  ok('寫入前會刪走舊段（v2.3.0 成梳 deleteRows，唔會殘留舊資料）', /sh\.deleteRows\(runs\[rd\]\[0\], runs\[rd\]\[1\]\)/.test(code));
+  /* v2.6.2：刪行邏輯統一咗入 deleteRowRuns()（以前 saveDb／saveDbPart／
+     cleanStaging 各自砌一梳，cleanStaging 嗰份砌錯 —— 一梳連續行只刪到一行）。
+     呢度**唔淨係** grep 原始碼，仲真係行一次 Code.gs 驗行為。 */
+  ok('寫入前會刪走舊段（統一用 deleteRowRuns，唔會殘留舊資料）',
+    /function deleteRowRuns\(sh, rowNos\)/.test(code) && /deleteRowRuns\(sh, oldRows\)/.test(code));
+  ok('deleteRowRuns 由最底嗰梳刪起（刪上面會令下面行號走位）',
+    /for \(var i = runs\.length - 1; i >= 0; i--\) sh\.deleteRows\(runs\[i\]\[0\], runs\[i\]\[1\]\);/.test(code));
+  {
+    const { makeGas } = await import('./_gasvm.mjs');
+    const g = makeGas();
+    /* 第一份夠大要分 5 段（每段 45000 字）；第二份細到只有一段 ——
+       如果刪舊段嗰度漏刪，第二次之後就會見到「5 段舊 ＋ 1 段新」撈埋。 */
+    const mk = (n, pad = 0) => ({
+      schema: 2, unitCode: '0082',
+      members: Array.from({ length: n }, (_, i) => ({ id: 'm' + i, name: '團員' + i, note: 'x'.repeat(pad) }))
+    });
+    /* 第二次一定要帶 baseVersion（v2.2.0 樂觀鎖）—— 唔帶嘅話後端會當
+       「過時裝置盲蓋」拒寫，咁就係喺測樂觀鎖而唔係測刪舊段。 */
+    const first = g.post({ action: 'saveDb', unit: '0082', db: mk(10, 22000) });
+    const rows1 = g.sheets.get('資料庫')._rows.length - 1;
+    g.post({ action: 'saveDb', unit: '0082', db: mk(1), baseVersion: first.version });
+    const after = g.sheets.get('資料庫')._rows.slice(1);
+    ok('★ 存第二次之後冇殘留舊段（真行 Code.gs 驗，唔係 grep）',
+      rows1 > 1 && after.length === 1,
+      `第一次 ${rows1} 段 → 第二次剩 ${after.length} 段`);
+    const back = g.post({ action: 'loadDb', unit: '0082' });
+    ok('★ 讀返嘅係最新嗰份（1 個團員，唔係新舊撈埋）',
+      back.ok === true && (back.db?.members || []).length === 1, JSON.stringify(back).slice(0, 120));
+  }
   ok('分段大小喺 Sheet 單格上限之內（50000）', /var DB_CHUNK = 45000;/.test(code));
   ok('sync 一併存埋整份資料庫（報表 ＋ 可讀返嘅資料庫）', /if \(body\.db && typeof body\.db === 'object'\)/.test(code));
   ok('寫入資料庫要 API Key（唔係人人改得）',

@@ -11,7 +11,18 @@ export function gasTemplate() {
   return `/**
  * ============================================================
  *  82venture · 總表同步與多旅團後端 Apps Script（Code.gs）
- *  版本：v2.6.1
+ *  版本：v2.6.2
+ *
+ *  ★ v2.6.2 修正（2026-09-20，團長回報「儲存唔到去後端／後端讀取唔到，
+ *    只能用 JSON 備份」）：分件儲存嘅暫存行**清唔乾淨** —— 舊 cleanStaging
+ *    把「一梳連續行」嘅起點向上移但冇把梳長 +1，所以一梳 N 行最後只刪到 1 行。
+ *    分件儲存（資料庫大過 2.8MB）每存一次就留低 N-1 行垃圾（每行 45000 字，
+ *    即係成份資料庫嘅複製品）喺「資料庫」分頁。Sheet 越嚟越大 →
+ *    每次 getValues() 越來越慢 → 最後 saveDb／loadDb 撞 GAS 執行時間／記憶體
+ *    上限 → 讀寫一齊死，而 status／ping 照樣話「正常」（所以「測試連線」會呃人）。
+ *    順手把「先刪暫存、再用舊行號刪舊段」呢個行號走位隱患一次過修好
+ *    （saveDbCommit 而家一次過由底往上刪晒）；全後端統一用 deleteRowRuns()。
+ *    ⚠ 已經中招嘅 Sheet：貼新版 → 執行一次 cleanStaleStaging() 清走積存垃圾行。
  *
  *  ★ v2.6.1 修正（2026-09-20，團長回報 3 項問題）：
  *    ① 「成員進度不知為何重複了」——死因：報表同步（writeTab）用**前端 schema key 次序**
@@ -115,7 +126,7 @@ var MODE = 'per-unit-sheet';   // 'per-unit-sheet' = 每個旅團獨立工作表
 var DRIVE_FOLDER_ID = '';
 
 /** 後端版本（status 會回報；APP 用嚟檢查「你張 Sheet 係咪仲行舊 code」） */
-var BACKEND_VERSION = 'v2.6.1';
+var BACKEND_VERSION = 'v2.6.2';
 
 /* ============================================================
    初始化與 API KEY 管理
@@ -300,7 +311,8 @@ function doPost(e) {
         var nfo = dbInfo(textOf(body.unit));
         return json({ ok: nfo.success === true, success: nfo.success === true, found: !!nfo.found,
           at: nfo.at || '', version: nfo.version || '', bytes: nfo.bytes || 0,
-          sizes: nfo.sizes || null, photoBytes: nfo.photoBytes || 0, counts: nfo.counts || null, error: nfo.error || '' });
+          sizes: nfo.sizes || null, photoBytes: nfo.photoBytes || 0, counts: nfo.counts || null,
+          stagingRows: nfo.stagingRows || 0, stagingBytes: nfo.stagingBytes || 0, error: nfo.error || '' });
       }
       /* v2.6.0：分段讀取 —— 每次淨係回一段純文字，唔會撞代理 4.5MB 回應上限 */
       if (body.action === 'loadDbPart') {
@@ -311,7 +323,8 @@ function doPost(e) {
       }
       var ld = loadDb(textOf(body.unit));
       return json({ ok: ld.success === true, success: ld.success === true, found: !!ld.found,
-        db: ld.db || null, at: ld.at || '', version: ld.version || '', bytes: ld.bytes || 0, error: ld.error || '' });
+        db: ld.db || null, at: ld.at || '', version: ld.version || '', bytes: ld.bytes || 0,
+        stagingRows: ld.stagingRows || 0, stagingBytes: ld.stagingBytes || 0, error: ld.error || '' });
     }
 
     /* ---- 進度追蹤（同進度前端共用同一個後端；API Key＝執委身份）---- */
@@ -530,16 +543,14 @@ function saveDb(body) {
   }
 
   /* v2.3.0：舊段成梳一次過刪（deleteRows）—— 以前逐行 deleteRow，
-     200 段資料 = 200 次調用（每次成頁 shift），GAS 配額同時間都燒好快。 */
-  var runs = [];
+     200 段資料 = 200 次調用（每次成頁 shift），GAS 配額同時間都燒好快。
+     v2.6.2：改用全後端唯一嘅 deleteRowRuns（同 cleanStaging 同一套邏輯）。 */
+  var oldRows = [];
   for (var i = 1; i < rows.length; i++) {
     if (textOf(rows[i][0]) !== unit) continue;
-    var rowNo = i + 1;
-    if (runs.length && runs[runs.length - 1][0] + runs[runs.length - 1][1] === rowNo) runs[runs.length - 1][1]++;
-    else runs.push([rowNo, 1]);
+    oldRows.push(i + 1);
   }
-  /* 由最底嗰梳刪起 —— 刪上面會令下面行號走位 */
-  for (var rd = runs.length - 1; rd >= 0; rd--) sh.deleteRows(runs[rd][0], runs[rd][1]);
+  deleteRowRuns(sh, oldRows);
 
   var now = new Date();
   /* v2.2.0：版本由**伺服器**派（ISO 時間＋隨機尾數）。
@@ -564,32 +575,50 @@ function saveDb(body) {
 function dbRawText(unit) {
   unit = textOf(unit);
   var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(DB_TAB);
-  if (!sh) return { found: false, text: '', at: '', version: '' };
+  if (!sh) return { found: false, text: '', at: '', version: '', stagingRows: 0, stagingBytes: 0 };
   var rows = sh.getDataRange().getValues();
   var parts = [];
   var at = '', version = '';
+  /* v2.6.2：順手數一數「暫存垃圾行」—— 舊版 cleanStaging 漏刪留低嘅行
+     （每行 45000 字）會令分頁越嚟越大，最後 saveDb／loadDb 撞 GAS
+     執行時間／記憶體上限（症狀：儲存同讀取一齊死，但 status 話正常）。
+     呢度本來就要讀成份分頁，所以順手数數係零成本；dbInfo 會報上去，
+     app 嘅「同步診斷」見到就會叫人更新 Code.gs ＋ 執行 cleanStaleStaging()。 */
+  var stagingRows = 0, stagingBytes = 0;
   for (var i = 1; i < rows.length; i++) {
     var u = textOf(rows[i][0]);
-    if (u === '__staging__') continue;   // v2.4.0：分件暫存唔係正式資料
+    if (u === '__staging__') {           // v2.4.0：分件暫存唔係正式資料
+      stagingRows++;
+      stagingBytes += String(rows[i][2] == null ? '' : rows[i][2]).length;
+      continue;
+    }
     if (unit && u && u !== unit) continue;
     if (!unit && !u) continue;
     parts.push({ seq: Number(rows[i][1]) || 0, text: String(rows[i][2] == null ? '' : rows[i][2]) });
     if (rows[i][3]) at = rows[i][3];
     if (rows[i][4]) version = textOf(rows[i][4]);
   }
-  if (!parts.length) return { found: false, text: '', at: at, version: version };
+  if (!parts.length) return { found: false, text: '', at: at, version: version, stagingRows: stagingRows, stagingBytes: stagingBytes };
   parts.sort(function (a, b) { return a.seq - b.seq; });
-  return { found: true, text: parts.map(function (p) { return p.text; }).join(''), at: at, version: version };
+  return {
+    found: true, text: parts.map(function (p) { return p.text; }).join(''), at: at, version: version,
+    stagingRows: stagingRows, stagingBytes: stagingBytes
+  };
 }
 
 /** 讀返整份資料庫（把所有段拼返） */
 function loadDb(unit) {
   var raw = dbRawText(unit);
-  if (!raw.found) return { success: true, found: false, db: null, at: raw.at, version: raw.version, bytes: 0, error: '' };
+  if (!raw.found) {
+    return { success: true, found: false, db: null, at: raw.at, version: raw.version, bytes: 0,
+      stagingRows: raw.stagingRows, stagingBytes: raw.stagingBytes, error: '' };
+  }
   try {
-    return { success: true, found: true, db: JSON.parse(raw.text), at: raw.at, version: raw.version, bytes: raw.text.length };
+    return { success: true, found: true, db: JSON.parse(raw.text), at: raw.at, version: raw.version,
+      bytes: raw.text.length, stagingRows: raw.stagingRows, stagingBytes: raw.stagingBytes };
   } catch (e) {
-    return { success: false, found: true, db: null, error: '資料庫內容壞咗（JSON 解析失敗），請用 app 嘅 JSON 備份還原' };
+    return { success: false, found: true, db: null, error: '資料庫內容壞咗（JSON 解析失敗），請用 app 嘅 JSON 備份還原',
+      stagingRows: raw.stagingRows, stagingBytes: raw.stagingBytes };
   }
 }
 
@@ -664,19 +693,15 @@ function saveDbPart(body) {
     return { success: false, conflict: true, version: curVersion, error: '後端已有較新版本（另一部機剛剛同步過）' };
   }
 
-  /* 過期暫存清走（90 分鐘前嘅）—— 唔會越積越多 */
+  /* 過期暫存清走（90 分鐘前嘅）—— 唔會越積越多
+     v2.6.2：改用 deleteRowRuns（同 cleanStaging 同一套邏輯，唔會漏刪） */
   var cutoff = Date.now() - 90 * 60 * 1000;
   var stale = stagingRows('');   // 全部暫存行（連 at）
   var dead = stale.filter(function (r) {
     var at = new Date(r.at || 0).getTime() || 0;
     return at && at < cutoff;
   }).map(function (r) { return r.row; });
-  var runs = [];
-  dead.forEach(function (rowNo) {
-    if (runs.length && runs[runs.length - 1][0] + runs[runs.length - 1][1] === rowNo) runs[runs.length - 1][1]++;
-    else runs.push([rowNo, 1]);
-  });
-  for (var rd = runs.length - 1; rd >= 0; rd--) sh.deleteRows(runs[rd][0], runs[rd][1]);
+  deleteRowRuns(sh, dead);
 
   var text = JSON.stringify(data);
   var chunks = [];
@@ -734,16 +759,20 @@ function saveDbCommit(body) {
   var text = JSON.stringify(merged);
   if (text.length > 40000000) { cleanStaging(sh, got); return { success: false, error: '拼合後太大（>40MB）' }; }
 
-  /* 刪暫存＋舊段（成梳），寫入正式行 */
-  cleanStaging(sh, got);
-  var oldRuns = [];
+  /* 刪暫存＋舊段：**一次過**由底往上刪（v2.6.2）。
+     以前係「先 cleanStaging(暫存)，再用上面讀返嘅行號刪舊段」——
+     行號係**刪之前**計嘅：暫存行一旦喺舊段之上（上一次分件儲存中途死咗、
+     之後又有普通儲存喺下面加咗行），刪完暫存所有行號就會向上移，
+     第二輪 deleteRows 就指錯行 —— 輕則拋例外（儲存失敗），
+     重則刪錯行 → 「資料庫」分頁剩返半新半舊嘅段 → loadDb 砌唔成 JSON
+     → 後端讀唔到，之後每次儲存都話「未讀到後端版本，唔會盲寫」。 */
+  var kill = [];
+  got.forEach(function (r) { kill.push(r.row); });
   for (var i = 1; i < rows.length; i++) {
     if (textOf(rows[i][0]) !== unit) continue;
-    var rowNo = i + 1;
-    if (oldRuns.length && oldRuns[oldRuns.length - 1][0] + oldRuns[oldRuns.length - 1][1] === rowNo) oldRuns[oldRuns.length - 1][1]++;
-    else oldRuns.push([rowNo, 1]);
+    kill.push(i + 1);
   }
-  for (var rd2 = oldRuns.length - 1; rd2 >= 0; rd2--) sh.deleteRows(oldRuns[rd2][0], oldRuns[rd2][1]);
+  deleteRowRuns(sh, kill);
 
   var now = new Date();
   var version = now.toISOString() + '-' + Math.floor(Math.random() * 100000);
@@ -757,15 +786,61 @@ function saveDbCommit(body) {
   return { success: true, chunks: chunks.length, bytes: text.length, at: now, version: version, parts: parts };
 }
 
-function cleanStaging(sh, rowsArr) {
-  if (!rowsArr.length) return;
-  var deletes = rowsArr.map(function (r) { return r.row; }).sort(function (a, b) { return b - a; });
-  var run = null;
-  deletes.forEach(function (rowNo) {
-    if (run && run[0] === rowNo + 1) run[0] = rowNo;
-    else { if (run) sh.deleteRows(run[0], run[1]); run = [rowNo, 1]; }
+/* v2.6.2：把一批行號計成一梳一梳、由最底嗰梳刪起（全後端唯一嘅刪行方法）。
+   一次過 deleteRows 而唔係逐行 deleteRow：200 段資料逐行刪 ＝ 200 次調用
+   （每次成頁 shift），GAS 配額同執行時間都燒好快（v2.3.0 起）。
+
+   ★ 點解一定要**一個**方法、**一次過**刪晒（v2.6.2，團長回報「儲存唔到去
+     後端／後端讀取唔到」查到）：
+     ① 舊 cleanStaging 係「把梳嘅起點向上移」但**冇**把梳長 +1 ——
+        一梳連續暫存行最後淨係刪到**一行**，其餘 N-1 行全部留喺
+        「資料庫」分頁。分件儲存一次就留低成份資料庫嘅垃圾行
+        （每行 45000 字），每次儲存又留多一份 —— Sheet 越嚟越大，
+        每次 getValues() 越來越慢，最後 saveDb／loadDb 撞 GAS
+        執行時間／記憶體上限：讀寫一齊死。
+     ② 「先刪暫存、再用之前讀返嘅行號刪舊段」係錯嘅：刪咗暫存之後
+        所有行號會向上移，第二輪就用錯行號（見 saveDbCommit）。 */
+function deleteRowRuns(sh, rowNos) {
+  var list = [];
+  (rowNos || []).forEach(function (n) {
+    var v = Number(n);
+    if (Number.isFinite(v) && v >= 1) list.push(v);
   });
-  if (run) sh.deleteRows(run[0], run[1]);
+  if (!list.length) return 0;
+  list.sort(function (a, b) { return a - b; });
+  var runs = [];
+  list.forEach(function (rowNo) {
+    if (runs.length && runs[runs.length - 1][0] + runs[runs.length - 1][1] === rowNo) runs[runs.length - 1][1]++;
+    else runs.push([rowNo, 1]);
+  });
+  for (var i = runs.length - 1; i >= 0; i--) sh.deleteRows(runs[i][0], runs[i][1]);
+  return list.length;
+}
+
+function cleanStaging(sh, rowsArr) {
+  return deleteRowRuns(sh, (rowsArr || []).map(function (r) { return r.row; }));
+}
+
+/** v2.6.2 逃生門：一次過清走「資料庫」分頁入面所有 __staging__ 暫存行。
+ *  舊版（v2.6.1 之前）cleanStaging 漏刪留低嘅垃圾行，每行 45000 字 ——
+ *  分件儲存存過幾次，「資料庫」分頁就會塞滿成份資料庫嘅複製品，
+ *  每次 getValues() 越嚟越慢，最後 saveDb／loadDb 撞 GAS 執行時間／記憶體上限
+ *  （症狀：「儲存唔到去後端／後端讀取唔到」，但 status 話正常）。
+ *  貼咗新版 Code.gs 之後，喺 Apps Script 編輯器執行一次
+ *  cleanStaleStaging() 即刻清乾淨；正常儲存唔會再產生垃圾行。
+ *  正式資料（unit ＝ 旅團編號嘅行）一行都唔會掂。 */
+function cleanStaleStaging() {
+  var sh = dbSheet();
+  var rows = sh.getDataRange().getValues();
+  var dead = [];
+  for (var i = 1; i < rows.length; i++) {
+    if (textOf(rows[i][0]) !== '__staging__') continue;
+    dead.push(i + 1);
+  }
+  var n = deleteRowRuns(sh, dead);
+  var left = Math.max(0, sh.getLastRow() - 1);
+  Logger.log('cleanStaleStaging：清走 ' + n + ' 行暫存垃圾，「資料庫」分頁剩返 ' + left + ' 行');
+  return { ok: true, removed: n, rowsLeft: left };
 }
 
 /** 只睇 meta：後端有冇資料、幾時更新（唔會傳成份資料庫落嚟）。
@@ -790,6 +865,9 @@ function dbInfo(unit) {
   return {
     success: true, found: !!r.found, at: r.at || '', version: r.version || '', bytes: r.bytes || 0,
     sizes: sizes, photoBytes: photoBytes,
+    /* v2.6.2：舊版留低嘅暫存垃圾行（正常應該係 0）—— app 嘅「同步診斷」
+       見到就會話你知要更新 Code.gs ＋ 執行 cleanStaleStaging() 清走。 */
+    stagingRows: r.stagingRows || 0, stagingBytes: r.stagingBytes || 0,
     counts: r.found ? {
       members: (db.members || []).length,
       transactions: (db.transactions || []).length,
