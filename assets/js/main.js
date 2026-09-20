@@ -90,9 +90,15 @@ async function boot() {
   window.addEventListener('v82:refresh', render);
   window.addEventListener('v82:sync', paintSyncChip);
 
-  /* 資料真正嘅家係旅團自己嘅 Google Sheet：登入之前先由後端攞一次
-     （登入嗰一刻攞到嘅 ＝ 後端嗰一刻嘅狀態）。攞唔到就照出登入頁，但會話你知。 */
-  await syncBoot();
+  /* 資料真正嘅家係旅團自己嘅 Google Sheet：
+     真實旅團要先成功載入後端，先可以顯示帳戶／密碼畫面。
+     連唔到後端就停喺「後端未連線」頁，唔會畀用家輸入一堆一定登入唔到嘅資料。 */
+  const bootSync = await syncBoot();
+  if (!isMock() && !bootSync?.ok) {
+    /* 舊 session 唔可以繞過後端硬閘直接入 app。 */
+    if (current()) logout();
+    return renderBackendGate(bootSync);
+  }
 
   /* 示範 session 唔可以帶入真實旅團（否則會用「示範領袖」身份改真資料） */
   if (!isMock() && current()?.mock) logout();
@@ -119,12 +125,12 @@ let unloadGuardOn = false;
 export function remoteMod() { return remoteApi; }
 
 async function syncBoot() {
-  if (isMock()) return;
+  if (isMock()) return { ok: true, mock: true };
   try {
     remoteApi = await import('./lib/remote.js');
   } catch (e) {
     console.warn('[sync] 載入唔到 remote 模組', e);
-    return;
+    return { ok: false, error: '同步模組載入失敗 —— 請重新整理頁面再試' };
   }
   const store = await import('./lib/store.js');
   /* 本機一有改動 → 淨係更新頂部狀態（「儲存到後端（N）」），唔會寫後端 */
@@ -143,9 +149,11 @@ async function syncBoot() {
   }
 
   if (!remoteApi.remoteConfigured()) {
-    /* 未設定後端：照用本機，但要話畀團長知資料未有備份 */
+    /* 真實旅團冇可用接線：唔可以開登入頁，避免用家以為已登入本機資料。 */
+    const out = { ok: false, reason: 'not_configured', error: '呢個旅團未有可用嘅後端接線' };
+    bootSyncWarn = out;
     paintSyncChip();
-    return;
+    return out;
   }
 
   app.innerHTML = loadingScreen('由旅團後端載入資料中…');
@@ -160,10 +168,11 @@ async function syncBoot() {
       }
     }
   } catch (e) {
-    console.warn('[sync] 開機由後端載入失敗（改動留喺本機，唔會盲寫後端）', e);
+    console.warn('[sync] 開機由後端載入失敗（未顯示登入頁，亦唔會盲寫後端）', e);
     bootSyncWarn = { ok: false, error: e?.message || String(e) };
   }
   paintSyncChip();
+  return bootSyncWarn ? { ok: false, ...bootSyncWarn } : { ok: true, loaded: true };
 }
 
 /** 開機三方比對有撞格 → 登入後問一次；剔咗嘅寫入本機（等你撳儲存），冇剔嘅維持後端 */
@@ -820,6 +829,47 @@ function renderMoved() {
   });
 }
 
+function renderBackendGate(reason = {}) {
+  document.body.classList.add('login-body');
+  const code = currentUnit() || '—';
+  /* 連線原因留喺內部狀態，普通用家只需要知道下一步：再試，或聯絡管理員。 */
+  app.innerHTML = `
+  <div class="gate-wrap">
+    <div class="gate-card">
+      <div class="gate-brand">
+        <div class="logo">82</div>
+        <div>
+          <div class="gate-title">未能連接旅團後端</div>
+          <div class="gate-sub">旅團 ${esc(code)} · 暫時不能登入</div>
+        </div>
+      </div>
+      <div class="note-box danger">${icon('alert', 16)}<div>
+        <b>暫時未能連線，請稍後再試。</b>
+        <div class="xs mt-4">後端未連線，所以暫時未能顯示登入畫面。</div>
+      </div></div>
+      <div class="row gap-8 wrap mt-16">
+        <button class="btn btn-primary" id="btnRetryBackend" type="button">${icon('refresh', 15)} 重新連線</button>
+        <button class="btn" id="btnChangeUnit" type="button">${icon('chevronL', 15)} 返回揀旅團</button>
+      </div>
+      <div class="gate-foot">如仍然未能連線，請聯絡旅團管理員。</div>
+    </div>
+  </div>`;
+
+  app.querySelector('#btnRetryBackend')?.addEventListener('click', async () => {
+    const b = app.querySelector('#btnRetryBackend');
+    if (b) { b.disabled = true; b.textContent = '連線中…'; }
+    const r = await syncBoot();
+    if (r?.ok) {
+      if (isMock() && !current()) loginAsMock('leader');
+      if (!current()) renderLogin();
+      else render();
+      return;
+    }
+    renderBackendGate(r);
+  });
+  app.querySelector('#btnChangeUnit')?.addEventListener('click', () => resetToGate());
+}
+
 function renderFatal(e) {
   app.innerHTML = `
   <div style="max-width:640px;margin:60px auto;padding:26px" class="card">
@@ -1007,10 +1057,10 @@ function renderLogin() {
   app.querySelector('#btnRetrySync')?.addEventListener('click', async () => {
     const b = app.querySelector('#btnRetrySync');
     if (b) { b.disabled = true; b.textContent = '連線中…'; }
-    await syncBoot();
+    const r = await syncBoot();
+    if (!isMock() && !r?.ok) return renderBackendGate(r);
     renderLogin();
-    if (bootSyncWarn) toast('仍然連唔到後端：' + (bootSyncWarn.error || ''), 'err');
-    else toast('已由後端載入最新資料', 'ok');
+    toast('已由後端載入最新資料', 'ok');
   });
   app.querySelector('#loginDlGs')?.addEventListener('click', () => downloadCodeGs());
   app.querySelector('#loginGuide')?.addEventListener('click', openDeployGuideModal);
@@ -1032,6 +1082,7 @@ function renderLogin() {
     /* ★ 同一條硬閘：團員／領袖經名冊電郵登入都一定要後端核對過先入 */
     const gate = await gateLoginOnBackend();
     if (!gate.ok) {
+      if (!isMock()) return renderBackendGate(gate);
       if (btn) btn.disabled = false;
       if (box) { box.textContent = gateMessage(gate); box.style.display = 'block'; }
       return;
@@ -1110,10 +1161,9 @@ function renderLogin() {
        （以前呢度係「攞多次，攞唔到都照登」，正正係團長質疑嘅嘢。） */
     const gate = await gateLoginOnBackend();
     if (!gate.ok) {
+      if (!isMock()) return renderBackendGate(gate);
       btn.disabled = false;
       passInput.value = '';
-      /* renderLogin() 會重畫成頁 —— 封鎖原因由 loginSyncBanner() 出（佢讀 bootSyncWarn），
-         所以唔使再寫入呢個即將被棄掉嘅 err 節點。 */
       renderLogin();
       toast(gateMessage(gate), 'err');
       return;
@@ -1140,7 +1190,7 @@ function renderLogin() {
  *  以前呢度係 `freshenBeforeLogin()`：「連唔到就照登入，橫額會話你知」——
  *  於係出現咗團長講嗰句：「既然都同後端對咗帳戶密碼，點可能入去之後話冇連上後端？」
  *  答案係：根本冇對過。`login()` 係純本機比對，後端由頭到尾冇被問過。
- *  而家：核對唔到就喺登入頁擋住，講清楚原因。 */
+ *  而家：開機／核對唔到就停喺連線閘，唔會顯示帳戶／密碼登入表單。 */
 async function gateLoginOnBackend() {
   if (isMock()) return { ok: true, mock: true };
   if (!remoteApi) {
@@ -1182,7 +1232,8 @@ async function confirmLogout() {
 async function doLogout() {
   logout();
   document.body.classList.add('login-body');
-  await syncBoot();
+  const r = await syncBoot();
+  if (!isMock() && !r?.ok) return renderBackendGate(r);
   renderLogin();
 }
 

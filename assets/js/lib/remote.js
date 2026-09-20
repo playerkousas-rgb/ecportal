@@ -30,6 +30,7 @@ import {
   commitSaved, applyChangesLocal, markBackendEmpty, normalizeRemote, stripForBase, exportForBackend,
   hasLocalContent, localChanges
 } from './store.js';
+import { unitEntry } from './units.js';
 import { postBackend, isExecUrl, shortExec } from './gateway.js';
 import { threeWay, overridesFor, describeConflict, diffDb, applyChanges } from './merge3.js';
 
@@ -37,9 +38,49 @@ import { threeWay, overridesFor, describeConflict, diffDb, applyChanges } from '
 let inFlight = false;
 let lastState = { state: 'idle', msg: '' };
 let lastLoadAt = 0;                          // 上次成功由後端載入（ms）
+/*
+ * 這個係「實際連線結果」，同 remoteCfg() 嘅「有冇一條路可以試」分開。
+ * Vercel 代理係同源嘅，瀏覽器唔應該要求用家再貼一次 /exec／API Key；
+ * 登入／載入成功後，總表同步頁要沿用呢個事實，而唔係只睇本機 sync.url。
+ */
+let lastBackend = {
+  verified: false, unit: '', route: '', version: '', at: 0, error: ''
+};
 
 /** 目前同步狀態（畀介面畫個提示） */
 export function syncState() { return { ...lastState }; }
+
+/**
+ * 後端接線狀態：
+ *   configured ＝ 有一條可能行得通嘅路（未必已試過）
+ *   verified   ＝ 今次頁面生命週期內，真正收到過後端有效回覆
+ *   route      ＝ proxy／direct
+ */
+export function backendStatus() {
+  const cfg = remoteCfg();
+  return {
+    configured: !!cfg.ok,
+    verified: !!(lastBackend.verified && lastBackend.unit === cfg.unit),
+    route: lastBackend.route || (cfg.serverManaged ? 'proxy' : (cfg.url ? 'direct' : (cfg.viaProxy ? 'proxy' : ''))),
+    unit: cfg.unit || lastBackend.unit || '',
+    version: lastBackend.version || '',
+    at: lastBackend.at || 0,
+    error: lastBackend.error || ''
+  };
+}
+
+function noteBackend(r, { version = '', error = '' } = {}) {
+  if (r?.via === 'proxy' || r?.via === 'direct') {
+    lastBackend = {
+      verified: !!r.ok,
+      unit: remoteCfg().unit,
+      route: r.via,
+      version: String(version || r.json?.backendVersion || ''),
+      at: Date.now(),
+      error: r.ok ? '' : String(error || r.error || '')
+    };
+  }
+}
 
 function setState(state, msg = '') {
   lastState = { state, msg, at: Date.now() };
@@ -73,17 +114,36 @@ export function remoteCfg() {
      由 TROOP_<編號>_BACKEND / TROOP_<編號>_APIKEY 解析 —— 前端唔應該、
      亦都唔需要知道。所以只要有旅團編號就當接得通，唔好再要求用家填 /exec。 */
   const viaProxy = canUseProxy();
+  /* /api/units 只回公開欄位，但會帶 backendReady。呢個標記代表：
+     選旅團本身已經同 Vercel Registry 接好，唔係要求用家再填一次 /exec。
+     上次已經成功行過 proxy 都算 verified（即使部署名單 API 當刻讀唔到）。 */
+  const entry = unit ? (unitEntry(unit) || {}) : {};
+  const serverManaged = !!(
+    entry.backendReady ||
+    (lastBackend.verified && lastBackend.unit === unit && lastBackend.route === 'proxy')
+  );
+  const directReady = isExecUrl(url);
   return {
     url,
     apiKey: s.apiKey !== undefined ? s.apiKey : (db.backend?.apiKey || ''),
     unit,
-    ok: (!!url || (viaProxy && !!unit)) && !isMock(),
-    viaProxy
+    /* 有字串唔等於係有效後端：舊 cache 留低咗 /dev／錯網址時，唔可以畫綠燈。 */
+    ok: (directReady || (viaProxy && !!unit)) && !isMock(),
+    viaProxy,
+    directReady,
+    serverManaged
   };
 }
 
 /** 後端有冇設定好（可以寫入） */
 export function remoteConfigured() { return remoteCfg().ok; }
+
+function notConfiguredMessage(cfg = remoteCfg()) {
+  if (cfg.unit && cfg.viaProxy) {
+    return '已選定旅團，但同源 Vercel 代理未能建立；唔需要再填第二個後端。請撳「同步診斷」檢查部署／Registry。';
+  }
+  return '未設定後端網址（去「總表同步」填 /exec）';
+}
 
 /* ---------------- 呼叫後端 ---------------- */
 function canUseProxy() {
@@ -109,7 +169,7 @@ async function callBackend(payload, { timeoutMs = 60000 } = {}) {
   const cfg = remoteCfg();
   if (!cfg.unit) return { ok: false, reason: 'not_configured', error: '未知旅團編號' };
   if (!cfg.url && !cfg.viaProxy) {
-    return { ok: false, reason: 'not_configured', error: '未設定後端網址（去「總表同步」填 /exec）' };
+    return { ok: false, reason: 'not_configured', error: notConfiguredMessage(cfg) };
   }
 
   const r = await postBackend(payload, {
@@ -126,11 +186,13 @@ async function callBackend(payload, { timeoutMs = 60000 } = {}) {
     };
   }
   if (!r.json) {
-    return { ok: false, reason: r.reason || 'network', error: r.error || '連唔到旅團後端', hint: r.reason === 'bad_url' ? URL_HINT : '' };
+    noteBackend(r, { error: r.error || '連唔到旅團後端' });
+    return { ok: false, reason: r.reason || 'network', error: r.error || '連唔到旅團後端', hint: r.reason === 'bad_url' ? URL_HINT : '', via: r.via };
   }
   const out = normalize(r.json);
   out.via = r.via;                       // 界面／診斷用：今次行咗邊條路
   if (!out.ok) out.hint = hintOf(out.error, r.via);
+  noteBackend(out, { version: out.backendVersion, error: out.error });
   return out;
 }
 
@@ -289,7 +351,7 @@ export async function pullDbSegmented({ onProgress } = {}) {
 export async function pullDb({ bytes: knownBytes } = {}) {
   if (isMock()) return { ok: false, reason: 'mock', error: '示範模式唔會讀後端' };
   const cfg = remoteCfg();
-  if (!cfg.ok) return { ok: false, reason: 'not_configured', error: '未設定後端網址' };
+  if (!cfg.ok) return { ok: false, reason: 'not_configured', error: notConfiguredMessage(cfg) };
   setState('loading', '讀取緊後端資料…');
 
   const mb = (n) => `${(Number(n) / 1048576).toFixed(1)} MB`;
@@ -359,6 +421,10 @@ const FIX_ENV = (u) =>
  */
 export async function remoteDiagnose() {
   const cfg = remoteCfg();
+  const live = backendStatus();
+  /* 選旅團＋Vercel 代理係一條完整接線；冇填本機 /exec 唔應該被診斷成錯誤。
+     live.verified 係登入／載入實際成功過嘅證據，serverManaged 係 Registry 公開嘅接線標記。 */
+  const proxyReady = !!(cfg.serverManaged || (live.verified && live.route === 'proxy'));
   const out = { ok: false, unit: cfg.unit || '', route: '', backendVersion: '', stages: [], blockers: [] };
   const add = (id, label, state, detail, fix = '') => {
     out.stages.push({ id, label, state, detail: String(detail || ''), fix: String(fix || '') });
@@ -378,7 +444,7 @@ export async function remoteDiagnose() {
      嚴重程度睇「有冇自助路線頂住」：用家自己貼咗合格嘅 /exec 就只係 warn
      （同步照行得通，只係平台未接線）；兩邊都冇先至算 bad（真係同步唔到）。 */
   const selfOk = isExecUrl(cfg.url);
-  const regBad = selfOk ? 'warn' : 'bad';
+  const regBad = selfOk || proxyReady ? 'warn' : 'bad';
   let reg = null;
   try {
     const r = await fetch('api/units?diag=1&_=' + Date.now(), { cache: 'no-store' });
@@ -386,9 +452,11 @@ export async function remoteDiagnose() {
   } catch (e) { /* 純靜態部署冇 /api */ }
   const diag = (reg && reg.diag) || null;
   if (!reg) {
-    add('registry', '平台登記（伺服器端）', 'warn',
-      '讀唔到 /api/units —— 呢個部署好似冇伺服器端 API（純靜態網站）',
-      '用自助路線：喺「同步設定」貼 /exec ＋ API Key（下面第 ③ 格會驗）');
+    add('registry', '平台登記（伺服器端）', proxyReady ? 'ok' : 'warn',
+      proxyReady
+        ? '已經由 Vercel 代理成功接通；唔需要喺瀏覽器再填 /exec／API Key。'
+        : '讀唔到 /api/units —— 呢個部署好似冇伺服器端 API（純靜態網站）',
+      proxyReady ? '' : '用自助路線：喺「同步設定」貼 /exec ＋ API Key（下面第 ③ 格會驗）');
   } else {
     const ids = (diag?.ids || []).map(String);
     const trusted = (diag?.trusted || []).map(String);
@@ -419,7 +487,12 @@ export async function remoteDiagnose() {
   }
 
   /* ③ 用家自己貼嘅 /exec（自助路線） */
-  if (cfg.url) {
+  if (proxyReady) {
+    add('selfurl', '自己貼嘅 /exec', 'ok',
+      cfg.url
+        ? `${shortExec(cfg.url)}（備用；目前用 Vercel 代理）`
+        : 'Vercel 已經代為接線，呢格留空係正確，唔需要再填 /exec／API Key');
+  } else if (cfg.url) {
     add('selfurl', '自己貼嘅 /exec', isExecUrl(cfg.url) ? 'ok' : 'bad',
       isExecUrl(cfg.url) ? `${shortExec(cfg.url)}${cfg.apiKey ? '（已附 API Key）' : '（未附 API Key）'}`
         : `格式唔啱：${String(cfg.url).slice(0, 60)}`,
@@ -562,7 +635,7 @@ export function splitDbIntoParts(db, maxBytes = PART_MAX_BYTES) {
 export async function uploadPhotos(photos = [], { id = '' } = {}) {
   if (isMock()) return { ok: false, reason: 'mock', links: [] };
   const cfg = remoteCfg();
-  if (!cfg.ok) return { ok: false, reason: 'not_configured', links: [] };
+  if (!cfg.ok) return { ok: false, reason: 'not_configured', error: notConfiguredMessage(cfg), links: [] };
   /* 單據 Drive 資料夾：旅團設定（財務 → 設定／帳號與系統 都改到同一個欄） */
   const receiptDrive = String(tryLoad()?.settings?.receiptDrive || '').trim();
   const r = await callBackend({ action: 'uploadPhotos', payload: { id, photos }, folderId: receiptDrive }, { timeoutMs: 90000 });
@@ -588,7 +661,7 @@ export async function uploadPhotos(photos = [], { id = '' } = {}) {
  */
 export async function loadFromBackend({ policy = 'ask' } = {}) {
   if (isMock()) return { ok: false, reason: 'mock', error: '示範模式唔會讀後端' };
-  if (!remoteConfigured()) return { ok: false, reason: 'not_configured', error: '未設定後端' };
+  if (!remoteConfigured()) return { ok: false, reason: 'not_configured', error: notConfiguredMessage() };
   const got = await pullDb();
   if (!got.ok) {
     setState('unreachable', got.error || '連唔到後端');
@@ -779,7 +852,7 @@ export async function discardAndReload() {
 export async function saveToBackend({ policy = 'ask', resolver = null, silent = true, _attempt = 0 } = {}) {
   if (isMock()) return { ok: false, reason: 'mock', error: '示範模式唔會寫入後端' };
   const cfg = remoteCfg();
-  if (!cfg.ok) return { ok: false, reason: 'not_configured', error: '未設定後端網址' };
+  if (!cfg.ok) return { ok: false, reason: 'not_configured', error: notConfiguredMessage(cfg) };
   const local = tryLoad();
   if (!local) return { ok: false, reason: 'no_db', error: '資料庫未載入' };
   if (inFlight) return { ok: false, reason: 'busy', error: '上一次儲存仲未完成' };
