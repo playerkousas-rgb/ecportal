@@ -116,7 +116,13 @@ section('Apps Script 範本（Code.gs）');
   const loadDbBody = code.slice(code.indexOf('function loadDb(unit)'), code.indexOf('function loadDbPart'));
   ok('loadDb 唔再自己讀「資料庫」分頁（一定經 dbRawText）', !/getDataRange/.test(loadDbBody));
   ok('每段大小留足水位（1MB ≪ Vercel 4.5MB 回應上限）', /var LOAD_PART_CHARS = 1000000;/.test(code));
-  ok('後端版本號係 v2.6.0', /\*  版本：v2\.6\.0/.test(code));
+  ok('後端版本號同 BACKEND_VERSION 一致（介面檢查／診斷就靠佢對到）',
+    (() => {
+      const header = (code.match(/\*\s*版本：v?(\d+\.\d+\.\d+)/) || [])[1] || '';
+      const decl = (code.match(/var BACKEND_VERSION = 'v?(\d+\.\d+\.\d+)'/) || [])[1] || '';
+      return !!header && header === decl;
+    })(),
+    `header=${(code.match(/\*\s*版本：v?(\d+\.\d+\.\d+)/) || [])[1]} decl=${(code.match(/var BACKEND_VERSION = '(\d+\.\d+\.\d+)'/) || [])[1]}`);
   ok('doGet 都讀得（換機時用瀏覽器直接開都拎得返）', /action === 'loadDb' \|\| action === 'dbInfo'/.test(code));
   ok('寫入用 LockService 包住（兩個執委同時改都唔會爛）',
     /withLock\(function \(\) \{ return saveDb\(body\); \}\)/.test(code));

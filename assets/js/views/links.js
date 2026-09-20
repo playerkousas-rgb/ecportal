@@ -57,7 +57,7 @@ export function render() {
       <div class="qr-box" style="width:220px;margin:0 auto">${qrSvg(hub.url, 6, 2)}</div>
       <div class="row gap-8 wrap center mt-12" style="justify-content:center">
         <button class="btn btn-sm" data-copy="${esc(hub.url)}">${icon('copy', 14)} 複製</button>
-        <button class="btn btn-sm btn-primary" data-act="print-hub">${icon('print', 14)} 列印海報</button>
+        <button class="btn btn-sm btn-primary" data-act="print-poster">${icon('print', 14)} 列印海報</button>
         <button class="btn btn-sm" data-open="${esc(hub.url)}">${icon('external', 14)} 預覽</button>
       </div>
     </div>
@@ -177,7 +177,8 @@ export function mount(root) {
     if (hubUrl && await copyText(`【${profile().name || ''}】團員入口（掃一次齊晒）
 ${hubUrl}`)) toast('已複製團員入口', 'ok');
   });
-  root.querySelector('[data-act="print-hub"]')?.addEventListener('click', () => hubUrl && poster(hubUrl, '團員入口（掃一次齊晒）'));
+  root.querySelectorAll('[data-act="print-hub"], [data-act="print-poster"]').forEach(b =>
+    b.addEventListener('click', () => hubUrl && poster(hubUrl, '團員入口（掃一次齊晒）')));
   root.querySelector('[data-act="settings"]')?.addEventListener('click', () => settingsDialog());
   root.querySelector('[data-act="migrate-urls"]')?.addEventListener('click', () => {
     const n = migrateLegacyPublicUrls();
