@@ -16,7 +16,7 @@ import { toCSV, toWord, download as dlFile, stamp } from '../lib/exporter.js';
 import { go, parse, setQuery } from '../lib/router.js';
 import { can, current } from '../lib/auth.js';
 import { profile, settings } from '../lib/model.js';
-import { fmtBytes, remoteConfigured, remoteDiagnose, syncState } from '../lib/remote.js';
+import { fmtBytes, remoteConfigured, backendStatus, remoteDiagnose, syncState } from '../lib/remote.js';
 import { pageHead, tabs, stat, empty, noteBox, kv, storageBar } from './ui.js';
 
 let tab = 'design';
@@ -532,7 +532,10 @@ function syncView() {
      「睇後端有咩資料」「體積檢查」全部一齊收埋 —— 用家根本撳唔到
      文件叫佢撳嘅嗰啲掣（2026-09-19 團長回報「有嘢把解決方法封死」）。
      而家改用 remoteConfigured()（有同源代理＋旅團編號就算接得通）。 */
-  const wired = !!backend || remoteConfigured();
+  const route = backendStatus();
+  /* Vercel Registry／登入成功後嘅實際接線都係後端，唔可以因為本機冇填
+     s.url 就畫成「未設定後端」。/exec＋API Key 只係純靜態部署嘅後備。 */
+  const wired = !!backend || route.configured || route.verified;
   const log = s.log || [];
   const pending = Number(s.pending || 0);
   const lastPush = s.lastPushAt ? String(s.lastPushAt).slice(0, 19).replace('T', ' ') : '';
@@ -594,9 +597,11 @@ function syncView() {
     <div class="hint mt-8">「由後端重新載入」會<b>用後端嘅資料覆蓋呢部機</b>（換咗新手機／清咗 cache，或者想放棄未儲存嘅改動就用呢個）。</div>
   </div></div>` : `
   <div class="note-box danger mb-16">${icon('alert', 15)}<div>
-    <b>未設定後端 —— 你嘅資料而家淨係存喺呢部機嘅瀏覽器。</b>
-    清 cache、換手機、甚至瀏覽器自動清理都會令資料<b>永久消失</b>。
-    請喺下面填你旅團嘅 Apps Script <code>/exec</code> 網址。
+    <b>未有可用嘅後端接線。</b>
+    你而家嘅資料淨係存喺呢部機嘅瀏覽器；清 cache／換手機可能會冇咗。
+    如果你係正式 Vercel 部署，唔好急住填第二套設定：先撳「同步診斷」，確認選中嘅旅團已經喺 Vercel
+    登記 <code>TROOP_${esc(load().unitCode || '編號')}_BACKEND</code>／<code>_APIKEY</code>，再 Redeploy。
+    只有純靜態部署冇 <code>/api/proxy</code>，先喺下方貼 Apps Script <code>/exec</code> ＋ API Key。
   </div></div>`}
 
   ${(() => {
@@ -624,20 +629,20 @@ function syncView() {
     <div class="kv-row"><span>通告報名送出</span><code>${esc(shortUrl(load().settings?.notice?.submitUrl || '')) || '（未設定）'}</code></div>
   </div></div>` : (wired ? `<div class="card mb-16"><div class="card-head">
     <div><div class="card-title">${icon('cloud', 15)} 後端接線方式</div>
-      <div class="card-sub">呢個旅團經平台伺服器端接線（唔使喺瀏覽器打 Key）</div></div>
-    <span class="badge b-info"><span class="dot"></span>經 /api/proxy</span>
+      <div class="card-sub">呢個旅團經平台伺服器端接線（唔使喺瀏覽器打 Key）${route.verified ? ' · 登入／載入已實際核對成功' : ''}</div></div>
+    <span class="badge ${route.verified ? 'b-ok' : 'b-info'}"><span class="dot"></span>${route.verified ? '已核對 · /api/proxy' : '經 /api/proxy'}</span>
   </div>
   <div style="padding:12px 16px" class="sm muted">
     平台用 Vercel 環境變數 <code>TROOP_${esc(load().unitCode || '編號')}_BACKEND</code>／
-    <code>_APIKEY</code> 幫你接線 —— 條 Key 留喺伺服器，瀏覽器完全唔會見到，呢個係正路。<br>
-    <span class="xs">如果平台嗰邊未設定好（或者你等唔切），你可以喺下面「同步設定」
-    貼自己嘅 <code>/exec</code> ＋ API Key <b>即刻自救</b> —— 系統會自動改用你自己嗰條路。
-    邊條路行得通，撳「同步診斷」一目了然。</span>
+    <code>_APIKEY</code> 幫你接線 —— 條 Key 留喺伺服器，瀏覽器完全唔會見到，呢個係正路。
+    <b>所以你唔需要再喺「同步設定」重複填 /exec 同 API Key。</b><br>
+    <span class="xs">下面兩格只係純靜態部署（冇 <code>/api/proxy</code>）嘅後備路線；留空係正確。
+    撳「同步診斷」會分清楚「Vercel 已接線」同「後端真係未設定」，唔會再用一個籠統嘅「未有後端」混埋。</span>
   </div></div>` : '')}
 
   <div class="grid g-2-1">
-    <div class="card"><div class="card-head"><div><div class="card-title">同步設定</div>
-      <div class="card-sub">Apps Script Web App 網址（部署時設定「任何人」可存取）</div></div></div>
+    <div class="card"><div class="card-head"><div><div class="card-title">自助後備設定 <span class="badge b-info xs">Vercel 接線時不用填</span></div>
+      <div class="card-sub">只有純靜態部署冇 <code>/api/proxy</code> 時，先需要 Apps Script Web App 網址</div></div></div>
       <div style="padding:16px 18px">
         <div class="field"><label class="label">Apps Script 網址（/exec）</label>
           <input class="input" id="y-url" value="${esc(s.url || '')}" placeholder="https://script.google.com/macros/s/…/exec"></div>
