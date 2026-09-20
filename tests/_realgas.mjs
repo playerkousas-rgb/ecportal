@@ -52,7 +52,10 @@ const server = http.createServer(async (req, res) => {
       unit: String(r[0] == null ? '' : r[0]).slice(0, 24),
       seq: Number(r[1]) || 0,
       chars: String(r[2] == null ? '' : r[2]).length,
-      version: String(r[4] == null ? '' : r[4]).slice(0, 40)
+      version: String(r[4] == null ? '' : r[4]).slice(0, 40),
+      /* 頭 8 欄原樣 —— 報表分頁（團員／帳目…）冇「unit/seq」呢套欄位，
+         冇 cells 就乜都斷言唔到（第一版模擬就係咁漏咗）。 */
+      cells: r.slice(0, 8).map(c => String(c == null ? '' : c).slice(0, 40))
     }));
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify({ tab: u.searchParams.get('tab') || '資料庫', rows: brief }));

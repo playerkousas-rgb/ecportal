@@ -144,6 +144,33 @@ if (process.argv[2] === 'device') {
       note('同步紀錄（最後 3 條）', (store.tryLoad()?.sync?.log || []).slice(-3).map(l => l.msg));
     }
 
+    /* ---- 旅團編號打少咗 0（團長喺閘度打「82」）會唔會被校正 ---- */
+    if (PLAN.gateCode) {
+      const units = await import('../assets/js/lib/units.js');
+      note(`閘度打「${PLAN.gateCode}」→ 校正後嘅編號`, String(units.canonicalUnitCode(PLAN.gateCode)));
+      note(`unitEntry('${PLAN.gateCode}') 搵唔搵到旅團`, String(units.unitEntry(PLAN.gateCode)?.name || '(搵唔到)'));
+      const before = store.currentUnit();
+      store.setUnitCode(PLAN.gateCode);
+      /* currentUnit() 會優先用網址 ?u=，所以呢度直接睇 localStorage 記住咗乜 */
+      note(`setUnitCode('${PLAN.gateCode}') 之後 store 記住嘅編號`,
+        String(localStorage.getItem('venture82.currentUnit.v2') || ''));
+      store.setUnitCode(before);   // 還原，唔好影響後面嘅步驟
+    }
+
+    /* ---- 「讀取就讀取曬」：登入之後本機係咪真係有齊所有資料 ---- */
+    if (PLAN.collections) {
+      const db = store.tryLoad() || {};
+      note('登入後本機各資料筆數', JSON.stringify({
+        members: (db.members || []).length,
+        transactions: (db.transactions || []).length,
+        notices: (db.notices || []).length,
+        invItems: (db.invItems || []).length,
+        meetings: (db.meetings || []).length,
+        claims: (db.claims || []).length,
+        accounts: (db.accounts || []).length
+      }));
+    }
+
     /* ---- 另一部機視角：開返入去睇唔睇到 ---- */
     if (PLAN.checkName) {
       location.hash = '#/members';
@@ -294,26 +321,75 @@ ok('★ 報表同步之後「帳目」分頁有嘢（1 行）',
 
 /* ---------------- ④ 另一部機（無痕視窗） ---------------- */
 section('④ 另一部全新機（＝無痕視窗）開返：睇唔睇到');
-const B = await runDevice({ checkName: '陳大文', login: true });
+const B = await runDevice({ checkName: '陳大文', login: true, collections: true });
 ok('裝置 B 全程冇爆', B.ok === true, B.error || '');
 show(B);
 ok('★ 無痕視窗睇到「陳大文」', got(B, '用戶頁睇唔睇到「陳大文」') === true);
 
-/* ---------------- ⑤ 用 ?u=82（冇前導零）開 ---------------- */
-section('⑤ 如果用 ?u=82 開（旅團編號少咗個 0）會點');
-const C = await runDevice({ query: '?u=82', checkName: '陳大文', save: true, addMember: '李小明' });
+/* ---------------- ⑤ 團長打「82」（少咗兩個 0）：以前會話「無後端」 ---------------- */
+section('⑤ 用 ?u=82 開（團長打「82」）—— 以前呢度會話「未能連接旅團後端」＝「無後端」');
+const C = await runDevice({ query: '?u=82', checkName: '陳大文', save: true, addMember: '李小明', gateCode: '82', collections: true });
 ok('裝置 C 全程冇爆', C.ok === true, C.error || '');
 show(C);
+ok('★ 用「82」開都入到登入頁（唔會再話「未能連接旅團後端」）',
+  got(C, '開機後係咪停喺連線閘（連唔到後端）') === false, String(got(C, '開機後畫面')).slice(0, 120));
+ok('★ 用「82」開都登入到主控頁', got(C, '登入有冇入到主控頁（見到頂部狀態 chip）') === true,
+  String(got(C, '登入頁留低嘅錯誤字')));
+ok('★ 用「82」開都讀到「陳大文」（讀寫兩邊都通）', got(C, '用戶頁睇唔睇到「陳大文」') === true);
+ok('★ 用「82」開，存完之後後端仍然只有一套資料庫（旅團欄＝0082）',
+  got(C, '撳完之後本機 pending') === 0);
 const rows2 = await dbRows();
-say(`而家「資料庫」分頁嘅旅團欄值＝${JSON.stringify([...new Set(rows2.slice(1).map(r => r.unit))])}`);
-const info0082 = await ask({ action: 'dbInfo', unit: '0082' });
-const info82 = await ask({ action: 'dbInfo', unit: '82' });
-say(`dbInfo(0082) 團員＝${info0082.counts?.members ?? '-'}　dbInfo(82) 團員＝${info82.counts?.members ?? '-'}（同一個後端，問法差一個 0）`);
+const unitsSeen = [...new Set(rows2.slice(1).map(r => r.unit))];
+say(`而家「資料庫」分頁嘅旅團欄值＝${JSON.stringify(unitsSeen)}`);
+/* app 行嘅係同源代理 —— 用代理問先至係真實路徑（直連 /exec 唔經 Registry，
+   所以唔會校正編號；前端嗰邊由 gotoUnit／setUnitCode 校正）。 */
+const askProxy = async (payload) => {
+  const r = await fetch(`${BASE}/api/proxy`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  return { http: r.status, ...(await r.json().catch(() => ({}))) };
+};
+const info0082 = await askProxy({ action: 'dbInfo', unit: '0082' });
+const info82 = await askProxy({ action: 'dbInfo', unit: '82' });
+say(`經代理 dbInfo(0082) 團員＝${info0082.counts?.members ?? '-'}　dbInfo(82) 團員＝${info82.counts?.members ?? '-'}（同一個後端，問法差兩個 0）`);
+ok('★ 經代理用「82」同「0082」問到同一套資料（唔會分裂成兩套）',
+  Number(info0082.counts?.members) > 0 && Number(info0082.counts?.members) === Number(info82.counts?.members) && !unitsSeen.includes('82'),
+  `${JSON.stringify(unitsSeen)}｜0082=${info0082.counts?.members} 82=${info82.counts?.members}`);
 const st = await ask({ action: 'status', unit: '0082' });
 say(`後端自報 Spreadsheet 名＝「${st.spreadsheet}」　版本＝${st.backendVersion}（呢個名先至答到「寫咗去邊張表」）`);
-ok('★ 用 82 開唔會靜靜地寫去另一個「旅團」（否則兩邊永遠對唔到料）',
-  !rows2.slice(1).some(r => r.unit === '82'),
-  JSON.stringify([...new Set(rows2.slice(1).map(r => r.unit))]));
+
+/* ---------------- ⑤b 前端校正 ---------------- */
+section('⑤b 前端把「82」校正做「0082」（閘度打字／store 都一樣）');
+ok('★ canonicalUnitCode("82") → "0082"', got(C, '閘度打「82」→ 校正後嘅編號') === '0082', String(got(C, '閘度打「82」→ 校正後嘅編號')));
+ok('★ unitEntry("82") 搵到旅團', /第八十二旅/.test(String(got(C, "unitEntry('82') 搵唔搵到旅團"))), String(got(C, "unitEntry('82') 搵唔搵到旅團")));
+ok('★ setUnitCode("82") 之後 store 記住嘅係 0082（本機資料庫唔會開多一套）',
+  got(C, "setUnitCode('82') 之後 store 記住嘅編號") === '0082',
+  String(got(C, "setUnitCode('82') 之後 store 記住嘅編號")));
+
+/* ---------------- ⑥ 讀取就讀取曬 ---------------- */
+section('⑥ 讀取就讀取曬：登入一次，所有資料一次過讀返');
+const collB = String(got(B, '登入後本機各資料筆數') || '');
+say(`裝置 B 登入後本機：${collB}`);
+const collC = String(got(C, '登入後本機各資料筆數') || '');
+say(`裝置 C（用 82 開）登入後本機：${collC}`);
+ok('★ 全新機登入之後，團員＋帳目一次過讀齊（唔使逐個分頁撳）',
+  /"members":[1-9]/.test(collB) && /"transactions":[1-9]/.test(collB), collB);
+
+/* ---------------- ⑦ 一次儲存＝兩處都寫（後端自己做，唔靠前端） ---------------- */
+section('⑦ 後端自己一次過寫齊「資料庫」＋報表分頁（舊前端／舊 cache 都一樣有效）');
+const cur = await ask({ action: 'loadDb', unit: '0082' });
+const db7 = cur.db || {};
+db7.members = (db7.members || []).concat([{ id: 'me_backend_test', name: '後端測試員', ymis: '2026000777', identity: 'member' }]);
+const sv = await ask({ action: 'saveDb', unit: '0082', db: db7, baseVersion: String(cur.version || '') });
+say(`直接 saveDb（完全冇經前端）：success=${sv.success} bytes=${sv.bytes} reports=${JSON.stringify(sv.reports || null)}`);
+ok('★ saveDb 回應話報表分頁都刷新咗', sv.reports?.ok === true, JSON.stringify(sv.reports || null));
+const memRows = (await (await fetch(`http://127.0.0.1:${GAS_PORT}/_rows?tab=${encodeURIComponent('團員')}`)).json()).rows || [];
+const memNames = memRows.slice(1).map(r => (r.cells || []).join('|'));
+say(`「團員」分頁而家嘅名＝${JSON.stringify(memNames.slice(0, 6))}`);
+ok('★ 淨係撳一次儲存（冇撳「更新報表分頁」），團長開 Sheet 即刻見到新團員',
+  memNames.some(n => String(n).includes('後端測試員')), JSON.stringify(memNames.slice(0, 6)));
+/* opt-out 仍然要 work（例如自動化測試唔想每次重寫報表） */
+const sv2 = await ask({ action: 'saveDb', unit: '0082', db: db7, baseVersion: String(sv.version || ''), refreshReports: false });
+ok('★ refreshReports:false 可以略過報表刷新（唔會被強迫做兩倍工作）',
+  sv2.success === true && !sv2.reports, JSON.stringify(sv2.reports ?? null));
 
 console.log(`\n${fail ? '❌' : '✅'} 用戶角度完整模擬：${pass} 過 / ${fail} 唔過（${Date.now() - START}ms）`);
 process.exit(fail ? 1 : 0);

@@ -967,7 +967,11 @@ export async function saveToBackend({ policy = 'ask', resolver = null, silent = 
     const out = {
       ok: true, pushed: true, version: String(r.version || ''), bytes: r.bytes || 0, parts: r.parts || 0,
       remoteChanged, remoteAt, mine: mineN, theirs: theirsN, same: sameN, applied: appliedN,
-      conflicts, ctx, resolved: 0, kept: conflicts.length
+      conflicts, ctx, resolved: 0, kept: conflicts.length,
+      /* ★ v2.6.3 Code.gs 會喺寫完「資料庫」分頁之後**顺手刷新晒報表分頁**，
+         並把結果放喺 reports。有呢個就不用再發第二個請求（慳一半 GAS 配額）；
+         舊版 Code.gs 冇呢個欄位 → 前端會自己補撳「更新報表分頁」。 */
+      reports: (r.reports && typeof r.reports === 'object') ? r.reports : null
     };
     inFlight = false;
 

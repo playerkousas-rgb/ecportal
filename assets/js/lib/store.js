@@ -13,6 +13,7 @@
    ============================================================ */
 
 import { todayISO, nowStamp } from './dates.js';
+import { canonicalUnitCode } from './units.js';
 import {
   registry, unitEntry, backendOf, dataPathOf, fetchUnitData, fetchMockData, defaultUnitCode, localUnits
 } from './units.js';
@@ -371,12 +372,16 @@ export function unitProfile() { return load().profile || load().unit; }
 export function seedInfo() { return { source: state.seedSource || load()?.meta?.seedSource || '', failed: state.seedFailed, real: !isMock() }; }
 
 export function setMode(mode) { lsSet(K.mode, mode); }
-export function setUnitCode(code) { lsSet(K.unit, code); }
+/* ★ 旅團編號一律用 Registry 登記咗嗰個（82 → 0082）。
+   團長喺閘度打「82」係最自然嘅做法，但 db.unitCode 一旦係「82」，
+   寫落 Google Sheet 嘅旅團欄、讀返嘅 filter、報表分頁就會同「0082」對唔上
+   —— 同一張表出現兩套資料庫，症狀就係「寫咗但讀唔到」。 */
+export function setUnitCode(code) { lsSet(K.unit, canonicalUnitCode(code) || code); }
 
 /** 切換旅團（重載頁面，確保所有模組用新資料） */
 export function switchUnit(code) {
   const isMockCode = String(code || '').toUpperCase() === 'MOCK';
-  lsSet(K.unit, code);
+  lsSet(K.unit, isMockCode ? code : (canonicalUnitCode(code) || code));
   lsSet(K.mode, isMockCode ? 'mock' : 'real');       // 由示範切去真旅團 = 一定要離開示範
   const u = new URL(location.href);
   u.searchParams.set('u', code);

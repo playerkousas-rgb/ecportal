@@ -85,9 +85,44 @@ const TROOP_KEY_RE = new RegExp(
   '^TROOP_([0-9A-Za-z]+)_(' + [...KNOWN_FIELDS].join('|') + ')(_[0-9]+)?$', 'i'
 );
 
+/* ============================================================
+   旅團編號寫法統一（2026-09-21，團長回報「佢話佢無後端，但無後端係完全唔合理」）
+   ------------------------------------------------------------
+   團長喺旅團選擇閘打「82」係最自然嘅做法（第八十二旅，個 logo 都顯示 82），
+   但 Registry 嘅 key 係「0082」（環境變數 TROOP_0082_BACKEND）。
+   以前 getTrustedUnit('82') 淨係試『原樣』同『搣走前導零』兩種寫法 ——
+   永遠砌唔出「0082」，於是 /api/proxy 回 404「找不到此旅團或後端網址未設定」，
+   前端就對用家講「未能連接旅團後端」＝「無後端」。明明後端登記得好哋：
+   讀同寫兩邊一齊死，而用家完全估唔到係少咗兩個 0。
+   而家 82／082／0082／00082 一律當同一個旅團。
+   ============================================================ */
+export function unitIdVariants(id) {
+  const s = String(id == null ? '' : id).trim();
+  if (!s) return [];
+  const out = [s, s.toUpperCase(), s.toLowerCase()];
+  const bare = s.replace(/^0+/, '');
+  if (bare) {
+    out.push(bare, bare.toUpperCase());
+    for (let n = bare.length + 1; n <= 6; n++) out.push(bare.padStart(n, '0'));
+  }
+  return [...new Set(out)];
+}
+
+/** 由任意寫法（82／082／0082）搵返 Registry 真正登記咗嗰個 key；搵唔到回 '' */
+export function resolveUnitKey(id, reg = getRegistry()) {
+  for (const v of unitIdVariants(id)) { if (reg[v]) return v; }
+  /* 最後一著：數字編號逐個 key 比對（例如 Registry key 係 '00082' 而家問 '82'） */
+  const bare = String(id == null ? '' : id).trim().replace(/^0+/, '');
+  if (bare && /^\d+$/.test(bare)) {
+    const hit = Object.keys(reg).find(k => /^\d+$/.test(k) && k.replace(/^0+/, '') === bare);
+    if (hit) return hit;
+  }
+  return '';
+}
+
 /** 簡寫：TROOP_0082 = https://…/exec（有人會咁寫；值一定要係合法 /exec 才當後端） */
 function troopShorthand(id) {
-  const ids = [...new Set([id, String(id).toUpperCase(), String(id).replace(/^0+/, '') || String(id), '0' + String(id)])];
+  const ids = unitIdVariants(id);
   for (const i of ids) {
     const v = envVar(`TROOP_${i}`);
     if (v && isTrustedExecUrl(v)) return v.trim();
@@ -97,8 +132,8 @@ function troopShorthand(id) {
 
 /** 讀一個旅團嘅某個欄位（同時試 有／冇前導零、大寫、package 名等寫法） */
 function troopEnv(id, field) {
-  const ids = [...new Set([id, String(id).toUpperCase(), String(id).toLowerCase(),
-    String(id).replace(/^0+/, '') || String(id), '0' + String(id)])];
+  /* 打「82」都要讀到 TROOP_0082_* —— 用晒所有前導零寫法 */
+  const ids = unitIdVariants(id);
   const names = FIELD_ALIASES[field] || [field];
   for (const i of ids) {
     for (const n of names) {
@@ -247,7 +282,9 @@ export function registryDiagnostics() {
 export function getTrustedUnit(id) {
   if (typeof id !== 'string' || !/^[0-9A-Za-z_-]{1,32}$/.test(id)) return null;
   const reg = getRegistry();
-  const u = reg[id] || reg[String(id).replace(/^0+/, '')];
+  /* ★ 跨前導零解析：82／082／0082 一律搵到同一個旅團（見上面 unitIdVariants 註解） */
+  const key = resolveUnitKey(id, reg);
+  const u = key ? reg[key] : null;
   if (!u || !u.backend?.gasUrl || !u.backendTrusted) return null;
   return {
     code: u.code,

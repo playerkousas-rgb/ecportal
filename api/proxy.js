@@ -163,6 +163,19 @@ export default async function handler(req, res) {
   }
 
   const payload = { ...body, action };
+  /* ★ 旅團編號一律校正做 Registry 登記咗嗰個（例如「82」→「0082」）。
+     唔校正嘅話，團長喺閘度打「82」入到去，寫落 Google Sheet 嘅旅團欄就會係「82」，
+     讀嘅時候用「0082」又搵唔到 —— 同一張表入面出現兩套資料庫，兩邊永遠對唔到料，
+     對用家睇就係「寫咗但讀唔到」。 */
+  const canonUnit = unit.code && unit.code !== unitCode ? unit.code : '';
+  if (canonUnit) {
+    payload.unit = unit.code;
+    if (payload.troopId !== undefined) payload.troopId = unit.code;
+    /* 成份資料庫入面都記咗自己嘅編號（db.unitCode）—— 一齊校正，
+       否則存落後端嘅 JSON 會繼續話自己係「82」，下次讀返又再分裂一次。 */
+    if (payload.db && typeof payload.db === 'object' && payload.db.unitCode) payload.db.unitCode = unit.code;
+    if (typeof payload.baseUnitCode === 'string' && payload.baseUnitCode) payload.baseUnitCode = unit.code;
+  }
   if (unit.apiKey && !payload.apiKey) payload.apiKey = unit.apiKey;
 
   try {
@@ -175,7 +188,7 @@ export default async function handler(req, res) {
       return sendJson(res, 502, { success: false, error: msg });
     }
 
-    safeLog({ result: 'ok', unitCode, action, status: up.status, ms: Date.now() - t0 });
+    safeLog({ result: 'ok', unitCode, canonUnit: canonUnit || undefined, action, status: up.status, ms: Date.now() - t0 });
     return sendJson(res, 200, up.json);
   } catch (e) {
     const timeout = e && (e.name === 'TimeoutError' || e.name === 'AbortError');

@@ -133,15 +133,28 @@ export async function saveWithDialog({ silent = false, toastOk = true } = {}) {
        而團員／帳目／物資…嗰啲攤平分頁要另外撳「更新報表分頁」先會填 ——
        所以撳完「儲存到後端」再開張 Google Sheet，睇到嘅係一片空白。
        而家一粒掣做齊兩處（仍然只有一條 db 寫入路：pushToMaster 帶 skipDb，唔會碰 db）。 */
-    try {
-      const { pushToMaster } = await import('./tables.js');
-      const rep = await pushToMaster({ silent: true });
-      r.reportOk = !!rep?.ok;
-      r.reportMsg = rep?.ok ? '' : String(rep?.msg || rep?.error || '未知');
-      r.reportCount = Number(rep?.total || 0);
-    } catch (e) {
-      r.reportOk = false;
-      r.reportMsg = String(e?.message || e).slice(0, 120);
+    const backendReports = (r.reports && typeof r.reports === 'object') ? r.reports : null;
+    if (backendReports && backendReports.ok === true) {
+      /* v2.6.3 之後嘅 Code.gs 喺同一次請求入面已經刷新晒報表分頁 ——
+         唔使再發第二次（慳一半 GAS 配額，亦都唔會出現「兩邊寫法唔同」）。 */
+      const counts = backendReports.counts || {};
+      r.reportOk = true;
+      r.reportBy = 'backend';
+      r.reportCount = Object.values(counts).reduce((a, b) => a + (Number(b) || 0), 0);
+      r.reportMsg = '';
+    } else {
+      /* 舊版 Code.gs（冇 reports）或者後端刷新失敗 → 前端自己補做一次 */
+      try {
+        const { pushToMaster } = await import('./tables.js');
+        const rep = await pushToMaster({ silent: true });
+        r.reportOk = !!rep?.ok;
+        r.reportBy = 'frontend';
+        r.reportMsg = rep?.ok ? '' : String(rep?.msg || rep?.error || (backendReports?.error || '未知'));
+        r.reportCount = Number(rep?.total || 0);
+      } catch (e) {
+        r.reportOk = false;
+        r.reportMsg = String(e?.message || e).slice(0, 120);
+      }
     }
     if (toastOk || r.remoteChanged || r.conflicts?.length) toast(saveResultText(r), 'ok');
     /* 後端有對方改動 → 本機已經併入 → 畫面要重畫 */

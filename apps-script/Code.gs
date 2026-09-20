@@ -1,7 +1,17 @@
 /**
  * ============================================================
  *  82venture · 總表同步與多旅團後端 Apps Script（Code.gs）
- *  版本：v2.6.2
+ *  版本：v2.6.3
+ *
+ *  ★ v2.6.3 修正（2026-09-21，團長回報「佢話已寫入但張 Sheet 完全冇嘢；
+ *    唔好搞咁多掣要人按，存入後端就資料庫同分頁都 SAVE 曬」）：
+ *    一次儲存＝兩處都寫。以前「儲存到後端」（saveDb）淨係寫「資料庫」分頁
+ *    （分段 JSON，人喺 Sheet 度睇唔明），團員／帳目／物資…嗰啲**睇得明嘅報表分頁**
+ *    要另外撳「更新報表分頁」（action:sync）先會填 —— 團長撳完儲存再開 Google Sheet，
+ *    見到 16 張分頁全空，自然以為「佢呃我，根本冇寫入」。
+ *    而家 saveDb／saveDbCommit 寫完「資料庫」之後，會即用同一份資料刷新晒報表分頁
+ *    （重用 syncAll／writeTab，冇第二套攤平邏輯）；body.refreshReports === false 先至略過。
+ *    ⚠ 呢個係**後端**行為：貼咗新版 Code.gs，就算前端係舊 cache 都一樣一粒掣搞掂。
  *
  *  ★ v2.6.2 修正（2026-09-20，團長回報「儲存唔到去後端／後端讀取唔到，
  *    只能用 JSON 備份」）：分件儲存嘅暫存行**清唔乾淨** —— 舊 cleanStaging
@@ -116,7 +126,7 @@ var MODE = 'per-unit-sheet';   // 'per-unit-sheet' = 每個旅團獨立工作表
 var DRIVE_FOLDER_ID = '';
 
 /** 後端版本（status 會回報；APP 用嚟檢查「你張 Sheet 係咪仲行舊 code」） */
-var BACKEND_VERSION = 'v2.6.2';
+var BACKEND_VERSION = 'v2.6.3';
 
 /* ============================================================
    初始化與 API KEY 管理
@@ -285,7 +295,10 @@ function doPost(e) {
       if (body.action === 'saveDb') {
         var sv = withLock(function () { return saveDb(body); });
         return json({ ok: sv.success === true, success: sv.success === true, conflict: sv.conflict === true,
-          chunks: sv.chunks || 0, bytes: sv.bytes || 0, at: sv.at || '', version: sv.version || '', error: sv.error || '' });
+          chunks: sv.chunks || 0, bytes: sv.bytes || 0, at: sv.at || '', version: sv.version || '', error: sv.error || '',
+          /* v2.6.3：報表分頁係咪喺同一次請求入面一齊刷新咗（前端就唔使再發第二次）。
+             呢個欄位一定要**明確列出**—— 呢度係逐個欄位砌回應，漏咗就會靜靜地冇咗。 */
+          reports: sv.reports || null });
       }
       if (body.action === 'saveDbPart') {
         var sp = withLock(function () { return saveDbPart(body); });
@@ -295,7 +308,8 @@ function doPost(e) {
       if (body.action === 'saveDbCommit') {
         var sc = withLock(function () { return saveDbCommit(body); });
         return json({ ok: sc.success === true, success: sc.success === true, conflict: sc.conflict === true,
-          chunks: sc.chunks || 0, bytes: sc.bytes || 0, at: sc.at || '', version: sc.version || '', error: sc.error || '' });
+          chunks: sc.chunks || 0, bytes: sc.bytes || 0, at: sc.at || '', version: sc.version || '', error: sc.error || '',
+          reports: sc.reports || null });
       }
       if (body.action === 'dbInfo') {
         var nfo = dbInfo(textOf(body.unit));
@@ -555,7 +569,11 @@ function saveDb(body) {
   var out = chunks.map(function (c, idx) { return [unit, idx + 1, c, now, version]; });
   sh.getRange(sh.getLastRow() + 1, 1, out.length, 5).setValues(out);
 
-  return { success: true, chunks: chunks.length, bytes: text.length, at: now, version: version };
+  /* ★ v2.6.3：一次儲存，兩處都寫 —— 順手刷新晒報表分頁（團員／帳目／物資…），
+     團長開 Google Sheet 即刻睇到嘢，唔使再撳第二粒掣。 */
+  var reports = body.refreshReports === false ? null : refreshReportsFromDb(db, unit);
+
+  return { success: true, chunks: chunks.length, bytes: text.length, at: now, version: version, reports: reports };
 }
 
 /** 由「資料庫」分頁把某旅團嘅所有段讀出嚟、拼返成份 JSON 純文字。
@@ -773,7 +791,10 @@ function saveDbCommit(body) {
   for (var c3 = 0; c3 < chunks.length; c3++) out2.push([unit, c3 + 1, chunks[c3], now, version]);
   sh.getRange(sh.getLastRow() + 1, 1, out2.length, 5).setValues(out2);
 
-  return { success: true, chunks: chunks.length, bytes: text.length, at: now, version: version, parts: parts };
+  /* ★ v2.6.3：分件儲存都要一次過做齊兩處（呢度先至有成份拼合好嘅資料庫） */
+  var reports2 = body.refreshReports === false ? null : refreshReportsFromDb(merged, unit);
+
+  return { success: true, chunks: chunks.length, bytes: text.length, at: now, version: version, parts: parts, reports: reports2 };
 }
 
 /* v2.6.2：把一批行號計成一梳一梳、由最底嗰梳刪起（全後端唯一嘅刪行方法）。
@@ -873,6 +894,48 @@ function dbInfo(unit) {
    主同步核心
    ============================================================ */
 
+/** ★ v2.6.3：由成份資料庫攤平出報表分頁要嘅 tables（同前端 buildPayload 同一個意思）。
+ *  注意：通告要保留 signups 原裝 —— writeSignups／writeNoticesFull 要用；
+ *  相片／附件就只記數量（dataURL 唔應該寫落報表分頁）。 */
+function tablesFromDb(db) {
+  db = db || {};
+  function rows(list) {
+    return (list || []).map(function (r) {
+      var o = {};
+      for (var k in r) { if (r.hasOwnProperty(k)) o[k] = r[k]; }
+      if (Object.prototype.toString.call(o.photos) === '[object Array]') o.photos = o.photos.length;
+      if (Object.prototype.toString.call(o.attachments) === '[object Array]') o.attachments = o.attachments.length;
+      return o;
+    });
+  }
+  return {
+    members: rows(db.members),
+    transactions: rows(db.transactions),
+    claims: rows(db.claims),
+    invItems: rows(db.invItems),
+    invLoans: rows(db.invLoans),
+    meetings: rows(db.meetings),
+    notices: db.notices || []
+  };
+}
+
+/** ★ v2.6.3：一次儲存＝兩處都寫 —— 「資料庫」分頁（app 正本）＋報表分頁（人睇嗰啲）。
+ *  報表刷新失敗唔應該令成次儲存變失敗（資料已經安全寫入「資料庫」分頁），
+ *  所以呢度一律 try/catch，把結果如實報返上去。 */
+function refreshReportsFromDb(db, unit) {
+  if (!unit || unit === 'UNKNOWN') return null;
+  try {
+    var counts = syncAll({
+      unit: unit,
+      unitName: textOf(db && db.profile && db.profile.name) || textOf(db && db.unit && db.unit.name),
+      tables: tablesFromDb(db)
+    });
+    return { ok: true, counts: counts };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e).slice(0, 200) };
+  }
+}
+
 function syncAll(body) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var unit = body.unit || 'UNKNOWN';
@@ -927,7 +990,15 @@ function removeSuffixedTabs(ss, unit) {
     if (!unit || suffix === '·') return;
     ss.getSheets().forEach(function (sh) {
       var nm = sh.getName();
-      if (nm.indexOf(suffix) === nm.length - suffix.length) {
+      /* ★ v2.6.3 修正一個潛伏咗兩版嘅炸彈：
+         舊寫法 nm.indexOf(suffix) === nm.length - suffix.length，
+         喺「個名根本冇嗰個後綴」嗰陣 indexOf 回 -1，
+         於是條件變成 nm.length === suffix.length - 1 ——
+         即係**任何名字長度啱撞正 4 個字**嘅分頁都會被刪！
+         「進度追蹤」「待批完成」「活動履歷」「待批履歷」「成員名單」「同步紀錄」「通告全文」
+         全部係 4 個字 —— 一撳報表同步就成批分頁連資料一齊冇咗
+         （團員進度、批核紀錄）。而家嚴格比對結尾，而且要長過個後綴先算。 */
+      if (nm.length > suffix.length && nm.slice(nm.length - suffix.length) === suffix) {
         try { ss.deleteSheet(sh); } catch (e) { /* 刪唔到就留低，唔好成全個同步失敗 */ }
       }
     });

@@ -151,6 +151,42 @@ section('v2.6.1 團長回報：同步生分身分頁＋成員進度重複');
   const names2 = ss.getSheets().map(s => s.getName());
   ok('② 舊版留低嘅後綴分身會被清走', !names2.some(n => /·0082$/.test(n)), names2.join(', '));
 
+  /* ★ v2.6.3 迴歸測試：removeSuffixedTabs 舊寫法
+       nm.indexOf(suffix) === nm.length - suffix.length
+     喺「個名根本冇嗰個後綴」嗰陣 indexOf 回 -1，條件變成
+       nm.length === suffix.length - 1
+     —— 即係**名啱好 4 個字**嘅分頁一律被刪。「進度追蹤」「待批完成」
+     「成員名單」「同步紀錄」「活動履歷」「待批履歷」「通告全文」全部都係 4 個字。
+     以前淨係撳「報表同步」先會中招；v2.6.3 起 saveDb 都會刷新報表分頁，
+     即係**每次儲存**都會刪走團員進度同批核紀錄 —— 呢度釘死佢。 */
+  const FOUR = ['進度追蹤', '待批完成', '成員名單', '同步紀錄', '活動履歷', '待批履歷', '通告全文'];
+  const missing = () => FOUR.filter(n => !ss.getSheetByName(n));
+  ok('② 清後綴分身唔會誤刪「名啱好 4 個字」嘅分頁（進度追蹤／待批完成…）',
+    missing().length === 0, missing().join(', ') || '全部仲在');
+
+  /* v2.6.3：saveDb 一次過寫齊兩處（資料庫＋報表分頁），一樣唔可以誤刪。
+     用**另一個 sandbox** —— 呢度寫入嘅團員會入「團員」分頁，
+     留喺同一個 sandbox 會污染後面「成員無重複（2 人）」嗰個斷言。 */
+  {
+    const g2 = makeGas();
+    g2.sandbox.initializeSheets();
+    const ss2 = g2.sandbox.SpreadsheetApp.getActiveSpreadsheet();
+    const miss2 = () => ['進度追蹤', '待批完成', '成員名單', '同步紀錄', '活動履歷', '待批履歷', '通告全文']
+      .filter(n => !ss2.getSheetByName(n));
+    const KEY61 = g2.props.get('API_KEY') || 'K1';
+    const sv61 = g2.post({ action: 'saveDb', unit: '0082', apiKey: KEY61,
+      db: { members: [{ id: 'm9', name: '王五', ymis: '8202009', identity: 'member' }], transactions: [] } });
+    ok('② saveDb 而家會回報「報表分頁已一齊刷新」', sv61.reports?.ok === true, JSON.stringify(sv61.reports || null).slice(0, 120));
+    ok('② saveDb 一次過寫齊兩處：「團員」分頁即刻有嘢（唔使再撳報表同步）',
+      (ss2.getSheetByName('團員')?.getLastRow() || 0) >= 2, String(ss2.getSheetByName('團員')?.getLastRow()));
+    ok('② saveDb 之後，4 個字嘅分頁一個都冇少（進度／批核資料唔會被儲存刪走）',
+      miss2().length === 0, miss2().join(', ') || '全部仲在');
+    const sv62 = g2.post({ action: 'saveDb', unit: '0082', apiKey: KEY61, refreshReports: false,
+      baseVersion: String(sv61.version || ''), db: { members: [], transactions: [] } });
+    ok('② refreshReports:false 會略過報表刷新（舊行為仍然得）', sv62.ok === true && !sv62.reports,
+      JSON.stringify(sv62.reports ?? null));
+  }
+
   /* ① 進度讀取：以「團員」＋「成員名單」合一，唔可以讀錯欄搞到重複 */
   const load = g.get({ action: 'load', unit: '0082' });
   const mem = load.members || [];
