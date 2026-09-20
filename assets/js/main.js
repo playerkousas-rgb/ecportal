@@ -187,16 +187,31 @@ function loginSyncBanner() {
   if (!remoteApi.remoteConfigured()) return '';
   if (bootSyncWarn) {
     return `<div class="note-box danger mb-12" id="loginSyncWarn">${icon('alert', 15)}<div>
-      <b>連唔到旅團後端</b> —— ${esc(bootSyncWarn.error || '未知原因')}${bootSyncWarn.hint ? `<div class="xs mt-4">${esc(bootSyncWarn.hint)}</div>` : ''}
-      <div class="xs mt-4">而家見到嘅係呢部機上次留低嘅資料；登入後改嘅嘢會留喺本機，等連返後端先可以儲存。</div>
+      <b>登入已封鎖 —— 連唔到旅團後端</b><div class="xs mt-4">${esc(bootSyncWarn.error || '未知原因')}</div>
+      ${bootSyncWarn.hint ? `<div class="xs mt-4">${esc(bootSyncWarn.hint)}</div>` : ''}
+      <div class="xs mt-8">帳戶一定要同後端核對過先至入到主控頁 —— 後端答唔到，
+      所以<b>而家登唔到</b>（唔係密碼錯）。呢部機上次留低嘅資料仲喺度，冇蝕。</div>
       <button class="btn btn-xs mt-8" type="button" id="btnRetrySync">${icon('refresh', 13)} 重試連線</button>
     </div></div>`;
   }
+  /* 帳戶來源 —— 直接答團長嗰句「咁啱先係登入咗乜？」。
+     以前呢個資訊只喺 localStorage 入面，用家根本無從知道
+     自己比對緊嘅係後端嘅帳戶，定係一份隨 JS 公開咗嘅種子帳戶。 */
+  const accs = (load()?.accounts || []).filter(a => a?.active !== false);
+  const fromBackend = !accs.some(a => a?.seeded);
+  const src = accs.length === 0
+    ? '（一個帳戶都冇）'
+    : fromBackend
+      ? `後端（${accs.length} 個帳戶）`
+      : `⚠ 本機初始帳戶（${accs.filter(a => a.seeded).length} 個種子）—— 後端仲未有帳戶名單`;
+  const prov = `<div class="xs faint mt-8">${icon('shield', 12)} 帳戶來源：${esc(src)}`
+    + `　·　密碼核對：喺後端讀返嚟嘅名單上進行</div>`;
+
   const s = remoteApi.syncState();
   if (s.state === 'pending' && remoteApi.hasPending()) {
-    return `<div class="note-box warn mb-12">${icon('clock', 15)}<div>呢部機有改動仲未儲存到後端 —— 登入後撳右上角「儲存到後端」。</div></div>`;
+    return `<div class="note-box warn mb-12">${icon('clock', 15)}<div>呢部機有改動仲未儲存到後端 —— 登入後撳右上角「儲存到後端」。</div>${prov}</div>`;
   }
-  return '';
+  return `<div class="mb-12">${prov}</div>`;
 }
 
 /** 頂部「儲存狀態」提示 ＋ 唯一嘅行動掣：
@@ -1014,7 +1029,13 @@ function renderLogin() {
     const { saveHubAuth } = await import('./lib/hub-session.js');
     const { saveMe } = await import('./lib/member-me.js');
     const { identityOf } = await import('./lib/model.js');
-    await freshenBeforeLogin();
+    /* ★ 同一條硬閘：團員／領袖經名冊電郵登入都一定要後端核對過先入 */
+    const gate = await gateLoginOnBackend();
+    if (!gate.ok) {
+      if (btn) btn.disabled = false;
+      if (box) { box.textContent = gateMessage(gate); box.style.display = 'block'; }
+      return;
+    }
     const res = await loginMember(app.querySelector('#liYmis')?.value, app.querySelector('#liMemPass')?.value);
     if (btn) btn.disabled = false;
     if (!res.ok) {
@@ -1064,7 +1085,8 @@ function renderLogin() {
     e.preventDefault();
     const box = app.querySelector('#liKeyErr');
     if (box) { box.textContent = ''; box.style.display = 'none'; }
-    await freshenBeforeLogin();
+    /* 呢度唔使行硬閘：`loginSetupKey()` 本身就係打後端（action: verifySetupKey），
+       佢自己就係「同後端核對」—— 核對唔到佢會回失敗。 */
     const res = await loginSetupKey(app.querySelector('#liSetupKey')?.value);
     if (!res.ok) {
       if (box) { box.textContent = res.msg; box.style.display = 'block'; }
@@ -1084,8 +1106,18 @@ function renderLogin() {
     err.style.display = 'none';
     const btn = app.querySelector('#loginForm button[type=submit]');
     btn.disabled = true;
-    /* 登入嗰一刻要係後端嗰一刻：登入頁擺咗耐先撳 → 先攞多次（帳戶名單都會係最新） */
-    await freshenBeforeLogin();
+    /* ★ 硬閘：登入嗰一刻一定要同後端核對過。核對唔到 → 唔入。
+       （以前呢度係「攞多次，攞唔到都照登」，正正係團長質疑嘅嘢。） */
+    const gate = await gateLoginOnBackend();
+    if (!gate.ok) {
+      btn.disabled = false;
+      passInput.value = '';
+      /* renderLogin() 會重畫成頁 —— 封鎖原因由 loginSyncBanner() 出（佢讀 bootSyncWarn），
+         所以唔使再寫入呢個即將被棄掉嘅 err 節點。 */
+      renderLogin();
+      toast(gateMessage(gate), 'err');
+      return;
+    }
     const res = await login('staff', userInput.value, passInput.value);
     btn.disabled = false;
     if (!res.ok) {
@@ -1104,14 +1136,34 @@ function renderLogin() {
   });
 }
 
-/** 登入前：上次由後端載入超過 60 秒 → 再攞一次（有未存改動就唔郁；連唔到就照登入，橫額會話你知） */
-async function freshenBeforeLogin() {
-  if (isMock() || !remoteApi?.remoteConfigured?.()) return;
+/** ★ 登入硬閘（2026-09-20 團長定案）：後端答唔到 → 一律唔准入主控頁。
+ *  以前呢度係 `freshenBeforeLogin()`：「連唔到就照登入，橫額會話你知」——
+ *  於係出現咗團長講嗰句：「既然都同後端對咗帳戶密碼，點可能入去之後話冇連上後端？」
+ *  答案係：根本冇對過。`login()` 係純本機比對，後端由頭到尾冇被問過。
+ *  而家：核對唔到就喺登入頁擋住，講清楚原因。 */
+async function gateLoginOnBackend() {
+  if (isMock()) return { ok: true, mock: true };
+  if (!remoteApi) {
+    bootSyncWarn = { ok: false, error: '同步模組載入失敗 —— 請重新整理頁面再試' };
+    return bootSyncWarn;
+  }
   try {
-    const r = await remoteApi.ensureFresh({ maxAgeMs: 60000 });
-    if (r?.ok) bootSyncWarn = null;
-    else if (r && r.reason !== 'not_configured') bootSyncWarn = r;
-  } catch (e) { console.warn('[sync] 登入前重新載入失敗', e); }
+    const g = await remoteApi.requireBackendForLogin();
+    bootSyncWarn = g.ok ? null : g;
+    paintSyncChip();
+    return g;
+  } catch (e) {
+    console.warn('[sync] 登入前核對後端失敗', e);
+    bootSyncWarn = { ok: false, error: e?.message || String(e) };
+    paintSyncChip();
+    return bootSyncWarn;
+  }
+}
+
+/** 登入閘失敗嗰陣嘅人話（登入頁同錯誤位共用） */
+function gateMessage(g) {
+  const why = g?.error || '連唔到旅團後端';
+  return `登入已封鎖 —— ${why}`;
 }
 
 /** 登出確認：有未儲存改動一定要講明（改動會留喺呢部機，下次登入再三方比對） */

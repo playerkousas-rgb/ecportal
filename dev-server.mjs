@@ -51,19 +51,40 @@ const MIME = {
   '.doc': 'application/msword'
 };
 
+/** Vercel 代理單一回應硬上限（4.5MB）。
+ *  本機 dev server 一律模擬呢個上限 —— 爆咗就回 500 ＋ 純文字
+ *  FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE，同 Vercel 一模一樣。
+ *  2026-09-20 事故：資料庫大過 4.5MB 時 loadDb 喺 Vercel 實爆，
+ *  但本機 python3 -m http.server / dev-server 冇呢個限制，
+ *  所以本機點測都「正常」，一上線先至死 —— 而家本機就會先發現到。 */
+const VERCEL_RESPONSE_LIMIT = 4.5 * 1024 * 1024;
+const canSimulate = String(process.env.V82_NO_RESPONSE_LIMIT || '') !== '1';
+
 /** 將 Node 嘅 res 包成 Vercel 風格（res.status().json()） */
 function wrapRes(res) {
   let statusCode = 200;
   res.status = (code) => { statusCode = code; return res; };
+  /** 爆咗 4.5MB → 學 Vercel 咁回純文字 500（唔係 JSON，正正係前端要認得出嘅情況） */
+  const tooLarge = (bodyText) => {
+    if (!canSimulate || Buffer.byteLength(bodyText, 'utf8') <= VERCEL_RESPONSE_LIMIT) return false;
+    console.error(`[dev-server] 回應 ${Buffer.byteLength(bodyText, 'utf8')} bytes 大過 Vercel 4.5MB 上限 → 模擬 500 FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE`);
+    if (!res.headersSent) { res.statusCode = 500; res.setHeader('Content-Type', 'text/plain; charset=utf-8'); }
+    res.end('FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE');
+    return true;
+  };
   res.json = (obj) => {
+    const text = JSON.stringify(obj);
+    if (tooLarge(text)) return res;
     if (!res.headersSent) res.statusCode = statusCode;
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.end(JSON.stringify(obj));
+    res.end(text);
     return res;
   };
   res.send = (body) => {
+    const text = typeof body === 'string' ? body : JSON.stringify(body);
+    if (tooLarge(text)) return res;
     if (!res.headersSent) res.statusCode = statusCode;
-    res.end(typeof body === 'string' ? body : JSON.stringify(body));
+    res.end(text);
     return res;
   };
   return res;

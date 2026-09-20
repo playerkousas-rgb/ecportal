@@ -116,9 +116,14 @@ async function callBackend(payload, { timeoutMs = 60000 } = {}) {
     unit: cfg.unit, execUrl: cfg.url, apiKey: cfg.apiKey, timeoutMs
   });
 
-  /* 兩條路都冇得行：講清楚係「平台未登記」定「自己都未填」 */
+  /* 兩條路都冇得行：講清楚係「平台未登記」定「自己都未填」。
+     兩種都要有 hint —— 以前 not_configured 呢種回空 hint，
+     用家淨係見到「未設定後端網址」五個字，完全唔知下一步做乜。 */
   if (r.via === 'none') {
-    return { ok: false, reason: r.reason, error: r.error, hint: r.reason === 'not_registered' ? SELF_SERVE_HINT : '' };
+    return {
+      ok: false, reason: r.reason, error: r.error,
+      hint: r.reason === 'not_registered' ? SELF_SERVE_HINT : NO_ROUTE_HINT
+    };
   }
   if (!r.json) {
     return { ok: false, reason: r.reason || 'network', error: r.error || '連唔到旅團後端', hint: r.reason === 'bad_url' ? URL_HINT : '' };
@@ -137,6 +142,15 @@ const SELF_SERVE_HINT =
   + '② 自己即刻救返 —— 去「帳號與系統 → 資料管理 → 總表同步 → 同步設定」，'
   + '貼你嘅 Apps Script /exec 網址＋API Key（喺 Apps Script 執行 showApiKey() 攞），撳「儲存設定」，'
   + '然後撳「同步診斷」確認。';
+
+/* 兩條路都行唔到：呢個部署根本冇 /api/proxy（純靜態），而用家又未貼 /exec。
+   呢種情況以前只回「未設定後端網址」五個字、冇 hint —— 用家完全唔知下一步。 */
+const NO_ROUTE_HINT =
+  '呢個部署讀唔到同源代理（/api/proxy），而你自己都未貼 /exec，所以兩條路都行唔到。'
+  + '兩個選擇：① 用正式部署（有 /api 嗰個），並確認平台管理員喺 Vercel 設咗 '
+  + 'TROOP_<旅團編號>_BACKEND / _APIKEY；② 即刻自救 —— 去「帳號與系統 → 資料管理 → '
+  + '總表同步 → 同步設定」，貼你嘅 Apps Script /exec 網址＋API Key'
+  + '（喺 Apps Script 執行 showApiKey() 攞），撳「儲存設定」。';
 
 const URL_HINT =
   '後端網址一定要係 Apps Script「部署為網頁應用程式」之後嘅正式網址：'
@@ -183,16 +197,125 @@ export function hintOf(err, via = '') {
   return '';
 }
 
-/** 由後端讀返成個資料庫（唔會自動覆蓋本機 —— 交返畀呼叫者決定） */
-export async function pullDb() {
+/* ============================================================
+   分段讀取（v2.6.0）—— 大資料庫讀得返
+   ------------------------------------------------------------
+   Vercel 代理單一回應有 4.5MB 硬上限。資料庫一大過呢個數，
+   `loadDb` 一次過回成份 JSON 就會令 Vercel 回 500
+   FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE（純文字，唔係 JSON）。
+   舊 code 見到「唔係 JSON」就當「呢個部署冇 /api」→ 跌落自助路線 →
+   對用家講「未設定後端網址」，明明後端登記得好哋。
+   每部機於是讀唔到後端、各自儲存自己嗰份 —— 就係「無痕同普通視窗
+   永遠對唔到料」。
+
+   做法：後端 `loadDbPart` 每次只回一段純文字（約 1MB），呢度逐段拼返。
+   每段都帶 version —— 讀緊嗰陣有人儲存咗（version 變咗）就由頭再讀，
+   唔會拼出半新半舊嘅 JSON。
+   ============================================================ */
+
+/* Vercel 代理單一回應嘅硬上限 —— 爆咗佢唔會回 JSON，而係回純文字 500 */
+export const VERCEL_RESPONSE_BYTES = 4.5 * 1024 * 1024;
+/* 經同源代理時，資料庫大過呢個數就直接分段讀（留水位畀 4.5MB 硬上限） */
+export const SEGMENT_ABOVE_BYTES = 3_000_000;
+/* 後端要更新先有分段讀取 —— 呢段提示唔可以再講「未設定後端網址」（後端明明登記好） */
+const UPDATE_GS_HINT =
+  '後端仲行緊 v2.5.0 之前嘅版本，未支援分段讀取（loadDbPart）。'
+  + '去「帳號與系統 → 資料管理 → 總表同步 → 後端 Apps Script 範本」撳「下載 Code.gs」'
+  + ' → 貼入 Apps Script（全部取代）→ 儲存 →「部署 → 管理部署作業 → 編輯（鉛筆）'
+  + ' → 版本：新版本 → 部署」。/exec 網址唔會變，前端設定唔使改。';
+/* 分段讀嘅安全閘：段數上限（防後端回錯 parts 令前端無限讀落去） */
+const SEGMENT_MAX_PARTS = 400;
+/* 讀緊嗰陣撞正有人儲存 → 由頭再讀，最多幾多次 */
+const SEGMENT_MAX_RETRIES = 3;
+
+/** 逐段讀返成份資料庫（v2.6.0；後端要係 v2.6.0 先有 loadDbPart） */
+export async function pullDbSegmented({ onProgress } = {}) {
+  for (let attempt = 1; attempt <= SEGMENT_MAX_RETRIES; attempt++) {
+    const chunks = [];
+    let version = '', at = '', total = 0, count = 0;
+    let stale = false;
+
+    for (let idx = 0; idx < SEGMENT_MAX_PARTS; idx++) {
+      const r = await callBackend({ action: 'loadDbPart', partIdx: idx });
+      /* 舊版後端（v2.5.0 之前）唔識 loadDbPart → 回「未知 action」。
+         呢個一定要如實講：唔好扮「未設定後端網址」，亦唔好扮讀到。 */
+      if (!r.ok) {
+        return {
+          ok: false, reason: r.reason || 'backend', error: r.error || '分段讀取失敗',
+          hint: r.reason === 'old_deploy' || /未知 action|unknown action/i.test(String(r.error || ''))
+            ? '後端仲行緊 v2.5.0 之前嘅版本，未支援分段讀取。去「總表同步 → 後端 Apps Script 範本」'
+              + '撳「下載 Code.gs」→ 貼入 Apps Script → 部署（版本揀「新版本」，/exec 網址唔會變）。'
+            : (r.hint || ''),
+          segmented: true
+        };
+      }
+      if (!r.found) {
+        return { ok: true, found: false, db: null, bytes: 0, at: r.at || '', version: r.version || '', segmented: true };
+      }
+      if (idx === 0) {
+        version = String(r.version || ''); at = String(r.at || '');
+        total = Number(r.bytes) || 0; count = Number(r.parts) || 1;
+        if (count > SEGMENT_MAX_PARTS) {
+          return { ok: false, reason: 'too_large', segmented: true,
+            error: `資料庫太大（${count} 段）—— 請先喺「總表同步 → 體積檢查」做「相片瘦身」` };
+        }
+      } else if (String(r.version || '') !== version) {
+        /* 讀緊嗰陣有人儲存咗 —— 手上嗰幾段已經過時，由頭再讀 */
+        stale = true; break;
+      }
+      chunks.push(String(r.part || ''));
+      if (typeof onProgress === 'function') onProgress(idx + 1, count, total);
+      if (chunks.length >= count) break;
+    }
+    if (stale) continue;
+
+    const text = chunks.join('');
+    try {
+      return { ok: true, found: true, db: JSON.parse(text), bytes: text.length, at, version, segmented: true };
+    } catch {
+      return { ok: false, reason: 'corrupt', segmented: true,
+        error: '分段讀返嘅內容砌唔成完整 JSON（讀緊嗰陣資料庫變咗）—— 請再試一次' };
+    }
+  }
+  return { ok: false, reason: 'busy', segmented: true,
+    error: `讀緊嗰陣不斷有人儲存（試咗 ${SEGMENT_MAX_RETRIES} 次）—— 請稍後再試` };
+}
+
+/** 由後端讀返成個資料庫（唔會自動覆蓋本機 —— 交返畀呼叫者決定）
+ *  @param {object} [opts]
+ *    - bytes  已經知道嘅資料庫體積（例如啱啱 dbInfo 攞到）：
+ *             大過 SEGMENT_ABOVE_BYTES 就唔使白撞一次 4.5MB 上限，直接分段讀。
+ *             冇提供就先試單一讀，失敗先退去分段（慳一次 GAS 配額）。 */
+export async function pullDb({ bytes: knownBytes } = {}) {
   if (isMock()) return { ok: false, reason: 'mock', error: '示範模式唔會讀後端' };
   const cfg = remoteCfg();
   if (!cfg.ok) return { ok: false, reason: 'not_configured', error: '未設定後端網址' };
   setState('loading', '讀取緊後端資料…');
+
+  const mb = (n) => `${(Number(n) / 1048576).toFixed(1)} MB`;
+
+  /* 已經知道太大 → 直接分段（唔好白撞一次 4.5MB 上限） */
+  if (Number(knownBytes) > SEGMENT_ABOVE_BYTES) {
+    setState('loading', `資料庫 ${mb(knownBytes)} —— 分段讀取緊…`);
+    const seg = await pullDbSegmented({ onProgress: (i, n) => setState('loading', `分段讀取 ${i}/${n}…`) });
+    if (seg.ok) setState('idle'); else setState('error', seg.error || '讀取失敗');
+    return seg;
+  }
+
   const r = await callBackend({ action: 'loadDb' });
-  if (r.ok) setState('idle');
-  else setState('error', r.error || '讀取失敗');
-  return r;
+  if (r.ok) { setState('idle'); return r; }
+
+  /* 單一讀失敗 —— 好可能就係「回應過大」（代理回 500 純文字）。
+     退去分段讀再試一次：寧願慢，都好過靜靜地讀唔到、
+     然後兩部機各睇自己嗰份（2026-09-20 事故）。 */
+  setState('loading', '改用分段讀取…');
+  const seg = await pullDbSegmented({ onProgress: (i, n) => setState('loading', `分段讀取 ${i}/${n}…`) });
+  if (seg.ok) { setState('idle'); return seg; }
+
+  /* 兩條路都唔得 —— 如實報單一讀嗰個錯（佢先係主因），
+     但**唔可以**講「未設定後端網址」：後端明明答咗話，只係答唔晒。 */
+  setState('error', r.error || seg.error || '讀取失敗');
+  return { ...r, hint: r.hint || seg.hint || '', fallback: { error: seg.error || '', reason: seg.reason || '' } };
 }
 
 /** 只問後端有冇資料、幾時更新（開機比對用，唔會傳成份資料落嚟） */
@@ -333,6 +456,32 @@ export async function remoteDiagnose() {
       info.found
         ? `後端有資料庫：團員 ${c.members ?? '?'} · 帳目 ${c.transactions ?? '?'} · 通告 ${c.notices ?? '?'}（版本 ${String(info.version || info.at || '').slice(0, 19).replace('T', ' ')}）`
         : '後端仲未有資料庫 —— 撳「儲存到後端」推第一筆上去');
+  }
+
+  /* ⑤b 整份資料庫讀取 —— 呢格先係「兩邊視窗對唔到料」嘅真正死因。
+     上面幾格全部 ok（登記好、連到、讀寫權正常）都一樣可以讀唔返成份資料：
+     Vercel 代理單一回應上限 4.5MB，資料庫大過呢個數，loadDb 就會回 500 純文字。
+     所以呢度真係讀一次，如實話你知讀唔讀得返、幾大、有冇行分段。 */
+  if (info.ok && info.found) {
+    const bytes = Number(info.bytes) || 0;
+    const mb = (bytes / 1048576).toFixed(2);
+    const overProxy = bytes > VERCEL_RESPONSE_BYTES;
+    const read = overProxy ? await pullDbSegmented() : await pullDb({ bytes });
+    if (!read.ok) {
+      add('dbread', '整份資料庫讀取', 'bad',
+        `${mb} MB —— 讀唔返：${read.error || '未知原因'}`,
+        read.hint || (overProxy ? UPDATE_GS_HINT : ''));
+    } else {
+      add('dbread', '整份資料庫讀取', overProxy ? 'warn' : 'ok',
+        `${mb} MB · 讀到 ${Object.keys(read.db || {}).length} 個分頁`
+        + (overProxy
+          ? `　⚠ 大過 Vercel 4.5MB 回應上限，已改用分段讀取（${read.segmented ? '成功' : '未分段'}）`
+          : ''),
+        overProxy
+          ? '後端要 v2.6.0 先支援分段讀取（loadDbPart）。另外建議做一次「體積檢查 → 相片瘦身」'
+            + '把舊單據相嘅 dataURL 清走 —— 相片應該喺 Drive，唔應該喺資料庫 JSON 入面。'
+          : '');
+    }
   }
 
   /* ⑥ 本機狀態 */
@@ -535,6 +684,68 @@ export async function ensureFresh({ maxAgeMs = 60000 } = {}) {
     return { ok: true, fresh: false, upToDate: true };
   }
   return loadFromBackend();
+}
+
+/* ============================================================
+   ★ 登入硬閘（2026-09-20 團長定案）
+   ------------------------------------------------------------
+   團長原話：「由首頁登入旅團嗰頁，入到係正常嘅，因為喺 Vercel 登記咗；
+   但能登入旅團內嘅主控頁就唔應該，因為嗰個係應該要帳戶同密碼同後端
+   對上先至能進。既然都同後端對咗帳戶密碼，點可能入去之後話冇連上後端？」
+
+   佢講得啱。以前 `login()` 係**純本機運算**（auth.js 成個函數零網絡請求）：
+   佢只喺 localStorage 嘅 accounts[] 搵個 username，再比對一個隨 JS 一齊
+   公開咗嘅 hash。而 accounts[] 就算後端一個字都讀唔返都會有 ——
+   store.js 開機時 accounts 一空就塞 SEED_ACCOUNTS（leader／exco，defaultPw）。
+   所以「登入成功」從來只代表「呢部機有一份帳戶名單」，同後端零關係。
+
+   而家：後端答唔到 → 一律唔准入主控頁。
+   ============================================================ */
+
+/**
+ * 登入前嘅硬核對。**一定要真係聯絡到後端**先至回 ok:true。
+ *
+ * ⚠️ 呢度刻意**唔用** `ensureFresh()`：佢喺「本機有未存改動」嗰陣會
+ *    `return { ok:true, skipped:'pending' }` —— 完全冇聯絡後端。
+ *    攞佢做登入閘等於冇核對過（2026-09-20 事故嘅其中一個隱藏版）。
+ *
+ * @returns {Promise<{ok:boolean, mock?:boolean, version?:string, at?:string,
+ *                    empty?:boolean, accounts?:number, error?:string,
+ *                    reason?:string, hint?:string}>}
+ */
+export async function requireBackendForLogin() {
+  if (isMock()) return { ok: true, mock: true };
+  const cfg = remoteCfg();
+  if (!cfg.ok) {
+    return {
+      ok: false, reason: 'not_configured',
+      error: '未有後端設定 —— 帳戶冇辦法同後端核對，所以唔可以入主控頁',
+      hint: cfg.viaProxy
+        ? `平台伺服器端未登記呢個旅團（TROOP_${cfg.unit || '<編號>'}_BACKEND / _APIKEY）。`
+          + '交畀平台管理員喺 Vercel 加返再 Redeploy；或者你自己去「總表同步 → 同步設定」貼 /exec ＋ API Key。'
+        : '去「總表同步 → 同步設定」貼你嘅 Apps Script /exec 網址（＋ API Key）。'
+    };
+  }
+  setState('loading', '登入前同後端核對帳戶…');
+  const r = await loadFromBackend();
+  if (!r.ok) {
+    setState('unreachable', r.error || '連唔到後端');
+    return {
+      ok: false, reason: r.reason || 'network',
+      error: r.error || '連唔到旅團後端 —— 帳戶無法核對，登入已封鎖',
+      hint: r.hint || ''
+    };
+  }
+  const acc = (tryLoad()?.accounts || []).filter(a => a?.active !== false);
+  return {
+    ok: true,
+    version: String(r.version || ''),
+    at: String(r.at || ''),
+    /* found:false ＝ 後端真係仲未有資料庫（新旅團第一次設定）——
+       呢種情況先至允許用本機種子帳戶，而且界面要講清楚。 */
+    empty: r.found === false,
+    accounts: acc.length
+  };
 }
 
 /** 「由後端重新載入」：**丟棄**本機未儲存改動，成份用返後端（介面要先確認） */

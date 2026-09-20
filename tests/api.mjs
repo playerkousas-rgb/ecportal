@@ -165,5 +165,137 @@ ok('unitsHandler 回傳 units 物件', !!resJson?.units?.TEST9);
   globalThis.fetch = realFetch;
 }
 
+/* ============================================================
+   4. api/auth.js —— 超管核對搬上伺服器端（2026-09-20）
+   ------------------------------------------------------------
+   以前密碼寫死喺 assets/js/lib/auth.js，而呢個係靜態網站 ——
+   個檔會原原本本送到每個訪客嘅瀏覽器，repo 又係 public。
+   而家：核對喺伺服器端做，密碼只存喺 Vercel 嘅 SUPER_KEY。
+   ============================================================ */
+console.log('\n▌超管核對（api/auth.js：SUPER_KEY、fail closed）');
+{
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const authHandler = (await import('../api/auth.js')).default;
+
+  const res4 = () => {
+    const r = { statusCode: 0, headers: {}, body: null };
+    r.setHeader = (k, v) => { r.headers[k] = v; return r; };
+    r.status = (s) => { r.statusCode = s; return r; };
+    r.json = (o) => { r.body = o; return r; };
+    return r;
+  };
+  const realLog = console.log;
+  const call = async (body, method = 'POST') => {
+    const r = res4();
+    console.log = () => {};
+    try { await authHandler({ method, body }, r); } finally { console.log = realLog; }
+    return r;
+  };
+
+  const PW = 'test-super-pw-2026';
+
+  /* ---- 原始碼守門：前端唔可以再有任何超管秘密 ---- */
+  const authSrc = fs.readFileSync(path.join(ROOT, 'assets/js/lib/auth.js'), 'utf8');
+
+  /* 舊後門嘅形狀：「密碼變數直接同一個寫死嘅純數字字串比對」，
+     例如 `p === <四位數>` 或者 `String(password) === <四位數>`。
+     `\\)*` 係要吞埋 `String(password)` 嗰個收掣括號。
+
+     呢條 regex 淨係認**寫死嘅數字字面量**，所以唔會誤傷
+     `|| p === TEMP_PASSWORD`（嗰個係變數，係正常嘅「初始密碼要強制改」邏輯）。
+
+     ⚠️ 刻意用「形狀」而唔係用真密碼做斷言 —— 真密碼**唔應該出現喺 repo
+     任何地方，連測試檔都唔應該有**。之前呢個 repo 就係咁樣漏咗。 */
+  const BACKDOOR_RE = /(?:\bp\b|\bpassword\b)\s*\)*\s*===\s*'\d{3,8}'/;
+
+  /* 先驗條 regex 本身認唔認得出後門 —— 一條永遠 pass 嘅掃描等於冇掃描。 */
+  ok('掃描用嘅 regex 認得出舊後門（唔係一條永遠 pass 嘅假斷言）',
+    BACKDOOR_RE.test("|| p === '0000';") && BACKDOOR_RE.test("String(password) === '0000'"));
+  ok('掃描用嘅 regex 唔會誤傷合法嘅 TEMP_PASSWORD 比對',
+    !BACKDOOR_RE.test('p === TEMP_PASSWORD') && !BACKDOOR_RE.test('String(password) === TEMP_PASSWORD'));
+
+  ok('★ auth.js 已經冇寫死嘅後門密碼', !BACKDOOR_RE.test(authSrc));
+  ok('★ auth.js 已經冇寫死嘅超管 hash', !/652debbfdc29dd091325028855c281a08a50f91fcd0eb269444ff4eb5338645e/.test(authSrc));
+  ok('★ auth.js 冇任何 salt／hash 欄位留低', !/SUPER\s*=\s*\{[^}]*\b(salt|hash)\b/s.test(authSrc));
+  ok('auth.js 改為叫伺服器端核對', /fetch\('api\/auth'/.test(authSrc) && /verifySuperServer/.test(authSrc));
+
+  /* ★ 掃描範圍係**成個 repo**，唔淨止 assets/。
+     原因：改嘢嗰陣真密碼一度由 auth.js 搬咗去 tests/_authstub.mjs ——
+     如果只掃 assets/ 就會「綠燈通過」而密碼照樣留喺公開 repo。 */
+  const SCAN_SKIP = new Set(['.git', 'node_modules', '.vercel', 'dist', 'build']);
+  const repoFiles = [];
+  (function walk(d) {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      if (SCAN_SKIP.has(e.name)) continue;
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.(js|mjs|gs|json|md|html)$/.test(e.name)) repoFiles.push(p);
+    }
+  })(ROOT);
+
+  /* 掃描器自己要豁免：呢個檔入面有「後門長成點」嘅樣本字串。 */
+  const SELF = path.join(ROOT, 'tests/api.mjs');
+  ok('★ 成個 repo（唔淨止 assets/）都搵唔到寫死嘅後門密碼', (() => {
+    const hits = repoFiles.filter(f => f !== SELF && BACKDOOR_RE.test(fs.readFileSync(f, 'utf8')));
+    if (hits.length) console.log('      漏咗喺：' + hits.map(f => path.relative(ROOT, f)).join(', '));
+    return hits.length === 0;
+  })(), `掃咗 ${repoFiles.length - 1} 個檔（掃描器自己豁免）`);
+
+  ok('★ 成個 repo 都搵唔到舊嗰個超管 hash', (() => {
+    const OLD_HASH = '652debbf' + 'dc29dd091325028855c281a08a50f91fcd0eb269444ff4eb5338645e';
+    const hits = repoFiles.filter(f => f !== SELF && fs.readFileSync(f, 'utf8').includes(OLD_HASH));
+    if (hits.length) console.log('      漏咗喺：' + hits.map(f => path.relative(ROOT, f)).join(', '));
+    return hits.length === 0;
+  })());
+
+  ok('★ 測試 fixture 都唔用返真密碼（秘密唔應該喺 repo 任何地方）', (() => {
+    const stub = fs.readFileSync(path.join(ROOT, 'tests/_authstub.mjs'), 'utf8');
+    return /TEST_SUPER_PASSWORD\s*=\s*'[^']*'/.test(stub) && !/'\d{3,8}'/.test(stub);
+  })());
+
+  /* ---- fail closed：SUPER_KEY 冇設 → 成條路關閉 ---- */
+  delete process.env.SUPER_KEY;
+  const off = await call({ user: 'sheep', password: PW });
+  ok('★ 未設 SUPER_KEY → 503 ＋ disabled（fail closed，唔會靜靜地放行）',
+    off.statusCode === 503 && off.body?.disabled === true && off.body?.ok === false, JSON.stringify(off.body));
+  ok('關閉嗰陣嘅提示教管理員點做（講明 SUPER_KEY）',
+    /SUPER_KEY/.test(String(off.body?.hint || '')));
+
+  /* ---- 正常核對：一個環境變數，填明文密碼 ---- */
+  process.env.SUPER_KEY = PW;
+  const good = await call({ user: 'sheep', password: PW });
+  ok('★ SUPER_KEY = 密碼，密碼啱 → 200', good.statusCode === 200 && good.body?.ok === true,
+    JSON.stringify(good.body));
+  ok('★ 回應唔會洩漏密碼', !JSON.stringify(good.body).includes(PW), JSON.stringify(good.body));
+
+  const bad = await call({ user: 'sheep', password: 'wrong-password' });
+  ok('密碼錯 → 401', bad.statusCode === 401 && bad.body?.ok === false, JSON.stringify(bad.body));
+
+  const wrongUser = await call({ user: 'not-sheep', password: PW });
+  ok('用戶名錯 → 401（同一句訊息，唔會確認邊個 username 存在）',
+    wrongUser.statusCode === 401 && String(wrongUser.body?.error) === String(bad.body?.error));
+
+  /* 改密碼 = 改個環境變數值，即刻生效 */
+  process.env.SUPER_KEY = 'a-brand-new-password';
+  ok('★ 改咗 SUPER_KEY → 舊密碼即刻入唔到',
+    (await call({ user: 'sheep', password: PW })).statusCode === 401);
+  ok('★ 改咗 SUPER_KEY → 新密碼即刻入到',
+    (await call({ user: 'sheep', password: 'a-brand-new-password' })).statusCode === 200);
+
+  /* SUPER_USER 可以改（選填） */
+  process.env.SUPER_USER = 'myboss';
+  ok('SUPER_USER 可以改超管帳號名',
+    (await call({ user: 'myboss', password: 'a-brand-new-password' })).statusCode === 200
+    && (await call({ user: 'sheep', password: 'a-brand-new-password' })).statusCode === 401);
+  delete process.env.SUPER_USER;
+
+  ok('GET 唔接受（只接受 POST）', (await call({}, 'GET')).statusCode === 405);
+
+  delete process.env.SUPER_KEY;
+}
+
 console.log(`\n──────── API 測試結果：${pass} 通過 / ${fail} 失敗 ────────`);
 process.exit(fail ? 1 : 0);

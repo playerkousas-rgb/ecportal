@@ -49,6 +49,10 @@ globalThis.fetch = async (url) => {
   return { ok: true, status: 200, text: async () => text, json: async () => JSON.parse(text) };
 };
 
+/* 超管核對而家喺伺服器端（api/auth.js）—— 裝返個有設環境變數嘅「伺服器」 */
+const { installSuperAuth, TEST_SUPER_PASSWORD } = await import('./_authstub.mjs');
+installSuperAuth();
+
 /* ---------- DOM ---------- */
 const dom = new JSDOM('<!doctype html><html><body class="login-body"><div id="app"></div></body></html>', {
   url: 'http://localhost:8080/?u=0082', pretendToBeVisual: true, runScripts: 'dangerously'
@@ -150,7 +154,7 @@ section('mock 分頁＝super 限定');
 
   /* 轉 super 身份再驗一次：個掣喺度、撳得、render 到「示範」 */
   auth.logout();
-  const r = await auth.login('super', 'sheep', '0728');
+  const r = await auth.login('super', 'sheep', TEST_SUPER_PASSWORD);
   ok('super 登入到', r.ok === true, JSON.stringify(r));
   await goTo('#/');            /* 離開 #/admin 先，之後先會觸發 hashchange 返去 */
   await goTo('#/admin');

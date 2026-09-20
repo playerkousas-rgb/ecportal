@@ -33,15 +33,51 @@ export const ROLES = {
   }
 };
 
-/* 隱藏超級管理員：只存雜湊（唔會出現喺帳戶名單、亦唔會匯出） */
+/* 隱藏超級管理員。
+ *
+ * ★ 2026-09-20 改：呢度**唔再有任何密碼**。
+ *   以前密碼寫死喺呢個檔，而呢個係靜態網站 —— 個檔會原原本本送到
+ *   每個訪客嘅瀏覽器，repo 又係 public，等於密碼貼咗出街。
+ *
+ *   而家核對搬咗去伺服器端（api/auth.js），密碼只存喺 Vercel 嘅
+ *   環境變數 `SUPER_KEY`。冇設 → 超管登入完全關閉（fail closed）。
+ *
+ *   ⚠️ 呢個做法保護到「密碼」，保護唔到「超管身份」本身 ——
+ *      靜態網站嘅 `isSuper()` 淨係讀 localStorage，識開 DevTools 就改到。
+ *      而家超管只 gate UI，所以冇實質損失；將來如果超管要做真正敏感嘅嘢，
+ *      嗰個操作要放喺伺服器端，自己再核對一次 SUPER_KEY。
+ *
+ *   username 唔係秘密（`RESERVED_USERNAMES` 本來就公開咗佢），
+ *   留喺呢度用嚟判斷「呢次登入係咪想入超管」；真正核對交畀伺服器。 */
 const SUPER = {
   id: 'super',
   role: 'super',
   username: 'sheep',
-  name: '系統管理員',
-  salt: 'v82:super:sheep',
-  hash: '652debbfdc29dd091325028855c281a08a50f91fcd0eb269444ff4eb5338645e'
+  name: '系統管理員'
 };
+
+/** 叫伺服器端核對超管密碼（api/auth.js）。
+ *  回 `{ok:true}` 或者 `{ok:false, error, disabled?}`。
+ *  纯靜態部署（冇 /api）→ 當「已關閉」，唔會跌返去任何本機比對。 */
+async function verifySuperServer(password) {
+  try {
+    const res = await fetch('api/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user: SUPER.username, password })
+    });
+    const j = await res.json().catch(() => null);
+    if (j?.ok === true) return { ok: true };
+    return {
+      ok: false,
+      disabled: !!(j?.disabled) || res.status === 404,
+      error: j?.error || (res.status === 404 ? '呢個部署冇 /api/auth' : `核對失敗（HTTP ${res.status}）`),
+      hint: j?.hint || ''
+    };
+  } catch (e) {
+    return { ok: false, error: e?.message || '連唔到核對服務', hint: '' };
+  }
+}
 export const RESERVED_USERNAMES = ['sheep', 'super', 'admin', 'system'];
 /** 同進度追蹤（vsbadge）睇齊：新帳戶／團員初始密碼，首次登入強制改 */
 export const TEMP_PASSWORD = '1234';
@@ -195,9 +231,10 @@ export function passwordProblem(pw, { min = 4, forbidTemp = false } = {}) {
 /* ============================================================
    登入 / 登出
    ============================================================ */
-export function isSuperCredential(username, password) {
-  return String(username || '').trim().toLowerCase() === SUPER.username && String(password) === '0728';
-}
+/* 註：呢度以前有個 `isSuperCredential(username, password)`，
+   入面寫死咗超管密碼，而且**全 repo 一個 caller 都冇** —— 死碼兼後門。
+   2026-09-20 已刪除。超管核對而家只有一條路：api/auth.js（伺服器端）。
+   tests/api.mjs 會掃描成個 assets/ 確保冇任何超管秘密返嚟。 */
 
 /**
  * 登入。role 為登入頁揀選嘅身份（leader / exco），
@@ -372,15 +409,26 @@ export async function login(role, username, password) {
   if (!u) return { ok: false, msg: '請輸入電郵（領袖）或登入帳號' };
   if (!p) return { ok: false, msg: '請輸入密碼' };
 
-  // 隱藏超管：唔理揀咗邊個身份都直接登入
+  /* 隱藏超管：唔理揀咗邊個身份都直接登入。
+     ★ 核對喺**伺服器端**做（api/auth.js）—— 呢個函數入面已經冇任何
+       密碼／salt／hash 可以比對，所以靜態部署或者環境變數未設嗰陣
+       係「登唔到」，唔會靜靜地放行。 */
   if (u.toLowerCase() === SUPER.username) {
-    const ok = (await sha256Hex(SUPER.salt + '::' + p)) === SUPER.hash || p === '0728';
-    if (ok) {
-      setSession({ role: 'super', accountId: 'super', username: '', name: SUPER.name, at: Date.now(), hidden: true });
-      auditLogin('super', '超級管理員登入');
-      return { ok: true, role: 'super' };
+    const v = await verifySuperServer(p);
+    if (!v.ok) {
+      /* 「帳號或密碼不正確」同「服務未設定」要分開講 ——
+         後者係管理員要去做嘢，用家再試一萬次都唔會得。 */
+      if (v.disabled) {
+        return { ok: false, msg: `超級管理員登入未啟用 —— ${v.error}${v.hint ? `（${v.hint}）` : ''}` };
+      }
+      return { ok: false, msg: v.error || '帳號或密碼不正確' };
     }
-    return { ok: false, msg: '帳號或密碼不正確' };
+    setSession({
+      role: 'super', accountId: 'super', username: '', name: SUPER.name,
+      at: Date.now(), hidden: true
+    });
+    auditLogin('super', '超級管理員登入（伺服器端核對）');
+    return { ok: true, role: 'super' };
   }
 
   const ul = u.toLowerCase();

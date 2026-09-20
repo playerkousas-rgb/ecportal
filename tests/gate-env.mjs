@@ -434,6 +434,13 @@ section('伺服器一時讀唔到：舊清單要頂住（唔可以洗走旅團�
     if (/^api\/units/.test(clean)) {
       return { ok: false, status: 404, json: async () => { throw new Error('404'); }, text: async () => '<h1>404</h1>' };
     }
+    /* ★ 一定要 stub 埋焗名單：呢三個 case 驗嘅係「冇焗名單」嗰陣嘅行為。
+       以前呢度漏咗 stub，跌去 memFetch 讀 repo 真檔 —— 而
+       data/units.generated.json 係 `npm run build`／Vercel build 生成嘅，
+       所以「跑過 build 之後再跑 test」就會假紅燈（2026-09-20 先至暴露）。 */
+    if (clean === 'data/units.generated.json') {
+      return { ok: false, status: 404, json: async () => { throw new Error('404'); }, text: async () => '' };
+    }
     if (clean === 'data/units.json') {
       /* 呢個 case 要驗「檔讀到但係空」—— 唔讀真檔（真檔而家有 0082 名單） */
       const body = { schema: 2, defaultUnit: '', units: {} };
@@ -458,6 +465,10 @@ section('伺服器一時讀唔到：舊清單要頂住（唔可以洗走旅團�
       const body = { units: {}, count: 0 };
       return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
     }
+    /* 同上：焗名單都要 stub 走，否則跑過 build 之後呢個 case 會假紅燈 */
+    if (clean === 'data/units.generated.json') {
+      return { ok: false, status: 404, json: async () => { throw new Error('404'); }, text: async () => '' };
+    }
     if (clean === 'data/units.json') {
       /* 呢個 case 要驗「真係一個都未登記」—— 唔讀真檔（真檔而家有 0082 名單） */
       const body = { schema: 2, defaultUnit: '', units: {} };
@@ -480,6 +491,10 @@ section('伺服器一時讀唔到：舊清單要頂住（唔可以洗走旅團�
     const clean = String(url).split('?')[0].replace(/^\.?\//, '');
     if (/^api\/units/.test(clean)) {
       return { ok: false, status: 500, json: async () => { throw new Error('500'); }, text: async () => 'error' };
+    }
+    /* 同上：焗名單都要 stub 走 */
+    if (clean === 'data/units.generated.json') {
+      return { ok: false, status: 404, json: async () => { throw new Error('404'); }, text: async () => '' };
     }
     if (clean === 'data/units.json') {
       const body = { schema: 2, defaultUnit: '', units: { '0100': { code: '0100', name: '第一百旅' } } };

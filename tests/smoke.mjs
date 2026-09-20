@@ -33,6 +33,11 @@ globalThis.fetch = async (url) => {
   return { ok: true, status: 200, text: async () => text, json: async () => JSON.parse(text) };
 };
 
+/* 超管核對而家喺伺服器端（api/auth.js）—— 裝返個「有設環境變數嘅伺服器」，
+   行嘅係真 handler，唔係假嘢（見 tests/_authstub.mjs）。 */
+const { installSuperAuth, TEST_SUPER_PASSWORD } = await import('./_authstub.mjs');
+installSuperAuth();
+
 /* ---------- DOM ---------- */
 const url = MODE === 'mock' ? 'http://localhost:8080/?mock=1&u=MOCK' : 'http://localhost:8080/?u=0082';
 const dom = new JSDOM('<!doctype html><html><body class="login-body"><div id="app"></div></body></html>', {
@@ -167,7 +172,7 @@ if (MODE === 'mock') {
 
 /* ---------- 權限 / 密碼規則 ---------- */
 section('登入與密碼權限');
-const r1 = await auth.login('exco', 'sheep', '0728');
+const r1 = await auth.login('exco', 'sheep', TEST_SUPER_PASSWORD);
 ok('超管用隱藏帳密登入（即使揀執委）', r1.ok && r1.role === 'super', JSON.stringify(r1));
 ok('超管 session 唔會存帳號名', !auth.current()?.username);
 ok('超管帳戶唔在名單', !auth.accounts().some(a => a.id === 'super'));
@@ -204,7 +209,7 @@ if (MODE === 'real') {
   const chg = await auth.changePassword('acc_exco', 'hacked');
   ok('執委改其他執委密碼會失敗', chg.ok === false, chg.msg);
 
-  await auth.login('super', 'sheep', '0728');
+  await auth.login('super', 'sheep', TEST_SUPER_PASSWORD);
   const chg2 = await auth.changePassword('acc_exco', 'exco-新密碼-1');
   ok('超管可以改執委密碼', chg2.ok === true, chg2.msg || '');
   const back = await auth.changePassword('acc_exco', '8203');
@@ -1367,7 +1372,7 @@ section('開新旅團教學（只限超管）');
   /* 兩種模式都用得到嘅登入輔助（示範模式冇真實帳戶） */
   const loginAs = async role => {
     if (MODE === 'mock') { auth.loginAsMock(role); return { ok: true }; }
-    return role === 'super' ? auth.login('exco', 'sheep', '0728') : auth.login('leader', 'leader', '8202');
+    return role === 'super' ? auth.login('exco', 'sheep', TEST_SUPER_PASSWORD) : auth.login('leader', 'leader', '8202');
   };
   await loginAs('super');      // 以超管身份睇
   ok('以 sheep 登入 ＝ 超級管理員身份', auth.isSuper() === true);
