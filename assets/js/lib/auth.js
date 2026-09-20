@@ -35,23 +35,20 @@ export const ROLES = {
 
 /* 隱藏超級管理員。
  *
- * ★ 2026-09-20 改：呢度**唔再有任何密碼、salt 或者 hash**。
- *   以前呢個物件寫死咗 `hash`，而 `login()` 入面仲多一條明文密碼後門
- *   （`|| p === '<四位数>'`）—— 兩樣都隨 JavaScript 一齊送到瀏覽器，
- *   repo 又係 public，等於任何人都讀得到超管帳號同密碼。
- *   （呢度刻意唔寫返條密碼出嚟：已移除嘅秘密唔應該喺原始碼度留低多一次。）
+ * ★ 2026-09-20 改：呢度**唔再有任何密碼**。
+ *   以前密碼寫死喺呢個檔，而呢個係靜態網站 —— 個檔會原原本本送到
+ *   每個訪客嘅瀏覽器，repo 又係 public，等於密碼貼咗出街。
  *
- *   而家核對搬咗去伺服器端（api/auth.js），密碼只存喺 Vercel 環境變數
- *   `SUPER_ADMIN_HASH`（＋ `SESSION_SECRET` 簽發憑證）。
- *   環境變數冇設 → 超管登入完全關閉（fail closed）。
+ *   而家核對搬咗去伺服器端（api/auth.js），密碼只存喺 Vercel 嘅
+ *   環境變數 `SUPER_KEY`。冇設 → 超管登入完全關閉（fail closed）。
  *
  *   ⚠️ 呢個做法保護到「密碼」，保護唔到「超管身份」本身 ——
  *      靜態網站嘅 `isSuper()` 淨係讀 localStorage，識開 DevTools 就改到。
  *      而家超管只 gate UI，所以冇實質損失；將來如果超管要做真正敏感嘅嘢，
- *      嗰個操作要放喺伺服器端並驗 api/auth.js 簽發嘅 token。
+ *      嗰個操作要放喺伺服器端，自己再核對一次 SUPER_KEY。
  *
- *   username 仍然留喺呢度（佢唔係秘密，`RESERVED_USERNAMES` 本來就公開咗佢），
- *   用嚟判斷「呢次登入係咪想入超管」；真正核對交畀伺服器。 */
+ *   username 唔係秘密（`RESERVED_USERNAMES` 本來就公開咗佢），
+ *   留喺呢度用嚟判斷「呢次登入係咪想入超管」；真正核對交畀伺服器。 */
 const SUPER = {
   id: 'super',
   role: 'super',
@@ -60,7 +57,7 @@ const SUPER = {
 };
 
 /** 叫伺服器端核對超管密碼（api/auth.js）。
- *  回 `{ok:true, token, exp}` 或者 `{ok:false, error, disabled?}`。
+ *  回 `{ok:true}` 或者 `{ok:false, error, disabled?}`。
  *  纯靜態部署（冇 /api）→ 當「已關閉」，唔會跌返去任何本機比對。 */
 async function verifySuperServer(password) {
   try {
@@ -70,7 +67,7 @@ async function verifySuperServer(password) {
       body: JSON.stringify({ user: SUPER.username, password })
     });
     const j = await res.json().catch(() => null);
-    if (j?.ok === true && j.token) return { ok: true, token: j.token, exp: j.exp };
+    if (j?.ok === true) return { ok: true };
     return {
       ok: false,
       disabled: !!(j?.disabled) || res.status === 404,
@@ -428,7 +425,7 @@ export async function login(role, username, password) {
     }
     setSession({
       role: 'super', accountId: 'super', username: '', name: SUPER.name,
-      at: Date.now(), hidden: true, superToken: v.token, superExp: v.exp || 0
+      at: Date.now(), hidden: true
     });
     auditLogin('super', '超級管理員登入（伺服器端核對）');
     return { ok: true, role: 'super' };
