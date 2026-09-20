@@ -9,7 +9,7 @@
 //                      hash: '652debbf…' };
 //      …
 //      const ok = (await sha256Hex(SUPER.salt + '::' + p)) === SUPER.hash
-//                 || p === '0728';        // ← 寫死嘅後門密碼
+//                 || p === '<四位數明文密碼>';   // ← 寫死嘅後門密碼
 //
 //  問題：呢個係**靜態網站**，個 hash 同一條後門密碼都隨 JavaScript
 //  一齊送到瀏覽器。repo 一係 public，任何人都讀到 username ＋ 密碼，

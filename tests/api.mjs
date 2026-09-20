@@ -168,7 +168,7 @@ ok('unitsHandler 回傳 units 物件', !!resJson?.units?.TEST9);
 /* ============================================================
    4. api/auth.js —— 超管核對搬上伺服器端（2026-09-20）
    ------------------------------------------------------------
-   以前 auth.js 寫死咗 hash ＋ 一條 `|| p === '0728'` 後門，
+   以前 auth.js 寫死咗 hash ＋ 一條「密碼等於某個四位數」嘅後門，
    兩樣都隨 JS 一齊送到瀏覽器，而 repo 係 public。
    而家：核對喺伺服器端做，密碼只存喺 Vercel env。
    ============================================================ */
@@ -203,22 +203,64 @@ console.log('\n▌超管核對（api/auth.js：環境變數、fail closed、toke
 
   /* ---- 原始碼守門：前端唔可以再有任何超管秘密 ---- */
   const authSrc = fs.readFileSync(path.join(ROOT, 'assets/js/lib/auth.js'), 'utf8');
-  /* 注意：唔好斷言「冇 `|| p ===`」—— `|| p === TEMP_PASSWORD` 係正常嘅
-     「初始密碼要強制改」邏輯。要斷言嘅係「冇寫死嘅超管明文密碼」。 */
-  ok('★ auth.js 已經冇寫死嘅後門密碼', !/'0728'/.test(authSrc));
+  /* 舊後門嘅形狀：「密碼變數直接同一個寫死嘅純數字字串比對」，
+     例如 `p === '<四位數>'` 或者 `String(password) === '<四位數>'`。
+     `\)*` 係要吞埋 `String(password)` 嗰個收掣括號。
+
+     呢條 regex 淨係認**寫死嘅數字字面量**，所以唔會誤傷
+     `|| p === TEMP_PASSWORD`（嗰個係變數，係正常嘅「初始密碼要強制改」邏輯）。
+
+     ⚠️ 刻意用「形狀」而唔係用真密碼做斷言 —— 真密碼**唔應該出現喺 repo
+     任何地方，連測試檔都唔應該有**。之前呢個 repo 就係咁樣漏咗。 */
+  const BACKDOOR_RE = /(?:\bp\b|\bpassword\b)\s*\)*\s*===\s*'\d{3,8}'/;
+  /* 先驗條 regex 本身認唔認得出後門 —— 一條永遠 pass 嘅掃描等於冇掃描。
+     （呢個係我自己撞到嘅：第一版 regex 認唔到 `String(password) === '…'`，
+       即係第二條後門會照樣漏網。） */
+  ok('掃描用嘅 regex 認得出舊後門（唔係一條永遠 pass 嘅假斷言）',
+    BACKDOOR_RE.test("|| p === '0000';") && BACKDOOR_RE.test("String(password) === '0000'"));
+  ok('掃描用嘅 regex 唔會誤傷合法嘅 TEMP_PASSWORD 比對',
+    !BACKDOOR_RE.test('p === TEMP_PASSWORD') && !BACKDOOR_RE.test('String(password) === TEMP_PASSWORD'));
+
+  ok('★ auth.js 已經冇寫死嘅後門密碼', !BACKDOOR_RE.test(authSrc));
   ok('★ auth.js 冇任何明文密碼直接同 SUPER 比對',
     !/SUPER\.username[\s\S]{0,80}===\s*'[0-9A-Za-z]{3,}'/.test(authSrc.replace(/\/\*[\s\S]*?\*\//g, '')));
   ok('★ auth.js 已經冇寫死嘅超管 hash', !/652debbfdc29dd091325028855c281a08a50f91fcd0eb269444ff4eb5338645e/.test(authSrc));
   ok('★ auth.js 冇任何 salt／hash 欄位留低', !/SUPER\s*=\s*\{[^}]*\b(salt|hash)\b/s.test(authSrc));
   ok('auth.js 改為叫伺服器端核對', /fetch\('api\/auth'/.test(authSrc) && /verifySuperServer/.test(authSrc));
-  ok('成個前端都搵唔到超管密碼', (() => {
-    const files = [];
-    const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).forEach(e => {
+  /* ★ 掃描範圍係**成個 repo**，唔淨止 assets/。
+     原因：今次改嘢嗰陣，真密碼一度由 auth.js 搬咗去 tests/_authstub.mjs ——
+     如果只掃 assets/ 就會「綠燈通過」而密碼照樣留喺公開 repo。
+     秘密漏去邊個目錄都係漏。 */
+  const SCAN_SKIP = new Set(['.git', 'node_modules', '.vercel', 'dist', 'build']);
+  const repoFiles = [];
+  (function walk(d) {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      if (SCAN_SKIP.has(e.name)) continue;
       const p = path.join(d, e.name);
-      if (e.isDirectory()) walk(p); else if (/\.js$/.test(e.name)) files.push(p);
-    });
-    walk(path.join(ROOT, 'assets'));
-    return !files.some(f => /'0728'/.test(fs.readFileSync(f, 'utf8')));
+      if (e.isDirectory()) walk(p);
+      else if (/\.(js|mjs|gs|json|md|html)$/.test(e.name)) repoFiles.push(p);
+    }
+  })(ROOT);
+
+  /* 掃描器自己要豁免：呢個檔入面有「後門長成點」嘅樣本字串
+     （上面兩條 regex 自我測試），否則掃描器會咬自己。 */
+  const SELF = path.join(ROOT, 'tests/api.mjs');
+  ok('★ 成個 repo（唔淨止 assets/）都搵唔到寫死嘅後門密碼', (() => {
+    const hits = repoFiles.filter(f => f !== SELF && BACKDOOR_RE.test(fs.readFileSync(f, 'utf8')));
+    if (hits.length) console.log('      漏咗喺：' + hits.map(f => path.relative(ROOT, f)).join(', '));
+    return hits.length === 0;
+  })(), `掃咗 ${repoFiles.length - 1} 個檔（掃描器自己豁免）`);
+
+  ok('★ 成個 repo 都搵唔到舊嗰個超管 hash', (() => {
+    const OLD_HASH = '652debbf' + 'dc29dd091325028855c281a08a50f91fcd0eb269444ff4eb5338645e';
+    const hits = repoFiles.filter(f => f !== SELF && fs.readFileSync(f, 'utf8').includes(OLD_HASH));
+    if (hits.length) console.log('      漏咗喺：' + hits.map(f => path.relative(ROOT, f)).join(', '));
+    return hits.length === 0;
+  })());
+
+  ok('★ 測試 fixture 都唔用返真密碼（秘密唔應該喺 repo 任何地方）', (() => {
+    const stub = fs.readFileSync(path.join(ROOT, 'tests/_authstub.mjs'), 'utf8');
+    return /TEST_SUPER_PASSWORD\s*=\s*'[^']*'/.test(stub) && !/'\d{3,8}'/.test(stub);
   })());
 
   /* ---- fail closed：環境變數冇設 → 成條路關閉 ---- */

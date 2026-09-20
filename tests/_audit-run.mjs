@@ -56,7 +56,7 @@ globalThis.fetch = async (url) => {
 
 /* 超管核對而家喺伺服器端（api/auth.js）—— 裝返個有設環境變數嘅「伺服器」。
    注意：上面個 shim 對所有 api/* 一律回 404，installSuperAuth 會先截 api/auth。 */
-const { installSuperAuth } = await import('./_authstub.mjs');
+const { installSuperAuth, TEST_SUPER_PASSWORD } = await import('./_authstub.mjs');
 installSuperAuth();
 
 /* ---------- DOM ---------- */
@@ -98,7 +98,7 @@ await wait(350);
 if (MODE === 'mock') {
   if (ROLE !== 'leader') { auth.logout(); auth.loginAsMock(ROLE); }
 } else if (ROLE === 'super') {
-  const r = await auth.login('leader', 'sheep', '0728');
+  const r = await auth.login('leader', 'sheep', TEST_SUPER_PASSWORD);
   if (!r.ok) throw new Error('super 登入失敗');
 } else {
   const r = await auth.login(ROLE, ROLE, ROLE === 'leader' ? '8202' : '8203');

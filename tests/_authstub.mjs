@@ -15,7 +15,7 @@ import crypto from 'node:crypto';
 import authHandler from '../api/auth.js';
 
 export const TEST_SUPER_USER = 'sheep';
-export const TEST_SUPER_PASSWORD = '0728';
+export const TEST_SUPER_PASSWORD = 'test-super-pw-2026';
 export const TEST_SUPER_SALT = 'v82:super';
 export const TEST_SUPER_HASH = crypto.createHash('sha256')
   .update(`${TEST_SUPER_SALT}::${TEST_SUPER_PASSWORD}`).digest('hex');
