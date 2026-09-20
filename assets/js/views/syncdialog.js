@@ -83,7 +83,11 @@ export async function resolveConflictsDialog({ conflicts = [], ctx = {}, mode = 
   return r || { useMine: [] };
 }
 
-/** 儲存結果 → 一句人話（toast 用） */
+/** 儲存結果 → 一句人話（toast 用）
+ *  ★ 一定要講清楚「寫咗去邊」—— 團長回報「話已寫入但張 Sheet 完全冇嘢」，
+ *  唔係冇寫入，係佢開 Sheet 睇嘅係**攤平報表分頁**（團員／帳目／物資…），
+ *  而 saveDb 寫嘅係「資料庫」分頁（分段 JSON）。以前呢兩處要分開撳兩粒掣，
+ *  所以睇落似「寫咗但完全冇嘢」。而家一次過做晒，而且訊息會講明寫咗去邊。 */
 export function saveResultText(r) {
   if (!r) return '儲存失敗';
   if (!r.ok) return '儲存失敗：' + (r.error || '未知錯誤') + (r.hint ? `（${r.hint}）` : '');
@@ -96,7 +100,12 @@ export function saveResultText(r) {
     else bits.push(`${r.conflicts.length} 項衝突保留咗後端版本`);
     if (r.overrideOk === false) bits.push('（蓋過嗰次寫入失敗：' + (r.overrideError || '未知') + '）');
   }
-  bits.push('已儲存到後端 ✓');
+  const where = [];
+  if (r.bytes) where.push(`「資料庫」分頁 ${r.bytes >= 1048576 ? (r.bytes / 1048576).toFixed(2) + ' MB' : Math.max(1, Math.round(r.bytes / 1024)) + ' KB'}`);
+  if (r.parts) where.push(`分 ${r.parts} 件寫入`);
+  if (r.reportOk === true) where.push(`報表分頁已更新（${r.reportCount ?? 0} 筆，團員／帳目…嗰啲分頁而家有嘢睇）`);
+  else if (r.reportOk === false) where.push(`⚠ 報表分頁未更新（${r.reportMsg || '未知'}）—— 資料本身已經存到，去「總表同步」撳「更新報表分頁」再試`);
+  bits.push('已儲存到後端 ✓' + (where.length ? `（${where.join(' · ')}）` : ''));
   return bits.join('；');
 }
 
@@ -118,6 +127,22 @@ export async function saveWithDialog({ silent = false, toastOk = true } = {}) {
   }
   const r = await remote.saveToBackend({ policy: 'ask', resolver: resolveConflictsDialog, silent });
   if (r.ok) {
+    /* ★ 儲存成功之後，順手刷新埋「睇得明」嘅報表分頁（pushToMaster，帶 skipDb）。
+       團長回報「佢話已寫入，但後端完全冇嘢」就係死喺呢度：
+       saveDb 淨係寫「資料庫」分頁（分段 JSON，人睇唔明），
+       而團員／帳目／物資…嗰啲攤平分頁要另外撳「更新報表分頁」先會填 ——
+       所以撳完「儲存到後端」再開張 Google Sheet，睇到嘅係一片空白。
+       而家一粒掣做齊兩處（仍然只有一條 db 寫入路：pushToMaster 帶 skipDb，唔會碰 db）。 */
+    try {
+      const { pushToMaster } = await import('./tables.js');
+      const rep = await pushToMaster({ silent: true });
+      r.reportOk = !!rep?.ok;
+      r.reportMsg = rep?.ok ? '' : String(rep?.msg || rep?.error || '未知');
+      r.reportCount = Number(rep?.total || 0);
+    } catch (e) {
+      r.reportOk = false;
+      r.reportMsg = String(e?.message || e).slice(0, 120);
+    }
     if (toastOk || r.remoteChanged || r.conflicts?.length) toast(saveResultText(r), 'ok');
     /* 後端有對方改動 → 本機已經併入 → 畫面要重畫 */
     if (r.remoteChanged) { try { window.dispatchEvent(new CustomEvent('v82:refresh')); } catch { /* ignore */ } }

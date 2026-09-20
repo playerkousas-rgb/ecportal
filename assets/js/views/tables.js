@@ -1006,7 +1006,9 @@ export async function pushToMaster({ silent = false } = {}) {
     const total = payload.counts ? Object.values(payload.counts).reduce((a, b) => a + b, 0) : 0;
     log(`${ok ? '✓' : '✗'} 報表分頁 HTTP ${res.status}${viaProxy ? '（代理）' : ''} · ${total} 筆 · ${(detail || txt).replace(/\s+/g, ' ').slice(0, 80)}`);
     if (!silent) toast(ok ? '已更新總表嘅報表分頁（資料庫本身要撳「儲存到後端」）' : ('同步失敗：' + (detail || ('HTTP ' + res.status))), ok ? 'ok' : 'err');
-    return { ok, msg: detail || txt.slice(0, 300), viaProxy };
+    /* total ＝ 今次攤平咗幾多筆落報表分頁 —— 「儲存到後端」嘅成功訊息會用嚟
+       話畀用家知「團員／帳目嗰啲分頁而家有嘢睇」，唔使再開張 Sheet 先知。 */
+    return { ok, msg: detail || txt.slice(0, 300), viaProxy, total };
   } catch (e) {
     if (viaProxy) {
       /* 經代理唔會有「送咗但讀唔到」呢回事 —— 掟 exception 即係根本未送到 */

@@ -24,6 +24,13 @@ const KEY = String(process.env.REALGAS_APIKEY || '');
    所以 process 唔熄，資料就一路喺度 —— 同真 Spreadsheet 一樣有狀態）。 */
 const gas = makeGas({ apiKey: KEY || null });
 
+/* 真旅團張 Sheet 一定跑過 initializeSheets()（18 張分頁都建好）——
+   模擬返呢個狀態，先至睇到「團長開張 Sheet 會見到乜」。
+   （API_KEY 已經喺 makeGas 度設咗，initializeSheets 唔會另外生成一條。） */
+if (process.env.REALGAS_INIT !== '0') {
+  try { gas.sandbox.initializeSheets(); } catch (e) { console.error('[realgas] initializeSheets 失敗', e); }
+}
+
 function readBody(req) {
   return new Promise((resolve) => {
     const chunks = [];
@@ -49,6 +56,17 @@ const server = http.createServer(async (req, res) => {
     }));
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify({ tab: u.searchParams.get('tab') || '資料庫', rows: brief }));
+  }
+
+  /* 俾測試睇成個 Spreadsheet 而家有邊啲分頁、每張幾多行（＝團長開張 Sheet 見到嘅嘢） */
+  if (u.pathname === '/_tabs') {
+    const out = [...gas.sheets.values()].map(sh => ({
+      tab: sh.getName(),
+      rows: Math.max(0, sh.getLastRow() - 1),
+      first: (sh._rows[1] || []).map(c => String(c == null ? '' : c).slice(0, 28))
+    }));
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify({ spreadsheet: gas.sandbox.SpreadsheetApp.getActiveSpreadsheet().getName(), tabs: out }));
   }
 
   /* 逃生門（v2.6.2）：直接叫後端嘅 cleanStaleStaging()，

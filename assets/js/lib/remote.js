@@ -516,7 +516,15 @@ export async function remoteDiagnose() {
     add('status', '後端回應', 'bad', '連到，但後端回報唔到版本號 —— 仲行緊 v2.2.0 之前嘅舊 Code.gs',
       '去下面「後端 Apps Script 範本」撳「下載 Code.gs」→ 貼入 Apps Script → 部署 →「管理部署作業 → 編輯 → 版本：新版本 → 部署」（網址唔會變）。舊版後端症狀正正係：兩邊視窗對唔到料、無痕視窗讀唔到、團章公開頁睇唔到。');
   } else {
-    add('status', '後端回應', 'ok', `已連接（後端 ${ver}，經${st.via === 'direct' ? '你自己貼嘅 /exec' : '平台代理'}）`);
+    /* ★ 顯示後端自報嘅 Spreadsheet 名 —— 團長問「如果真係寫入咗，寫咗去邊？」
+       呢個名先至答得到：平台登記咗嘅 TROOP_<編號>_BACKEND 有可能指去
+       另一張 Sheet（例如舊嘅測試表），咁樣 app 讀寫都正常，
+       但團長開自己嗰張就係一片空白 —— 一睇個名即刻知道。 */
+    const sheetName = String(st.spreadsheet || '').trim();
+    add('status', '後端回應', 'ok',
+      `已連接（後端 ${ver}，經${st.via === 'direct' ? '你自己貼嘅 /exec' : '平台代理'}）`
+      + (sheetName ? `　·　寫入緊嘅試算表：「${sheetName}」` : '')
+      + (sheetName ? '（如果你開緊嘅 Google Sheet 唔係呢個名，即係平台登記咗另一張表 —— 搵平台管理員改 TROOP_<編號>_BACKEND）' : ''));
   }
 
   /* ⑤ 讀寫權（dbInfo 同 saveDb 一樣要 API Key —— 過到就代表寫得入） */
