@@ -116,9 +116,14 @@ async function callBackend(payload, { timeoutMs = 60000 } = {}) {
     unit: cfg.unit, execUrl: cfg.url, apiKey: cfg.apiKey, timeoutMs
   });
 
-  /* 兩條路都冇得行：講清楚係「平台未登記」定「自己都未填」 */
+  /* 兩條路都冇得行：講清楚係「平台未登記」定「自己都未填」。
+     兩種都要有 hint —— 以前 not_configured 呢種回空 hint，
+     用家淨係見到「未設定後端網址」五個字，完全唔知下一步做乜。 */
   if (r.via === 'none') {
-    return { ok: false, reason: r.reason, error: r.error, hint: r.reason === 'not_registered' ? SELF_SERVE_HINT : '' };
+    return {
+      ok: false, reason: r.reason, error: r.error,
+      hint: r.reason === 'not_registered' ? SELF_SERVE_HINT : NO_ROUTE_HINT
+    };
   }
   if (!r.json) {
     return { ok: false, reason: r.reason || 'network', error: r.error || '連唔到旅團後端', hint: r.reason === 'bad_url' ? URL_HINT : '' };
@@ -137,6 +142,15 @@ const SELF_SERVE_HINT =
   + '② 自己即刻救返 —— 去「帳號與系統 → 資料管理 → 總表同步 → 同步設定」，'
   + '貼你嘅 Apps Script /exec 網址＋API Key（喺 Apps Script 執行 showApiKey() 攞），撳「儲存設定」，'
   + '然後撳「同步診斷」確認。';
+
+/* 兩條路都行唔到：呢個部署根本冇 /api/proxy（純靜態），而用家又未貼 /exec。
+   呢種情況以前只回「未設定後端網址」五個字、冇 hint —— 用家完全唔知下一步。 */
+const NO_ROUTE_HINT =
+  '呢個部署讀唔到同源代理（/api/proxy），而你自己都未貼 /exec，所以兩條路都行唔到。'
+  + '兩個選擇：① 用正式部署（有 /api 嗰個），並確認平台管理員喺 Vercel 設咗 '
+  + 'TROOP_<旅團編號>_BACKEND / _APIKEY；② 即刻自救 —— 去「帳號與系統 → 資料管理 → '
+  + '總表同步 → 同步設定」，貼你嘅 Apps Script /exec 網址＋API Key'
+  + '（喺 Apps Script 執行 showApiKey() 攞），撳「儲存設定」。';
 
 const URL_HINT =
   '後端網址一定要係 Apps Script「部署為網頁應用程式」之後嘅正式網址：'
@@ -670,6 +684,68 @@ export async function ensureFresh({ maxAgeMs = 60000 } = {}) {
     return { ok: true, fresh: false, upToDate: true };
   }
   return loadFromBackend();
+}
+
+/* ============================================================
+   ★ 登入硬閘（2026-09-20 團長定案）
+   ------------------------------------------------------------
+   團長原話：「由首頁登入旅團嗰頁，入到係正常嘅，因為喺 Vercel 登記咗；
+   但能登入旅團內嘅主控頁就唔應該，因為嗰個係應該要帳戶同密碼同後端
+   對上先至能進。既然都同後端對咗帳戶密碼，點可能入去之後話冇連上後端？」
+
+   佢講得啱。以前 `login()` 係**純本機運算**（auth.js 成個函數零網絡請求）：
+   佢只喺 localStorage 嘅 accounts[] 搵個 username，再比對一個隨 JS 一齊
+   公開咗嘅 hash。而 accounts[] 就算後端一個字都讀唔返都會有 ——
+   store.js 開機時 accounts 一空就塞 SEED_ACCOUNTS（leader／exco，defaultPw）。
+   所以「登入成功」從來只代表「呢部機有一份帳戶名單」，同後端零關係。
+
+   而家：後端答唔到 → 一律唔准入主控頁。
+   ============================================================ */
+
+/**
+ * 登入前嘅硬核對。**一定要真係聯絡到後端**先至回 ok:true。
+ *
+ * ⚠️ 呢度刻意**唔用** `ensureFresh()`：佢喺「本機有未存改動」嗰陣會
+ *    `return { ok:true, skipped:'pending' }` —— 完全冇聯絡後端。
+ *    攞佢做登入閘等於冇核對過（2026-09-20 事故嘅其中一個隱藏版）。
+ *
+ * @returns {Promise<{ok:boolean, mock?:boolean, version?:string, at?:string,
+ *                    empty?:boolean, accounts?:number, error?:string,
+ *                    reason?:string, hint?:string}>}
+ */
+export async function requireBackendForLogin() {
+  if (isMock()) return { ok: true, mock: true };
+  const cfg = remoteCfg();
+  if (!cfg.ok) {
+    return {
+      ok: false, reason: 'not_configured',
+      error: '未有後端設定 —— 帳戶冇辦法同後端核對，所以唔可以入主控頁',
+      hint: cfg.viaProxy
+        ? `平台伺服器端未登記呢個旅團（TROOP_${cfg.unit || '<編號>'}_BACKEND / _APIKEY）。`
+          + '交畀平台管理員喺 Vercel 加返再 Redeploy；或者你自己去「總表同步 → 同步設定」貼 /exec ＋ API Key。'
+        : '去「總表同步 → 同步設定」貼你嘅 Apps Script /exec 網址（＋ API Key）。'
+    };
+  }
+  setState('loading', '登入前同後端核對帳戶…');
+  const r = await loadFromBackend();
+  if (!r.ok) {
+    setState('unreachable', r.error || '連唔到後端');
+    return {
+      ok: false, reason: r.reason || 'network',
+      error: r.error || '連唔到旅團後端 —— 帳戶無法核對，登入已封鎖',
+      hint: r.hint || ''
+    };
+  }
+  const acc = (tryLoad()?.accounts || []).filter(a => a?.active !== false);
+  return {
+    ok: true,
+    version: String(r.version || ''),
+    at: String(r.at || ''),
+    /* found:false ＝ 後端真係仲未有資料庫（新旅團第一次設定）——
+       呢種情況先至允許用本機種子帳戶，而且界面要講清楚。 */
+    empty: r.found === false,
+    accounts: acc.length
+  };
 }
 
 /** 「由後端重新載入」：**丟棄**本機未儲存改動，成份用返後端（介面要先確認） */

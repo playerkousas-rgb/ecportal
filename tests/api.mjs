@@ -165,5 +165,119 @@ ok('unitsHandler 回傳 units 物件', !!resJson?.units?.TEST9);
   globalThis.fetch = realFetch;
 }
 
+/* ============================================================
+   4. api/auth.js —— 超管核對搬上伺服器端（2026-09-20）
+   ------------------------------------------------------------
+   以前 auth.js 寫死咗 hash ＋ 一條 `|| p === '0728'` 後門，
+   兩樣都隨 JS 一齊送到瀏覽器，而 repo 係 public。
+   而家：核對喺伺服器端做，密碼只存喺 Vercel env。
+   ============================================================ */
+console.log('\n▌超管核對（api/auth.js：環境變數、fail closed、token）');
+{
+  const crypto = await import('node:crypto');
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const authHandler = (await import('../api/auth.js')).default;
+  const { verifySuperToken } = await import('../api/auth.js');
+
+  const res4 = () => {
+    const r = { statusCode: 0, headers: {}, body: null };
+    r.setHeader = (k, v) => { r.headers[k] = v; return r; };
+    r.status = (s) => { r.statusCode = s; return r; };
+    r.json = (o) => { r.body = o; return r; };
+    return r;
+  };
+  const realLog = console.log;
+  const call = async (body, method = 'POST') => {
+    const r = res4();
+    console.log = () => {};
+    try { await authHandler({ method, body }, r); } finally { console.log = realLog; }
+    return r;
+  };
+
+  const PW = 'test-super-pw-2026';
+  const SALT = 'v82:super';
+  const HASH = crypto.createHash('sha256').update(`${SALT}::${PW}`).digest('hex');
+
+  /* ---- 原始碼守門：前端唔可以再有任何超管秘密 ---- */
+  const authSrc = fs.readFileSync(path.join(ROOT, 'assets/js/lib/auth.js'), 'utf8');
+  /* 注意：唔好斷言「冇 `|| p ===`」—— `|| p === TEMP_PASSWORD` 係正常嘅
+     「初始密碼要強制改」邏輯。要斷言嘅係「冇寫死嘅超管明文密碼」。 */
+  ok('★ auth.js 已經冇寫死嘅後門密碼', !/'0728'/.test(authSrc));
+  ok('★ auth.js 冇任何明文密碼直接同 SUPER 比對',
+    !/SUPER\.username[\s\S]{0,80}===\s*'[0-9A-Za-z]{3,}'/.test(authSrc.replace(/\/\*[\s\S]*?\*\//g, '')));
+  ok('★ auth.js 已經冇寫死嘅超管 hash', !/652debbfdc29dd091325028855c281a08a50f91fcd0eb269444ff4eb5338645e/.test(authSrc));
+  ok('★ auth.js 冇任何 salt／hash 欄位留低', !/SUPER\s*=\s*\{[^}]*\b(salt|hash)\b/s.test(authSrc));
+  ok('auth.js 改為叫伺服器端核對', /fetch\('api\/auth'/.test(authSrc) && /verifySuperServer/.test(authSrc));
+  ok('成個前端都搵唔到超管密碼', (() => {
+    const files = [];
+    const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).forEach(e => {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p); else if (/\.js$/.test(e.name)) files.push(p);
+    });
+    walk(path.join(ROOT, 'assets'));
+    return !files.some(f => /'0728'/.test(fs.readFileSync(f, 'utf8')));
+  })());
+
+  /* ---- fail closed：環境變數冇設 → 成條路關閉 ---- */
+  delete process.env.SUPER_ADMIN_HASH;
+  delete process.env.SESSION_SECRET;
+  const off = await call({ user: 'sheep', password: PW });
+  ok('★ 未設 SUPER_ADMIN_HASH → 503 ＋ disabled（fail closed，唔會靜靜地放行）',
+    off.statusCode === 503 && off.body?.disabled === true && off.body?.ok === false, JSON.stringify(off.body));
+  ok('關閉嗰陣嘅提示教管理員點做', /SUPER_ADMIN_HASH/.test(String(off.body?.hint || '')));
+
+  process.env.SUPER_ADMIN_HASH = HASH;
+  const noSecret = await call({ user: 'sheep', password: PW });
+  ok('★ 有 hash 但未設 SESSION_SECRET → 一樣 503（簽唔到憑證就唔登入）',
+    noSecret.statusCode === 503 && noSecret.body?.disabled === true, JSON.stringify(noSecret.body));
+  process.env.SESSION_SECRET = 'test-secret-32-bytes-not-production';
+
+  /* ---- 正常核對 ---- */
+  const good = await call({ user: 'sheep', password: PW });
+  ok('密碼啱 → 200 ＋ 簽發 token', good.statusCode === 200 && good.body?.ok === true && !!good.body?.token,
+    JSON.stringify(good.body));
+  ok('★ 回應唔會洩漏密碼／hash／salt',
+    !JSON.stringify(good.body).includes(PW) && !JSON.stringify(good.body).includes(HASH)
+    && !JSON.stringify(good.body).includes(SALT), JSON.stringify(good.body));
+  ok('token 有到期時間（8 小時後）',
+    Number(good.body?.exp) > Date.now() + 7 * 3600 * 1000, String(good.body?.exp));
+  ok('verifySuperToken 驗到自己簽嘅 token', verifySuperToken(good.body?.token).ok === true);
+
+  const bad = await call({ user: 'sheep', password: 'wrong-password' });
+  ok('密碼錯 → 401', bad.statusCode === 401 && bad.body?.ok === false, JSON.stringify(bad.body));
+  ok('密碼錯嘅錯誤訊息唔會話你知係「用戶名啱但密碼錯」',
+    /帳號或密碼不正確/.test(String(bad.body?.error || '')), String(bad.body?.error));
+
+  const wrongUser = await call({ user: 'not-sheep', password: PW });
+  ok('用戶名錯 → 401（同一句訊息，唔會確認邊個 username 存在）',
+    wrongUser.statusCode === 401 && String(wrongUser.body?.error) === String(bad.body?.error));
+
+  /* token 篡改／過期 */
+  const t = String(good.body?.token || '');
+  const [exp0, sig0] = t.split('.');
+  ok('篡改簽名 → 驗唔到', verifySuperToken(`${exp0}.${'0'.repeat(64)}`).ok === false);
+  ok('改到期時間（唔重新簽）→ 驗唔到',
+    verifySuperToken(`${Date.now() + 999999999}.${sig0}`).ok === false);
+  ok('過期 token → 驗唔到', verifySuperToken(`${Date.now() - 1000}.${sig0}`).reason === 'expired'
+    || verifySuperToken(`${Date.now() - 1000}.${sig0}`).ok === false);
+  ok('垃圾字串 → 驗唔到', verifySuperToken('garbage').ok === false);
+  ok('空 token → 驗唔到', verifySuperToken('').ok === false);
+
+  /* SESSION_SECRET 換咗 → 舊 token 即刻失效（可以一鍵踢走所有人） */
+  process.env.SESSION_SECRET = 'a-completely-different-secret-value';
+  ok('換咗 SESSION_SECRET → 舊 token 即刻失效（緊急踢人用）', verifySuperToken(t).ok === false);
+  process.env.SESSION_SECRET = 'test-secret-32-bytes-not-production';
+
+  ok('GET 唔接受（只接受 POST）', (await call({}, 'GET')).statusCode === 405);
+
+  delete process.env.SUPER_ADMIN_HASH;
+  delete process.env.SESSION_SECRET;
+  delete process.env.SUPER_ADMIN_USER;
+  delete process.env.SUPER_ADMIN_SALT;
+}
+
 console.log(`\n──────── API 測試結果：${pass} 通過 / ${fail} 失敗 ────────`);
 process.exit(fail ? 1 : 0);

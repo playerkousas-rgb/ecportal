@@ -27,6 +27,12 @@ function ok(name, cond, extra = '') {
 }
 function section(t) { console.log('\n▌' + t); }
 
+/** 剝走註釋先至做原始碼斷言 —— 否則「呢度以前係 XXX」呢類歷史註解
+    會令「XXX 已經冇咗」嘅斷言假紅燈（2026-09-20 撞到）。 */
+function stripComments(src) {
+  return String(src).replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+}
+
 const GAS = 'https://script.google.com/macros/s/AKfycbySGLBg5KuWzgM9EySiOIppqnzrL0QASIYLlhbCIHocGHcLHKbkMdvmhJvam3baG___/exec';
 
 function mockRes() {
@@ -531,7 +537,12 @@ section('只有一個儲存方式（原始碼守門：冇自動寫、冇 poll、
     && /export function setLocalMerged/.test(storeSrc) && /export function commitSaved/.test(storeSrc));
   ok('main.js 右上角：有未存嘢 → 「儲存到後端（N）」；否則「重新載入」', /儲存到後端/.test(mainSrc) && /重新載入/.test(mainSrc) && /syncActBtn/.test(mainSrc));
   ok('main.js 開機**等**後端載入完先出登入頁（await syncBoot）', /await syncBoot\(\)/.test(mainSrc));
-  ok('main.js 登入前 ensureFresh（登入嗰一刻 ＝ 後端嗰一刻）', /ensureFresh\(/.test(mainSrc) && /freshenBeforeLogin/.test(mainSrc));
+  /* 2026-09-20 改：以前呢度係 `freshenBeforeLogin()`（ensureFresh，「連唔到都照登入」）。
+     團長質疑「既然都同後端對咗帳戶密碼，點可能入去之後話冇連上後端」之後，
+     改成硬閘 —— 後端答唔到就唔准入。所以呢條斷言要跟著改。 */
+  ok('main.js 登入前硬性核對後端（登入嗰一刻 ＝ 後端嗰一刻，核對唔到就唔入）',
+    /gateLoginOnBackend\(\)/.test(mainSrc) && /requireBackendForLogin/.test(mainSrc)
+    && !/freshenBeforeLogin\(\)/.test(stripComments(mainSrc)));
   ok('main.js 登出會再由後端攞一次', /async function doLogout[\s\S]*?await syncBoot\(\)/.test(mainSrc));
   ok('main.js 冇 poll／visibility／arm／checkRemote', !/startPolling|startVisibilityWatch|\.arm\(\)|checkRemote|reconcile\(/.test(mainSrc));
   ok('beforeunload 只提醒、唔寫後端', /beforeunload/.test(mainSrc) && !/flush\(\)/.test(mainSrc));
@@ -1486,6 +1497,115 @@ section('v2.6.0：大資料庫分段讀取（兩邊視窗對得到料）');
   ok('分段讀返 → 呢格唔係 bad（資料讀得到，只係要提示瘦身）', dbread?.state !== 'bad', String(dbread?.state));
 
   globalThis.fetch = memFetch;
+}
+
+/* ============================================================
+   ⑰ ★ 登入硬閘（2026-09-20 團長定案）
+   ------------------------------------------------------------
+   團長原話：「既然都同後端對咗帳戶密碼，點可能入去之後話冇連上後端，
+   那剛才是登入那？」—— 答案係：根本冇對過。`login()` 係純本機比對，
+   帳戶名單就算後端一個字都讀唔返都會有（store.js 一見 accounts 空就塞
+   SEED_ACCOUNTS）。所以「登入成功」只代表「呢部機有一份帳戶名單」。
+   而家：後端答唔到 → 一律唔准入主控頁。
+   ============================================================ */
+section('★ 登入硬閘：後端答唔到就唔准入主控頁');
+{
+  const { JSDOM } = await import('jsdom');
+  const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost:8080/?u=0082', pretendToBeVisual: true });
+  const { window } = dom;
+  for (const k of ['window', 'document', 'navigator', 'localStorage', 'location', 'HTMLElement',
+    'CustomEvent', 'Event', 'Node', 'getComputedStyle', 'URL', 'URLSearchParams']) {
+    try { Object.defineProperty(globalThis, k, { value: window[k], configurable: true, writable: true }); } catch { /* 唯讀 */ }
+  }
+  globalThis.window = window;
+
+  const store2 = await import('../assets/js/lib/store.js?gate=1');
+  await store2.init({ mode: 'real', unit: '0082' });
+  const remote2 = await import('../assets/js/lib/remote.js?gate=1');
+  const mainSrc = fs.readFileSync(path.join(ROOT, 'assets', 'js', 'main.js'), 'utf8');
+
+  ok('remote.js 有 requireBackendForLogin（登入硬閘）', typeof remote2.requireBackendForLogin === 'function');
+
+  let hits = [];
+  const memFetch2 = globalThis.fetch;
+  let mode = 'ok';
+  globalThis.fetch = async (url, init = {}) => {
+    const clean = String(url).split('?')[0].replace(/^\.?\//, '');
+    if (clean !== 'api/proxy') return { ok: false, status: 404, text: async () => '404' };
+    const body = JSON.parse(init.body || '{}');
+    hits.push(body.action);
+    if (mode === 'down') return { ok: false, status: 500, text: async () => 'FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE' };
+    if (body.action === 'dbInfo') {
+      return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, found: true, bytes: 200, version: 'V-GATE' }) };
+    }
+    if (body.action === 'loadDb') {
+      return {
+        ok: true, status: 200,
+        text: async () => JSON.stringify({
+          ok: true, found: true, version: 'V-GATE', at: '2026-09-20T00:00:00.000Z', bytes: 200,
+          db: { schema: 2, unitCode: '0082', members: [], transactions: [], accounts: [{ id: 'a1', username: 'leader', role: 'leader', name: '團領袖' }] }
+        })
+      };
+    }
+    return { ok: false, status: 400, text: async () => JSON.stringify({ ok: false, error: '不支援的操作' }) };
+  };
+
+  /* 後端正常 → 准登入，而且要回返後端嘅版本／帳戶數 */
+  hits = []; mode = 'ok';
+  const g1 = await remote2.requireBackendForLogin();
+  ok('★ 後端答得到 → 准登入', g1.ok === true, JSON.stringify(g1).slice(0, 160));
+  ok('准登入嗰陣回返後端版本（界面可以顯示「同後端 v… 核對過」）', g1.version === 'V-GATE', String(g1.version));
+  ok('准登入嗰陣回返帳戶數（後端讀返嚟嘅，唔係種子）', Number(g1.accounts) >= 1, String(g1.accounts));
+  ok('後端有資料庫 → empty:false', g1.empty === false);
+  ok('真係打咗後端（唔係淨係睇本機）', hits.length > 0, hits.join(','));
+
+  /* ★ 最關鍵：本機有未存改動都唔可以「唔使問後端就放行」 */
+  const dbG = store2.load();
+  dbG.members = [{ id: 'zx', name: '未存嘅團員' }];
+  dbG.sync = { ...(dbG.sync || {}), pending: 3 };
+  store2.commitMeta?.();
+  hits = []; mode = 'down';
+  const g2 = await remote2.requireBackendForLogin();
+  ok('★ 後端答唔到 → 唔准登入（唔會因為「本機有未存改動」就放行）',
+    g2.ok === false, JSON.stringify(g2).slice(0, 200));
+  ok('★ 呢種情況**唔會**講「未設定後端網址」（後端明明有登記）',
+    !/未設定後端/.test(String(g2.error || '')) && g2.reason !== 'not_configured',
+    `${g2.reason} / ${String(g2.error || '').slice(0, 80)}`);
+  ok('封鎖原因如實講出後端嘅問題（唔係含糊嘅「同步失敗」）',
+    String(g2.error || '').length > 10, String(g2.error || '').slice(0, 100));
+  ok('★ main.js 會喺原因前面加「登入已封鎖」（用家唔會以為係密碼錯）',
+    /function gateMessage/.test(mainSrc) && /登入已封鎖/.test(mainSrc));
+
+  /* 真係未設定後端（冇 proxy 又冇 /exec）→ 明確講「未有後端設定」，唔好扮「密碼錯」 */
+  mode = 'ok';
+  const notCfg = await (async () => {
+    const memF = globalThis.fetch;
+    globalThis.fetch = async () => ({ ok: false, status: 404, text: async () => '<h1>404</h1>' });
+    const r = await remote2.requireBackendForLogin();
+    globalThis.fetch = memF;
+    return r;
+  })();
+  ok('純靜態部署（冇 /api）→ reason=not_configured，提示教人點接線',
+    notCfg.ok === false && /後端設定|TROOP_|\/exec/.test(String(notCfg.error || '') + String(notCfg.hint || '')),
+    JSON.stringify(notCfg).slice(0, 200));
+
+  globalThis.fetch = memFetch2;
+
+  /* main.js 真係把硬閘接咗入兩個登入表單 */
+  ok('★ main.js 執委／領袖登入表單有行硬閘', /gateLoginOnBackend\(\)/.test(mainSrc)
+    && (mainSrc.match(/gateLoginOnBackend\(\)/g) || []).length >= 3,
+    'count=' + (mainSrc.match(/gateLoginOnBackend\(\)/g) || []).length);
+  ok('★ 硬閘失敗會 return（唔會繼續行 login()）',
+    /if \(!gate\.ok\) \{[\s\S]{0,400}?return;/.test(mainSrc));
+  ok('★ 舊嗰條「連唔到都照登入」嘅 freshenBeforeLogin 已經冇咗（淨低嘅只係歷史註解）',
+    !/freshenBeforeLogin/.test(stripComments(mainSrc)));
+  ok('登入頁橫額講明「登入已封鎖」（唔係淨係警告）',
+    /登入已封鎖/.test(mainSrc));
+  ok('登入頁會顯示帳戶來源（答團長「咁啱先係登入咗乜」）',
+    /帳戶來源/.test(mainSrc));
+  ok('硬閘唔會用 ensureFresh（佢喺有 pending 嗰陣會唔使問後端就回 ok）',
+    !/ensureFresh/.test(fs.readFileSync(path.join(ROOT, 'assets/js/lib/remote.js'), 'utf8')
+      .slice(fs.readFileSync(path.join(ROOT, 'assets/js/lib/remote.js'), 'utf8').indexOf('requireBackendForLogin'))));
 }
 
 console.log(`\n──────── 後端儲存測試結果：${pass} 通過 / ${fail} 失敗（${Date.now() - t0} ms）────────\n`);

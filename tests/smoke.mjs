@@ -33,6 +33,11 @@ globalThis.fetch = async (url) => {
   return { ok: true, status: 200, text: async () => text, json: async () => JSON.parse(text) };
 };
 
+/* 超管核對而家喺伺服器端（api/auth.js）—— 裝返個「有設環境變數嘅伺服器」，
+   行嘅係真 handler，唔係假嘢（見 tests/_authstub.mjs）。 */
+const { installSuperAuth } = await import('./_authstub.mjs');
+installSuperAuth();
+
 /* ---------- DOM ---------- */
 const url = MODE === 'mock' ? 'http://localhost:8080/?mock=1&u=MOCK' : 'http://localhost:8080/?u=0082';
 const dom = new JSDOM('<!doctype html><html><body class="login-body"><div id="app"></div></body></html>', {

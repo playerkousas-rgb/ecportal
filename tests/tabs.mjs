@@ -49,6 +49,10 @@ globalThis.fetch = async (url) => {
   return { ok: true, status: 200, text: async () => text, json: async () => JSON.parse(text) };
 };
 
+/* 超管核對而家喺伺服器端（api/auth.js）—— 裝返個有設環境變數嘅「伺服器」 */
+const { installSuperAuth } = await import('./_authstub.mjs');
+installSuperAuth();
+
 /* ---------- DOM ---------- */
 const dom = new JSDOM('<!doctype html><html><body class="login-body"><div id="app"></div></body></html>', {
   url: 'http://localhost:8080/?u=0082', pretendToBeVisual: true, runScripts: 'dangerously'

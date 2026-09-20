@@ -54,6 +54,11 @@ globalThis.fetch = async (url) => {
   return { ok: true, status: 200, text: async () => text, json: async () => JSON.parse(text) };
 };
 
+/* 超管核對而家喺伺服器端（api/auth.js）—— 裝返個有設環境變數嘅「伺服器」。
+   注意：上面個 shim 對所有 api/* 一律回 404，installSuperAuth 會先截 api/auth。 */
+const { installSuperAuth } = await import('./_authstub.mjs');
+installSuperAuth();
+
 /* ---------- DOM ---------- */
 const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
 const dom = new JSDOM(html, { url: URL_BASE, pretendToBeVisual: true, runScripts: 'dangerously', virtualConsole: vc });
