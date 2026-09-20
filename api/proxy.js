@@ -19,7 +19,13 @@ const UPSTREAM_TIMEOUT_MS = (() => {
   if (Number.isNaN(v)) return 45000;
   return Math.max(1000, Math.min(55000, v));
 })();
-const MAX_DATA_BYTES = 4 * 1024 * 1024; // 單次請求上限 4MB
+/* 單次請求上限 4MB —— 留水位畀 Vercel 自己嘅 4.5MB 請求上限。
+   呢個上限**一體適用**：saveDb／saveDbPart／sync 夾帶成份資料庫、
+   uploadPhotos 夾帶相片 base64，都係同一條 4MB 線。
+   （以前呢度有個 BIG_BODY_ACTIONS 集合諗住「大 action 放寬啲」，
+    但 readRawBody 喺未 parse 之前根本未知 action 係乜，
+    所以嗰個集合由頭到尾冇被讀過 —— 死碼，已刪。） */
+const MAX_DATA_BYTES = 4 * 1024 * 1024;
 
 // 中央管理員收件匣（新旅團接入申請）—— 目的地係伺服器端常數，前端改唔到。
 // 呢個收件匣同 VSBADGE 共用（用 appType 分辨：82venture / vsbadge）。
@@ -31,8 +37,16 @@ const SCOUT_ADMIN_API = process.env.SCOUT_ADMIN_API ||
 const ALLOWED_ACTIONS = new Set([
   'ping', 'status', 'test', 'sync', 'claim', 'loan', 'noticeSignup',
   /* 整份資料庫讀／寫 —— app 嘅真正儲存（換機／清 cache 都唔會冇咗）。
-     saveDbPart／saveDbCommit ＝ v2.4.0 分件儲存（大資料庫拆件上，冇硬天花板） */
-  'saveDb', 'loadDb', 'dbInfo', 'verifySetupKey', 'saveDbPart', 'saveDbCommit',
+     saveDbPart／saveDbCommit ＝ v2.4.0 分件儲存（大資料庫拆件上，冇硬天花板）
+     loadDbPart            ＝ v2.6.0 分段讀取（大資料庫分段落，唔會撞 Vercel 4.5MB 回應上限） */
+  'saveDb', 'loadDb', 'loadDbPart', 'dbInfo', 'verifySetupKey', 'saveDbPart', 'saveDbCommit',
+  /* 單據相片直上 Drive（v2.3.0 體積治理）—— db 入面只留連結。
+     ★ 2026-09-20 事故：呢個 action 一直漏咗喺白名單，代理一律回 400
+     「不支援的操作」，前端 finance.js 於是跌返落「本地存做後備」，
+     每張單據相都以 base64 dataURL 寫入 db.claims[].photos[].dataUrl，
+     把「資料庫」分頁撐過 4.5MB → loadDb 回應過大 → 所有裝置讀唔返後端
+     → 「無痕同普通視窗對唔到料」。scripts/lint.mjs 而家會擋住再漏。 */
+  'uploadPhotos',
   /* 公開通告：免登入讀旅團自己後端嘅「通告全文」（只回已發布） */
   'notices',
   /* 公開團章（v2.5.0）：免登入讀旅團後端「資料庫」入面已發布嘅 constitution */
@@ -40,8 +54,8 @@ const ALLOWED_ACTIONS = new Set([
   'submitRegistration'
 ]);
 
-/* 呢啲 action 會夾帶資料庫（成份或者其中一件）上去，body 可以幾 MB —— 唔可以當普通 action 咁限死 */
-const BIG_BODY_ACTIONS = new Set(['saveDb', 'sync', 'saveDbPart', 'saveDbCommit']);
+/* 呢啲 action 會夾帶資料庫／相片 base64 上去，body 可以幾 MB ——
+   全部一律行上面同一條 4MB 線（見 MAX_DATA_BYTES 註解）。 */
 
 function sendJson(res, status, obj) {
   res.setHeader('Cache-Control', 'no-store');

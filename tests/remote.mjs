@@ -96,8 +96,21 @@ section('Apps Script 範本（Code.gs）');
   ok('有 saveDb（寫入整份資料庫）', /function saveDb\(body\)/.test(code));
   ok('有 loadDb（讀返整份資料庫）', /function loadDb\(unit\)/.test(code));
   ok('有 dbInfo（只問 meta，唔使拉成份落嚟）', /function dbInfo\(unit\)/.test(code));
-  ok('doPost 有處理 saveDb / loadDb / dbInfo',
-    /body\.action === 'saveDb' \|\| body\.action === 'loadDb' \|\| body\.action === 'dbInfo'/.test(code));
+  /* 唔好斷言成句嘅寫法（加一個 action 就會假紅燈）—— 逐個 action 驗有冇處理 */
+  ['saveDb', 'loadDb', 'loadDbPart', 'dbInfo', 'saveDbPart', 'saveDbCommit'].forEach(a => {
+    ok(`doPost 有處理 ${a}`, code.includes(`body.action === '${a}'`));
+  });
+  ok('有 loadDbPart（v2.6.0 分段讀取：大過 Vercel 4.5MB 都讀得返）', /function loadDbPart\(unit, partIdx\)/.test(code));
+  /* 兩條讀法一定要共用同一個 dbRawText —— 否則「大資料庫分段讀返」
+     可能同「一次過讀返」唔同，咁樣靜靜地讀到另一份資料，比讀唔到更危險。 */
+  ok('有 dbRawText（loadDb／loadDbPart 共用嘅唯一讀法）', /function dbRawText\(unit\)/.test(code));
+  ok('loadDb 同 loadDbPart 都經 dbRawText（啱啱兩處呼叫）',
+    (code.match(/= dbRawText\(unit\)/g) || []).length === 2,
+    'count=' + (code.match(/= dbRawText\(unit\)/g) || []).length);
+  const loadDbBody = code.slice(code.indexOf('function loadDb(unit)'), code.indexOf('function loadDbPart'));
+  ok('loadDb 唔再自己讀「資料庫」分頁（一定經 dbRawText）', !/getDataRange/.test(loadDbBody));
+  ok('每段大小留足水位（1MB ≪ Vercel 4.5MB 回應上限）', /var LOAD_PART_CHARS = 1000000;/.test(code));
+  ok('後端版本號係 v2.6.0', /\*  版本：v2\.6\.0/.test(code));
   ok('doGet 都讀得（換機時用瀏覽器直接開都拎得返）', /action === 'loadDb' \|\| action === 'dbInfo'/.test(code));
   ok('寫入用 LockService 包住（兩個執委同時改都唔會爛）',
     /withLock\(function \(\) \{ return saveDb\(body\); \}\)/.test(code));
@@ -1264,6 +1277,215 @@ section('分件儲存：舊後端（未部署 v2.4.0）會退返單件路');
     procs.forEach(p => { try { p.kill('SIGKILL'); } catch { /* ignore */ } });
     try { stub.close(); } catch { /* ignore */ }
   }
+}
+
+/* ============================================================
+   ⑯ v2.6.0：大過 4.5MB 都讀得返（分段讀取）
+   ------------------------------------------------------------
+   2026-09-20 團長回報：「無痕同普通視窗對唔到料；登入之後仲話我冇後端。」
+   死因鏈（每一環都喺呢度驗一次）：
+     ① 單據相片「直上 Drive」嘅 uploadPhotos 漏咗喺代理白名單 → 代理回 400
+        → finance.js 跌返落「本地存做後備」→ 每張相以 base64 寫入 db
+        → 資料庫脹大過 4.5MB
+     ② Vercel 代理單一回應上限 4.5MB → loadDb 回 500 純文字
+        → 前端當「唔係 JSON」→ 誤判「呢個部署冇 /api」→ 跌落自助路線
+        → 對用家講「未設定後端網址」（明明後端登記得好哋）
+     ③ 每部機讀唔到後端 → 各自儲存自己嗰份 → 兩邊永遠對唔到料
+   ============================================================ */
+section('v2.6.0：大資料庫分段讀取（兩邊視窗對得到料）');
+{
+  /* ---- ① 代理白名單：uploadPhotos／loadDbPart 一定要放行 ---- */
+  const calls = [];
+  const memFetch0 = globalThis.fetch;
+  globalThis.fetch = async (target, init = {}) => {
+    const body = init.body ? JSON.parse(init.body) : null;
+    calls.push({ target: String(target), action: body?.action });
+    if (body?.action === 'uploadPhotos') {
+      return { status: 200, async text() { return JSON.stringify({ ok: true, links: ['https://drive.google.com/x'], saved: 1 }); } };
+    }
+    return { status: 200, async text() { return JSON.stringify({ ok: true, success: true, part: '{}', parts: 1, partIdx: 0, bytes: 2 }); } };
+  };
+  process.env.TROOP_TEST9_BACKEND = GAS;
+  process.env.TROOP_TEST9_APIKEY = 'test9_secret_key';
+  const callProxy = async (payload) => { const res = mockRes(); await proxyHandler({ method: 'POST', body: payload }, res); return res; };
+
+  const upRes = await callProxy({ action: 'uploadPhotos', unit: 'TEST9', payload: { id: 'c1', photos: [{ name: 'a.jpg', dataUrl: 'data:image/jpeg;base64,AAA' }] } });
+  ok('★ 代理放行 uploadPhotos（單據相片直上 Drive）—— 唔會再回「不支援的操作」',
+    upRes.statusCode === 200 && upRes.body?.ok === true, JSON.stringify(upRes.body).slice(0, 160));
+  ok('uploadPhotos 真係轉發咗去旅團後端', calls.some(c => c.action === 'uploadPhotos'), JSON.stringify(calls.map(c => c.action)));
+
+  const lpRes = await callProxy({ action: 'loadDbPart', unit: 'TEST9', partIdx: 0 });
+  ok('★ 代理放行 loadDbPart（分段讀取）',
+    lpRes.statusCode === 200 && lpRes.body?.ok === true, JSON.stringify(lpRes.body).slice(0, 160));
+
+  const badRes = await callProxy({ action: 'definitely_not_an_action', unit: 'TEST9' });
+  ok('白名單以外嘅 action 照樣擋住（冇因為今次放寬咗安全性）',
+    badRes.statusCode === 400 && /不支援的操作/.test(String(badRes.body?.error || '')));
+  globalThis.fetch = memFetch0;
+
+  /* ---- ② 前端：分段讀返成份資料庫 ---- */
+  const { JSDOM } = await import('jsdom');
+  const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost:8080/', pretendToBeVisual: true });
+  const { window } = dom;
+  for (const k of ['window', 'document', 'navigator', 'localStorage', 'location', 'HTMLElement',
+    'CustomEvent', 'Event', 'Node', 'getComputedStyle', 'URL', 'URLSearchParams']) {
+    try { Object.defineProperty(globalThis, k, { value: window[k], configurable: true, writable: true }); } catch { /* 唯讀 */ }
+  }
+  globalThis.window = window;
+
+  /* 一份 5MB 嘅資料庫（大過 Vercel 4.5MB 回應上限） */
+  const bigDb = { schema: 2, unitCode: '0082', members: [{ id: 'm1', name: '陳大文' }], blob: 'z'.repeat(5_000_000) };
+  const bigText = JSON.stringify(bigDb);
+  const PART = 1_000_000;
+  const VERSION = '2026-09-20T00:00:00.000Z-12345';
+
+  const store = await import('../assets/js/lib/store.js?seg=1');
+  await store.init({ mode: 'real', unit: '0082' });
+
+  let asked = [];
+  let mode = 'segmented';        // 'segmented' | 'loadDb_too_large' | 'old_backend' | 'drift'
+  let driftOnce = false;
+  const memFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const clean = String(url).split('?')[0].replace(/^\.?\//, '');
+    if (clean !== 'api/proxy') return { ok: false, status: 404, text: async () => '404' };
+    const body = JSON.parse(init.body || '{}');
+    asked.push(body.action + (body.partIdx !== undefined ? ':' + body.partIdx : ''));
+
+    if (mode === 'loadDb_too_large' && body.action === 'loadDb') {
+      /* Vercel 爆咗 4.5MB：HTTP 500 ＋ 純文字（唔係 JSON） */
+      return { ok: false, status: 500, text: async () => 'FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE' };
+    }
+    if (mode === 'old_backend') {
+      if (body.action === 'loadDbPart') {
+        return { ok: true, status: 200, text: async () => JSON.stringify({ ok: false, error: '未知 action：loadDbPart', hint: '支援 action: ping / loadDb' }) };
+      }
+    }
+    if (body.action === 'dbInfo') {
+      return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, found: true, bytes: bigText.length, version: VERSION }) };
+    }
+    if (body.action === 'loadDb') {
+      return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, found: true, db: bigDb, bytes: bigText.length, version: VERSION }) };
+    }
+    if (body.action === 'loadDbPart') {
+      const idx = Number(body.partIdx) || 0;
+      const parts = Math.ceil(bigText.length / PART);
+      /* 讀到一半有人儲存咗 → version 變（前端要由頭再讀） */
+      const ver = (mode === 'drift' && !driftOnce && idx === 1) ? 'OTHER-VERSION' : VERSION;
+      if (mode === 'drift' && idx === 1 && !driftOnce) { driftOnce = true; }
+      return {
+        ok: true, status: 200,
+        text: async () => JSON.stringify({
+          ok: true, found: true, part: bigText.slice(idx * PART, (idx + 1) * PART),
+          partIdx: idx, parts, bytes: bigText.length, version: ver, at: '2026-09-20T00:00:00.000Z'
+        })
+      };
+    }
+    return { ok: false, status: 400, text: async () => JSON.stringify({ ok: false, error: '不支援的操作' }) };
+  };
+
+  const remote = await import('../assets/js/lib/remote.js?seg=1');
+
+  ok('remote.js 有分段讀取（pullDbSegmented）', typeof remote.pullDbSegmented === 'function');
+  ok('remote.js 有「大過幾多就分段」嘅水位（SEGMENT_ABOVE_BYTES < 4.5MB）',
+    Number(remote.SEGMENT_ABOVE_BYTES) > 0 && Number(remote.SEGMENT_ABOVE_BYTES) < 4.5 * 1024 * 1024,
+    String(remote.SEGMENT_ABOVE_BYTES));
+
+  /* 已知太大 → 直接分段（唔好白撞一次 4.5MB） */
+  asked = [];
+  const seg = await remote.pullDb({ bytes: bigText.length });
+  ok('★ 已知資料庫 5MB → 直接分段讀返完整資料',
+    seg.ok === true && seg.found === true && seg.db?.blob?.length === 5_000_000, JSON.stringify({ ok: seg.ok, err: seg.error }).slice(0, 160));
+  ok('分段讀返嘅 version 同後端一致', seg.version === VERSION, String(seg.version));
+  ok('真係逐段讀（唔係一次過）', asked.filter(a => a.startsWith('loadDbPart')).length > 1, asked.join(','));
+  ok('知道太大嗰陣唔會白撞一次 loadDb', !asked.includes('loadDb'), asked.join(','));
+  ok('分段讀返嘅內容 parse 得到、同原裝一樣',
+    JSON.stringify(seg.db?.members) === JSON.stringify(bigDb.members));
+
+  /* 未知體積 → 先試 loadDb；Vercel 爆咗 → 自動退去分段 */
+  mode = 'loadDb_too_large'; asked = [];
+  const fb = await remote.pullDb();
+  ok('★ loadDb 撞 4.5MB 上限（500 純文字）→ 自動退去分段讀返',
+    fb.ok === true && fb.db?.blob?.length === 5_000_000, JSON.stringify({ ok: fb.ok, err: fb.error }).slice(0, 160));
+  ok('退去分段之前真係試過 loadDb', asked[0] === 'loadDb', asked.join(','));
+  ok('★ 呢種情況**唔會**講「未設定後端網址」',
+    !/未設定後端/.test(String(fb.error || '')) && !/未設定後端/.test(String(fb.hint || '')),
+    String(fb.error || fb.hint || ''));
+
+  /* 讀緊嗰陣有人儲存咗（version 變）→ 由頭再讀，唔會拼出半新半舊 */
+  mode = 'drift'; driftOnce = false; asked = [];
+  const dr = await remote.pullDb({ bytes: bigText.length });
+  ok('★ 讀緊嗰陣撞正有人儲存 → 由頭再讀，結果仍然完整',
+    dr.ok === true && dr.db?.blob?.length === 5_000_000, JSON.stringify({ ok: dr.ok, err: dr.error }).slice(0, 160));
+  ok('真係由頭再讀過（partIdx:0 出現多過一次）',
+    asked.filter(a => a === 'loadDbPart:0').length >= 2, asked.join(','));
+
+  /* 舊版後端（未部署 v2.6.0）→ 要如實話「去更新 Apps Script」，唔好扮冇後端 */
+  mode = 'old_backend';
+  const old = await remote.pullDb({ bytes: bigText.length });
+  ok('★ 舊版後端冇 loadDbPart → 如實報錯', old.ok === false, JSON.stringify(old).slice(0, 160));
+  ok('提示教人更新 Apps Script（唔係「未設定後端網址」）',
+    /Code\.gs|Apps Script|v2\.6\.0/.test(String(old.hint || '')) && !/未設定後端/.test(String(old.hint || '')),
+    String(old.hint || '').slice(0, 120));
+
+  /* gateway：回應過大要認得出，唔好當「後端壞」或者「未設定」 */
+  const gw = await import('../assets/js/lib/gateway.js?seg=1');
+  ok('gateway 認得出 Vercel「回應過大」呢種純文字錯誤',
+    gw.PAYLOAD_TOO_LARGE_RE.test('FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE'));
+  mode = 'loadDb_too_large';
+  const routed = await gw.postBackend({ action: 'loadDb' }, { unit: '0082', execUrl: '', timeoutMs: 5000 });
+  ok('★ 回應過大 → reason=too_large（唔會跌落自助路線變「未設定後端網址」）',
+    routed.reason === 'too_large' && routed.tooLarge === true && routed.via === 'proxy',
+    JSON.stringify({ reason: routed.reason, via: routed.via, error: String(routed.error).slice(0, 60) }));
+  ok('回應過大嘅錯誤訊息講得出 4.5MB 同分段讀',
+    /4\.5MB/.test(String(routed.error || '')) && /分段/.test(String(routed.error || '')),
+    String(routed.error || '').slice(0, 100));
+
+  /* dev-server 要喺本機模擬同一個上限（以後本機先發現到） */
+  const devSrc = fs.readFileSync(path.join(ROOT, 'dev-server.mjs'), 'utf8');
+  ok('dev-server 本機模擬 Vercel 4.5MB 回應上限',
+    /VERCEL_RESPONSE_LIMIT/.test(devSrc) && /FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE/.test(devSrc));
+
+  /* ---- ③ 「同步診斷」要有「整份資料庫讀取」呢一格 ----
+     上面幾格全部 ok 都一樣可以讀唔返成份資料（登記好、連到、讀寫權正常，
+     但資料庫大過 4.5MB）—— 用家見到「全部綠燈」却兩邊對唔到料，
+     所以診斷一定要真係讀一次、話你知幾大、有冇行分段。 */
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url).split('?')[0];
+    if (u.endsWith('api/units')) {
+      return { ok: true, status: 200, json: async () => ({ units: {}, diag: { ids: ['0082'], trusted: ['0082'], withKey: ['0082'], suspicious: [] } }), text: async () => '{}' };
+    }
+    const clean = u.replace(/^\.?\//, '');
+    if (clean !== 'api/proxy') return { ok: false, status: 404, text: async () => '404' };
+    const body = JSON.parse(init.body || '{}');
+    if (body.action === 'status') return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, backendVersion: 'v2.6.0' }) };
+    if (body.action === 'dbInfo') return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, found: true, bytes: bigText.length, version: VERSION, counts: { members: 1 } }) };
+    if (body.action === 'loadDb') return { ok: false, status: 500, text: async () => 'FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE' };
+    if (body.action === 'loadDbPart') {
+      const idx = Number(body.partIdx) || 0;
+      return {
+        ok: true, status: 200,
+        text: async () => JSON.stringify({
+          ok: true, found: true, part: bigText.slice(idx * PART, (idx + 1) * PART),
+          partIdx: idx, parts: Math.ceil(bigText.length / PART), bytes: bigText.length, version: VERSION, at: '2026-09-20T00:00:00.000Z'
+        })
+      };
+    }
+    return { ok: false, status: 400, text: async () => JSON.stringify({ ok: false, error: '不支援的操作' }) };
+  };
+  const diag = await remote.remoteDiagnose();
+  const dbread = (diag.stages || []).find(s => s.id === 'dbread');
+  ok('★ 「同步診斷」有「整份資料庫讀取」一格', !!dbread, (diag.stages || []).map(s => s.id).join(','));
+  ok('呢格會講體積（幾多 MB）', /\d+\.\d\d MB/.test(String(dbread?.detail || '')), String(dbread?.detail || ''));
+  ok('呢格會話你知大過 Vercel 4.5MB 回應上限',
+    /4\.5MB/.test(String(dbread?.detail || '')), String(dbread?.detail || ''));
+  ok('呢格會話你知有冇行分段讀取', /分段/.test(String(dbread?.detail || '')), String(dbread?.detail || ''));
+  ok('★ 5MB 資料庫：登記／連線／讀寫權全綠都唔會呃人「冇後端」',
+    (diag.stages || []).filter(s => ['unit', 'registry', 'status', 'write'].includes(s.id)).every(s => s.state === 'ok'),
+    (diag.stages || []).map(s => `${s.id}:${s.state}`).join(','));
+  ok('分段讀返 → 呢格唔係 bad（資料讀得到，只係要提示瘦身）', dbread?.state !== 'bad', String(dbread?.state));
+
+  globalThis.fetch = memFetch;
 }
 
 console.log(`\n──────── 後端儲存測試結果：${pass} 通過 / ${fail} 失敗（${Date.now() - t0} ms）────────\n`);

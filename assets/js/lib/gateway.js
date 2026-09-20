@@ -78,6 +78,21 @@ export function beFromQuery(search) {
   } catch { return ''; }
 }
 
+/* Vercel 代理單一回應上限 4.5MB。爆咗嗰陣 Vercel 唔會回 JSON，
+   而係回一段純文字（例如 FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE）。
+   前端一定要認得出呢種情況 —— 佢嘅救法（分段讀／瘦身）同「後端壞咗」完全唔同。 */
+export const PAYLOAD_TOO_LARGE_RE = /PAYLOAD_TOO_LARGE|response.{0,20}too large|body.{0,20}too large|payload.{0,20}exceed/i;
+
+/** 回應過大嗰陣嘅人話解釋（唔會再講「未設定後端網址」） */
+function tooLargeError(status, text) {
+  if (PAYLOAD_TOO_LARGE_RE.test(text)) {
+    return '後端回應大過 Vercel 代理上限（4.5MB）—— 資料庫太大，一次過讀唔晒。'
+      + '前端會自動改用分段讀取；如果仍然失敗，就要把後端更新到 v2.6.0（支援 loadDbPart），'
+      + '並且喺「總表同步 → 體積檢查」做一次「相片瘦身」。';
+  }
+  return `後端回應格式異常（HTTP ${status}）`;
+}
+
 async function postJson(endpoint, body, timeoutMs, plain) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -102,13 +117,17 @@ async function postJson(endpoint, body, timeoutMs, plain) {
         ok: false, json: null, status: res.status,
         /* 同源 proxy 根本唔存在（靜態伺服器回 HTML／404） */
         noApi: res.status === 404 || /<!doctype|<html/i.test(text),
-        error: `後端回應格式異常（HTTP ${res.status}）`, reason: 'bad_response'
+        /* 回應過大（Vercel 4.5MB 硬上限）要**講真話**：呢個唔係「後端壞」，
+           更唔係「未設定後端網址」—— 係資料庫大過單一回應上限，要分段讀。
+           2026-09-20 事故：呢度淨係回「回應格式異常」，用家完全估唔到死因。 */
+        tooLarge: PAYLOAD_TOO_LARGE_RE.test(text),
+        error: tooLargeError(res.status, text), reason: PAYLOAD_TOO_LARGE_RE.test(text) ? 'too_large' : 'bad_response'
       };
     }
-    return { ok: res.ok, json, status: res.status, noApi: false, error: '', reason: '' };
+    return { ok: res.ok, json, status: res.status, noApi: false, tooLarge: false, error: '', reason: '' };
   } catch (e) {
     const aborted = e?.name === 'AbortError';
-    return { ok: false, json: null, status: 0, noApi: false, error: aborted ? '連線逾時' : (e?.message || '網絡錯誤'), reason: aborted ? 'timeout' : 'network' };
+    return { ok: false, json: null, status: 0, noApi: false, tooLarge: false, error: aborted ? '連線逾時' : (e?.message || '網絡錯誤'), reason: aborted ? 'timeout' : 'network' };
   } finally {
     clearTimeout(t);
   }
@@ -141,14 +160,21 @@ export async function postBackend(payload, { unit, execUrl = '', apiKey = '', ti
     const r = await postJson('api/proxy', body, timeoutMs, false);
     const errText = String(r.json?.error || '');
     if (r.json && !UNREGISTERED_RE.test(errText)) {
-      return { ok: r.ok, json: r.json, via: 'proxy', error: r.error, reason: r.reason, unregistered: false };
+      return { ok: r.ok, json: r.json, via: 'proxy', error: r.error, reason: r.reason, unregistered: false, tooLarge: false };
     }
     /* proxy 明確話「未登記呢個旅團」→ 唔係失敗，係「平台未接線」→ 跌落入 ② */
     if (r.json && UNREGISTERED_RE.test(errText)) unregistered = true;
-    /* proxy 回咗其他錯誤（未授權／後端壞／逾時）→ 如實報，唔好扮冇事 */
+    /* proxy 回咗其他錯誤（未授權／後端壞／逾時／回應過大）→ 如實報，唔好扮冇事 */
     if (!unregistered) {
-      if (r.json) return { ok: false, json: r.json, via: 'proxy', error: errText || r.error, reason: r.reason || 'backend', unregistered: false };
-      if (!r.noApi) return { ok: false, json: null, via: 'proxy', error: r.error, reason: r.reason || 'network', unregistered: false };
+      if (r.json) return { ok: false, json: r.json, via: 'proxy', error: errText || r.error, reason: r.reason || 'backend', unregistered: false, tooLarge: false };
+      /* ★ 回應過大（Vercel 4.5MB）一定唔可以跌落 ②：
+         後端答咗話，只係答唔晒 —— 跌去自助路線只會對用家講
+         「未設定後端網址」，把真正死因（資料庫太大）完全蓋住。
+         （2026-09-20 事故。） */
+      if (r.tooLarge) {
+        return { ok: false, json: null, via: 'proxy', error: r.error, reason: 'too_large', unregistered: false, tooLarge: true };
+      }
+      if (!r.noApi) return { ok: false, json: null, via: 'proxy', error: r.error, reason: r.reason || 'network', unregistered: false, tooLarge: false };
       /* r.noApi ＝ 呢個部署根本冇 /api（純靜態）→ 跌落入 ② */
     }
   }

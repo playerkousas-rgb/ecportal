@@ -234,6 +234,100 @@ section('大資料分段');
 }
 
 /* ============================================================
+   ⑤b v2.6.0 分段讀取 loadDbPart
+   ------------------------------------------------------------
+   背景（2026-09-20 團長回報「無痕同普通視窗對唔到料，仲話我冇後端」）：
+   Vercel 代理單一回應有 4.5MB 硬上限。資料庫大過呢個數，loadDb 一次過
+   回成份 JSON 就會令 Vercel 回 500 純文字（FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE），
+   前端當「唔係 JSON」→ 誤判「呢個部署冇 /api」→ 對用家講「未設定後端網址」。
+   每部機於是讀唔到後端、各自儲存自己嗰份 —— 兩邊永遠對唔到料。
+   loadDbPart 每次淨係回一段純文字，前端逐段拼返，就唔會撞呢個上限。
+   ============================================================ */
+section('v2.6.0 分段讀取：loadDbPart（大過 4.5MB 都讀得返）');
+{
+  const g = makeGas();
+  /* 砌一個 5MB 嘅資料庫（大過 Vercel 4.5MB 回應上限） */
+  const db = sampleDb();
+  db.blob = 'y'.repeat(5_000_000);
+  const save = g.post({ action: 'saveDb', unit: '0082', db });
+  const totalBytes = save.bytes || 0;
+  ok('5MB 資料庫分件寫得入', save.ok === true && totalBytes > 4_500_000,
+    `bytes=${totalBytes} ok=${save.ok}`);
+  ok('呢個體積一次過 loadDb 確實會爆 Vercel 上限（測試前提成立）', totalBytes > 4.5 * 1024 * 1024);
+
+  /* 逐段讀返 */
+  const first = g.post({ action: 'loadDbPart', unit: '0082', partIdx: 0 });
+  ok('loadDbPart 回 ok＋found', first.ok === true && first.found === true, JSON.stringify(first).slice(0, 140));
+  ok('loadDbPart 回 bytes＝成份體積', first.bytes === totalBytes, `${first.bytes} vs ${totalBytes}`);
+  ok('loadDbPart 回 parts＞1（真係要分段）', (first.parts || 0) > 1, 'parts=' + first.parts);
+  ok('loadDbPart 每段 < 4.5MB（唔會再撞上限）',
+    String(first.part || '').length < 4.5 * 1024 * 1024, 'len=' + String(first.part || '').length);
+  ok('loadDbPart 每段約 1MB（留足水位）',
+    String(first.part || '').length <= 1_000_000, 'len=' + String(first.part || '').length);
+  ok('loadDbPart 回 version（前端用嚟核對有冇讀緊嗰陣被人儲存）',
+    typeof first.version === 'string' && first.version.length > 0);
+
+  let text = '', parts = first.parts || 1, versionDrift = false;
+  for (let i = 0; i < parts; i++) {
+    const r = g.post({ action: 'loadDbPart', unit: '0082', partIdx: i });
+    if (r.version !== first.version) versionDrift = true;
+    text += String(r.part || '');
+  }
+  ok('逐段讀返：段段同一個 version（冇讀到半新半舊）', versionDrift === false);
+  ok('逐段讀返：拼埋長度同成份一樣', text.length === totalBytes, `${text.length} vs ${totalBytes}`);
+  let parsed = null;
+  try { parsed = JSON.parse(text); } catch (e) { parsed = null; }
+  ok('逐段讀返：砌返完整 JSON（parse 得到）', parsed !== null);
+  ok('逐段讀返：內容同成份 loadDb 一模一样',
+    parsed?.blob?.length === 5_000_000 && parsed?.unitCode === db.unitCode,
+    `blob=${parsed?.blob?.length}`);
+
+  /* 同一份資料，兩條路一定要讀到同一份 —— dbRawText 共用先至會咁 */
+  const whole = g.post({ action: 'loadDb', unit: '0082' });
+  ok('loadDb 同 loadDbPart 讀到同一個 version', whole.version === first.version);
+  ok('loadDb 同 loadDbPart 讀到同一個 bytes', whole.bytes === first.bytes);
+
+  /* 段號超範圍：唔可以靜靜地回空字串（前端會以為讀完） */
+  const over = g.post({ action: 'loadDbPart', unit: '0082', partIdx: parts + 5 });
+  ok('段號超範圍 → 明確報錯（唔係靜靜地回空）', over.ok === false && /超出範圍/.test(String(over.error || '')),
+    JSON.stringify(over).slice(0, 140));
+
+  /* 負數／垃圾 partIdx 唔可以擲錯 */
+  const neg = g.post({ action: 'loadDbPart', unit: '0082', partIdx: -3 });
+  ok('負數 partIdx 當 0 處理（唔會擲錯）', neg.ok === true && neg.partIdx === 0);
+
+  /* 空後端 */
+  const g2 = makeGas();
+  const empty = g2.post({ action: 'loadDbPart', unit: '0082', partIdx: 0 });
+  ok('空後端 loadDbPart 回 found:false（唔係報錯）', empty.ok === true && empty.found === false,
+    JSON.stringify(empty).slice(0, 120));
+
+  /* 旅團隔離：唔可以分段讀到人哋嘅 */
+  const g3 = makeGas();
+  const a = sampleDb(); a.unitCode = '0082'; a.members = [{ id: 'a', name: '0082 團員' }];
+  const b = sampleDb(); b.unitCode = '0099'; b.members = [{ id: 'b', name: '0099 團員' }];
+  g3.post({ action: 'saveDb', unit: '0082', db: a });
+  g3.post({ action: 'saveDb', unit: '0099', db: b });
+  const pa = g3.post({ action: 'loadDbPart', unit: '0082', partIdx: 0 });
+  ok('分段讀都有旅團隔離（0082 讀唔到 0099）',
+    /0082 團員/.test(String(pa.part)) && !/0099 團員/.test(String(pa.part)));
+
+  /* 授權：同 loadDb 一樣要 API Key */
+  const g4 = makeGas();
+  g4.sandbox.initializeSheets();          // 會自動生成 API Key（同真實部署一樣）
+  const noKey = g4.post({ action: 'loadDbPart', unit: '0082', partIdx: 0, apiKey: '', apikey: '' });
+  ok('loadDbPart 冇 key → 未授權（同 loadDb 一樣嚴）', noKey.ok === false && /API ?Key|未授權/.test(String(noKey.error || '')),
+    JSON.stringify(noKey).slice(0, 140));
+  const withKey = g4.post({ action: 'loadDbPart', unit: '0082', partIdx: 0, apiKey: g4.props.get('API_KEY') });
+  ok('loadDbPart 填啱 key 就讀到', withKey.ok === true, JSON.stringify(withKey).slice(0, 140));
+
+  /* 未知 action 嘅提示要講真話（以前手寫死，漏咗 constitution） */
+  const unknown = g.post({ action: 'no_such_action', unit: '0082' });
+  ok('未知 action 提示列出 loadDbPart', /loadDbPart/.test(String(unknown.hint || '')));
+  ok('未知 action 提示列出 constitution（以前漏咗）', /constitution/.test(String(unknown.hint || '')));
+}
+
+/* ============================================================
    ⑥ 旅團隔離：唔可以讀到人哋旅團嘅資料
    ============================================================ */
 section('旅團隔離');

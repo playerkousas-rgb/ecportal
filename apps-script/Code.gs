@@ -1,7 +1,25 @@
 /**
  * ============================================================
  *  82venture · 總表同步與多旅團後端 Apps Script（Code.gs）
- *  版本：v2.5.0
+ *  版本：v2.6.0
+ *
+ *  ★ v2.6.0 新增（2026-09-20，團長回報「無痕同普通視窗對唔到料、又話我冇後端」）：
+ *    ① loadDbPart —— **分段讀取**成份資料庫。
+ *       死因：Vercel 代理單一回應有 4.5MB 硬上限。資料庫一大過呢個數，
+ *       loadDb 一次過回成份 JSON 就會令 Vercel 回 500
+ *       FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE（純文字，唔係 JSON），
+ *       前端見到「唔係 JSON」就以為「呢個部署冇 /api」，跌落自助路線，
+ *       最後對用家講「未設定後端網址」—— 明明後端登記得好哋。
+ *       每段淨係回 1,000,000 字純文字，前端逐段拼返；每段都帶 version，
+ *       讀緊嗰陣有人儲存咗（version 變咗）前端會由頭再讀，唔會拼出半新半舊。
+ *    ② 前端 pullDb 而家會先問 dbInfo 攞體積：經代理而大過 3MB 就直接分段讀，
+ *       細嘅單一讀失敗都會自動退去分段 —— 所以**唔會再靜靜地讀唔到**。
+ *    ③ 順帶修正（呢個先係資料庫變大嘅真正源頭）：單據相片直上 Drive 嘅
+ *       uploadPhotos action 一直漏咗喺 Vercel 代理白名單，代理一律回 400，
+ *       前端於是跌返落「本地存做後備」，每張單據相都以 base64 dataURL
+ *       寫入 db.claims[].photos[].dataUrl，base64 仲會脹大約 33% ——
+ *       所以「明明單據係直上 Drive」都照樣把「資料庫」分頁撐爆。
+ *       （修正喺 api/proxy.js 白名單；scripts/lint.mjs 而家會擋住再漏。）
  *
  *  ★ v2.5.0 新增（2026-09-18 深夜，團長回報 6 項問題）：
  *    ① constitution —— 公開團章免登入讀取（APP「發布」＋同步之後，
@@ -206,6 +224,16 @@ function initializeSheets() {
    HTTP 請求處理
    ============================================================ */
 
+/* 呢個後端識做嘅 action（用嚟回提示，等用家睇到「未知 action」嗰陣知道有乜）。
+   ★ 呢個陣列一定要同下面 doPost 入面真正處理緊嘅 action 一模一樣 ——
+     scripts/lint.mjs 會逐個比對，漏咗／多咗都會紅燈。
+     （2026-09-20 之前呢句係手寫死嘅字串，一直漏咗 constitution，
+       加咗 loadDbPart 之後更加唔可以再靠人手記得改。） */
+var SUPPORTED_ACTIONS = ['ping', 'test', 'status', 'sync', 'claim', 'noticeSignup', 'loan',
+  'saveDb', 'loadDb', 'loadDbPart', 'dbInfo', 'saveDbPart', 'saveDbCommit', 'verifySetupKey',
+  'uploadPhotos', 'constitution', 'notices',
+  'save', 'saveOtherBadge', 'reviewRequest', 'reviewLogRequest', 'addRequest', 'myRequests'];
+
 /** 收到 POST 時處理 */
 function doPost(e) {
   try {
@@ -221,8 +249,8 @@ function doPost(e) {
     }
 
     /* ---- 整份資料庫讀／寫（app 嘅真正儲存；要 API Key）---- */
-    if (body.action === 'saveDb' || body.action === 'loadDb' || body.action === 'dbInfo'
-      || body.action === 'saveDbPart' || body.action === 'saveDbCommit') {
+    if (body.action === 'saveDb' || body.action === 'loadDb' || body.action === 'loadDbPart'
+      || body.action === 'dbInfo' || body.action === 'saveDbPart' || body.action === 'saveDbCommit') {
       if (expectedKey && key !== expectedKey) {
         return json({ ok: false, success: false, error: '未授權：API Key 唔正確' });
       }
@@ -246,6 +274,13 @@ function doPost(e) {
         return json({ ok: nfo.success === true, success: nfo.success === true, found: !!nfo.found,
           at: nfo.at || '', version: nfo.version || '', bytes: nfo.bytes || 0,
           sizes: nfo.sizes || null, photoBytes: nfo.photoBytes || 0, counts: nfo.counts || null, error: nfo.error || '' });
+      }
+      /* v2.6.0：分段讀取 —— 每次淨係回一段純文字，唔會撞代理 4.5MB 回應上限 */
+      if (body.action === 'loadDbPart') {
+        var lp = loadDbPart(textOf(body.unit), body.partIdx);
+        return json({ ok: lp.success === true, success: lp.success === true, found: !!lp.found,
+          part: lp.part || '', partIdx: lp.partIdx || 0, parts: lp.parts || 0, bytes: lp.bytes || 0,
+          at: lp.at || '', version: lp.version || '', error: lp.error || '' });
       }
       var ld = loadDb(textOf(body.unit));
       return json({ ok: ld.success === true, success: ld.success === true, found: !!ld.found,
@@ -359,7 +394,7 @@ function doPost(e) {
       var c2 = syncAll(body);
       return json({ ok: true, msg: '已寫入總表（無 action，當 sync）', counts: c2, unit: body.unit });
     }
-    return json({ ok: false, error: '未知 action：' + body.action, got: Object.keys(body || {}), hint: '支援 action: ping / sync / status / saveDb / saveDbPart / saveDbCommit / loadDb / dbInfo / claim / noticeSignup / loan / uploadPhotos / save / saveOtherBadge / reviewRequest / reviewLogRequest / addRequest / myRequests' });
+    return json({ ok: false, error: '未知 action：' + body.action, got: Object.keys(body || {}), hint: '支援 action: ' + SUPPORTED_ACTIONS.join(' / ') });
   } catch (err) {
     return json({ ok: false, error: String(err) });
   }
@@ -495,11 +530,14 @@ function saveDb(body) {
   return { success: true, chunks: chunks.length, bytes: text.length, at: now, version: version };
 }
 
-/** 讀返整份資料庫（把所有段拼返） */
-function loadDb(unit) {
+/** 由「資料庫」分頁把某旅團嘅所有段讀出嚟、拼返成份 JSON 純文字。
+ *  v2.6.0 抽出嚟做共用：loadDb（一次過回成份）同 loadDbPart（分段回）
+ *  一定要用**同一套**讀法，否則分段讀返嘅同整份讀返嘅會唔同 —— 咁樣
+ *  「大資料庫分段讀」就會靜靜地讀到另一份資料，比讀唔到更危險。 */
+function dbRawText(unit) {
   unit = textOf(unit);
   var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(DB_TAB);
-  if (!sh) return { success: true, found: false, db: null, error: '' };
+  if (!sh) return { found: false, text: '', at: '', version: '' };
   var rows = sh.getDataRange().getValues();
   var parts = [];
   var at = '', version = '';
@@ -512,14 +550,51 @@ function loadDb(unit) {
     if (rows[i][3]) at = rows[i][3];
     if (rows[i][4]) version = textOf(rows[i][4]);
   }
-  if (!parts.length) return { success: true, found: false, db: null, error: '' };
+  if (!parts.length) return { found: false, text: '', at: at, version: version };
   parts.sort(function (a, b) { return a.seq - b.seq; });
-  var text = parts.map(function (p) { return p.text; }).join('');
+  return { found: true, text: parts.map(function (p) { return p.text; }).join(''), at: at, version: version };
+}
+
+/** 讀返整份資料庫（把所有段拼返） */
+function loadDb(unit) {
+  var raw = dbRawText(unit);
+  if (!raw.found) return { success: true, found: false, db: null, at: raw.at, version: raw.version, bytes: 0, error: '' };
   try {
-    return { success: true, found: true, db: JSON.parse(text), at: at, version: version, bytes: text.length };
+    return { success: true, found: true, db: JSON.parse(raw.text), at: raw.at, version: raw.version, bytes: raw.text.length };
   } catch (e) {
     return { success: false, found: true, db: null, error: '資料庫內容壞咗（JSON 解析失敗），請用 app 嘅 JSON 備份還原' };
   }
+}
+
+/* v2.6.0 分段讀取：Vercel 代理單一回應有 4.5MB 硬上限，
+   loadDb 一次過回成份 JSON，資料庫一大就會 500 FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE
+   （純文字，前端當「唔係 JSON」→ 誤判「呢個部署冇 /api」→ 對用家講「未設定後端網址」）。
+   每段淨係回 LOAD_PART_CHARS 字純文字（約 1MB，留足水位），前端逐段拼返。
+   每段都帶 version —— 前端逐段核對，讀緊嗰陣有人儲存咗就由頭再讀，
+   唔會拼出半新半舊嘅 JSON（半新半舊會 JSON.parse 失敗，或者更差：parse 到但資料錯亂）。 */
+var LOAD_PART_CHARS = 1000000;
+
+/** 讀成份資料庫嘅其中一段（partIdx 由 0 起） */
+function loadDbPart(unit, partIdx) {
+  var idx = parseInt(partIdx, 10);
+  if (isNaN(idx) || idx < 0) idx = 0;
+  var raw = dbRawText(unit);
+  if (!raw.found) {
+    return { success: true, found: false, part: '', partIdx: idx, parts: 0, bytes: 0, at: raw.at, version: raw.version, error: '' };
+  }
+  var total = raw.text.length;
+  var n = Math.max(1, Math.ceil(total / LOAD_PART_CHARS));
+  /* 段號超範圍：通常係讀緊嗰陣另一部機儲存咗、資料庫縮細咗。
+     唔好靜靜地回空字串（前端會以為讀完）—— 明確報錯，等前端由頭再讀。 */
+  if (idx >= n) {
+    return { success: false, found: true, part: '', partIdx: idx, parts: n, bytes: total, at: raw.at, version: raw.version,
+      error: '段號超出範圍（讀緊嗰陣資料庫變咗）—— 請由頭再讀' };
+  }
+  return {
+    success: true, found: true,
+    part: raw.text.substring(idx * LOAD_PART_CHARS, (idx + 1) * LOAD_PART_CHARS),
+    partIdx: idx, parts: n, bytes: total, at: raw.at, version: raw.version, error: ''
+  };
 }
 
 /* v2.4.0 分件儲存：前端把 db 拆成 N 件逐件送（每件 < 3MB），
