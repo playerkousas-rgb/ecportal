@@ -1,36 +1,42 @@
 /* ============================================================
    remote.js — 後端儲存（資料真正寫入旅團自己嘅 Google Sheet）
    ------------------------------------------------------------
-   點解要有呢個檔：
-     以前 app 嘅資料**淨係**存喺瀏覽器 localStorage。
-     「總表同步」只係把資料**攤平**寫入 Sheet 嘅報表分頁（相片變數量、
-     巢狀欄位變文字），讀返上嚟砌唔返個資料庫 —— 所以：
-       · 換手機／換瀏覽器／清 cache ＝ 資料冇晒
-       · 兩個執委各自喺自己部機做嘢 ＝ 兩份唔同嘅資料
-     呢個模組加返真正嘅「來回」：
-       saveDb  把成個資料庫（原樣 JSON）寫入後端「資料庫」分頁
-       loadDb  由後端讀返成個資料庫
-       dbInfo  只問 meta（後端有冇嘢、幾時更新）—— 開機比對用
+   2026-09-20 團長定案：**只有一個方式**。
+
+     ① 登入／開機      loadFromBackend()  由後端攞成份資料 → 本機工作副本 ＋ 基準快照
+     ② 之後改乜        淨係寫本機（瀏覽器），後端一個字都唔會郁
+     ③ 撳「儲存到後端」 saveToBackend()    先問後端版本：
+          · 冇人喺我登入後儲存過          → 直接寫
+          · 有人儲存過                    → 三方比對（lib/merge3.js）：
+               佢改嘅同我改嘅一樣          → 冇問題
+               改唔同嘅格                  → 一齊寫
+               同一格唔同值（早走 vs 遲到）→ 嗰格**唔寫**，彈出嚟畀用家再確認；
+                                             確認咗先至蓋過去
+        寫入成功 → 本機 ＝ 後端 ＝ 新基準
+
+   以前嘅自動儲存、開機自動合併、切視窗自動拉、60 秒 poll、撞版自動合併重存、
+   「立即同步全部」順便寫 db、「測試連線」順便寫 db …… 全部剷走。
+   冇第二條路，就唔會有兩條路互相蓋。
 
    路線（優先次序；兩條都要行得通，見 lib/gateway.js）：
      ① 同源 /api/proxy  —— 冇 CORS、API Key 由伺服器端補上（最穩陣）
-     ② 直接 POST 去 /exec —— 平台未登記旅團（或者純靜態部署）時嘅自助路線；
-        領袖喺「總表同步」貼返 /exec ＋ API Key 就即刻用得，唔使等管理員。
+     ② 直接 POST 去 /exec —— 平台未登記旅團（或者純靜態部署）時嘅自助路線
 
    注意：示範（MOCK）模式永遠唔會送出任何嘢。
    ============================================================ */
 
-import { load, tryLoad, commitMeta, isMock, currentUnit } from './store.js';
+import {
+  load, tryLoad, commitMeta, isMock, currentUnit, getBase, adoptRemote, setLocalMerged,
+  commitSaved, applyChangesLocal, markBackendEmpty, normalizeRemote, stripForBase, exportForBackend,
+  hasLocalContent, localChanges
+} from './store.js';
 import { postBackend, isExecUrl, shortExec } from './gateway.js';
+import { threeWay, overridesFor, describeConflict, diffDb, applyChanges } from './merge3.js';
 
 /* ---------------- 狀態 ---------------- */
-/* 2026-09-19：RETRY_MS／DEBOUNCE_MS／retryStep 已剷走 ——
-   佢哋係「改完 2.5 秒自動存」同「失敗後 4s/15s/60s 背景自動重試」用嘅。
-   自動寫入剷走之後呢三樣冇任何用途，留低只會令人以為仲有背景寫入。 */
-let timer = null;
 let inFlight = false;
-let armed = false;                          // 開機／種資料期間唔好自動送
 let lastState = { state: 'idle', msg: '' };
+let lastLoadAt = 0;                          // 上次成功由後端載入（ms）
 
 /** 目前同步狀態（畀介面畫個提示） */
 export function syncState() { return { ...lastState }; }
@@ -42,16 +48,19 @@ function setState(state, msg = '') {
   } catch { /* 非瀏覽器環境（測試）→ 冇所謂 */ }
 }
 
-/** 開機完成之後先至開始自動儲存（避免種子資料一載入就寫返上去）。
-    開機對資料期間（remoteInfo／pullDb 進行中）已經積落嘅 pending 改動
-    （例如開機嗰幾秒之內登入寫嘅 audit）—— arm 嗰刻要即刻排隊補存，
-    唔係佢會卡住直到下一個改動先至送到後端。 */
-export function arm() {
-  armed = true;
-  if (hasPending()) scheduleSave();
+/** 由 store.persist() 掛住：本機有改動 → 淨係更新狀態（頂部出「儲存到後端（N）」）。
+    唔會排任何 timer、唔會寫後端。 */
+export function scheduleSave() {
+  if (isMock()) return;
+  if (!remoteCfg().ok) return;
+  if (hasPending()) setState('pending', '未儲存 —— 撳「儲存到後端」先寫入');
 }
-export function disarm() { armed = false; if (timer) { clearTimeout(timer); timer = null; } }
-export function isArmed() { return armed; }
+
+/** 有冇改動仲未寫入後端 */
+export function hasPending() {
+  const db = tryLoad();
+  return !!(db?.sync?.pending);
+}
 
 /* ---------------- 設定 ---------------- */
 export function remoteCfg() {
@@ -64,26 +73,10 @@ export function remoteCfg() {
      由 TROOP_<編號>_BACKEND / TROOP_<編號>_APIKEY 解析 —— 前端唔應該、
      亦都唔需要知道。所以只要有旅團編號就當接得通，唔好再要求用家填 /exec。 */
   const viaProxy = canUseProxy();
-  /* ============================================================
-     2026-09-19 團長指示（最終決定）：
-       「既然自動會有機會出事，就唔好比佢有得選 …… 將啲有機會出事嘅地方
-         FIX 曬佢，同唔好比佢有機會出事。」
-
-     所以**自動寫入已經剷走**，唔係「預設熄咗」而係**冇呢條路**：
-     呢度係一個寫死嘅 false，冇任何設定、環境變數、舊遺留值可以把它變 true。
-     （之前嘅 autoModel 記號都唔再需要 —— 冇得揀就冇得揀錯。）
-
-     而家成個 app 寫後端只有一條路：用家撳「立即同步」→ syncNow()
-     → 先讀後端合併 → 一次過寫。仲有團員入口交嘢（入站資料，見 pushSubmit()）。
-     ============================================================ */
   return {
     url,
     apiKey: s.apiKey !== undefined ? s.apiKey : (db.backend?.apiKey || ''),
     unit,
-    auto: false,                       // ← 寫死。冇得開。
-    /* 會議模式（每 60 秒背景讀一次）係**淨係讀**，唔會寫任何嘢，
-       所以留返做 opt-in 冇安全問題。預設關（團長：「唔好不停讀」）。 */
-    poll: s.poll === true,
     ok: (!!url || (viaProxy && !!unit)) && !isMock(),
     viaProxy
   };
@@ -188,339 +181,6 @@ export function hintOf(err, via = '') {
     return '你個 /exec 仲行緊舊版程式碼。喺 Apps Script 撳「部署 → 管理部署作業 → 編輯（鉛筆）→ 版本揀「新版本」→ 部署」，個 /exec 網址唔會變。';
   }
   return '';
-}
-
-/* ---------------- 三個主要動作 ---------------- */
-
-
-/* ============================================================
-   開機對版本（reconcile）—— 所有 push 之前嘅必經關卡
-   ------------------------------------------------------------
-   2026-09-19 團長第二次回報，講到正題：
-     「其他 APP 都係暫存喺瀏覽器、撳同步先一次過 SAVE；呢個成日自動 SAVE
-       就變相蓋咗佢 …… A 開佢未讀後端就已經複寫，B 開又係 —— 永遠自己睇自己。」
-
-   佢講嘅死因係真嘅。舊 code 嘅保護得兩層，兩層都堵唔到呢個位：
-     · blank_guard —— 只擋「本機完全冇內容」嘅新機；一部**用咗好耐**嘅機
-       （本機有內容、sync.lastSyncedVersion 係舊值）完全唔受保護；
-     · 樂觀鎖 baseVersion —— 要**後端**係 v2.2.0+ 先至有效，舊 Code.gs 照收盲蓋。
-   而 syncBoot() 係 `try { remoteInfo() … } catch { 照用本機 }` ——
-   開機問唔到後端（網絡慢、逾時、後端未更新）就當冇事，跟住 arm()
-   → `if (hasPending()) scheduleSave()` → 2.5 秒後 push。
-   **未讀後端就已經寫後端**，正正係「永遠自己睇自己」。
-
-   而家嘅規則，一句話：**未讀到後端最新版本之前，一律唔准寫後端。**
-   讀唔到就照舊排隊重試（資料唔會蝕），但絕不盲蓋。
-   ============================================================ */
-let reconciled = false;
-let reconcileBusy = null;
-let blockLoggedAt = 0;
-
-/** 呢個 session 有冇成功同後端對過版本（＝准唔准 push） */
-export function isReconciled() { return reconciled; }
-/** 測試／「由後端還原」等已確定兩邊一致嘅場合可以手動 set */
-export function markReconciled(v = true) { reconciled = !!v; }
-
-/**
- * 同後端對一次版本：後端有更新 → 拉落嚟（本機有未存改動就聯集合併）。
- *
- * 開機、「立即同步」掣、60 秒 poll、切返視窗、**同每次 push 之前**，
- * 全部行呢一個函數 —— 「先讀後端，先至寫後端」呢個次序冇得繞過。
- *
- * @returns {Promise<{ok:boolean, updated?:boolean, merged?:boolean,
- *                    upToDate?:boolean, found?:boolean, oldBackend?:boolean,
- *                    error?:string, reason?:string}>}
- */
-export async function reconcile({ silent = true } = {}) {
-  if (isMock()) return { ok: false, reason: 'mock' };
-  if (!remoteConfigured()) return { ok: false, reason: 'not_configured' };
-  if (reconcileBusy) return reconcileBusy;
-  reconcileBusy = (async () => {
-    try {
-      const store = await import('./store.js');
-      const info = await remoteInfo();
-      if (!info?.ok) {
-        if (!silent) { try { (await import('./util.js')).toast(info?.error || '問唔到後端', 'err'); } catch { /* */ } }
-        /* reason／hint 一定要原封不動帶出去：callBackend 對 not_registered／
-           bad_url 會附上「自救方法」（自己去貼 /exec ＋ API Key）。呢啲提示
-           係 2026-09-17 落嘅政策，唔可以喺呢一層被食走，否則用家又變返
-           淨係見到「同步失敗」四個字，唔知可以自己做嘢救返。 */
-        return { ok: false, error: info?.error || '問唔到後端', reason: info?.reason || 'network', hint: info?.hint || '' };
-      }
-      /* 問到後端 ＝ 已經對過版本（後端本身係空都算）—— 之後先至准 push */
-      reconciled = true;
-      if (!info.found) return { ok: true, found: false, upToDate: true };
-      const remoteAt = String(info.version || info.at || '');
-      /* 後端連版本／時間戳都冇回 ＝ 舊版 Code.gs：版本對唔到，
-         兩邊視窗永遠唔會知對方有更新（「自己睇自己」嘅另一個成因）。 */
-      if (!remoteAt) return { ok: true, oldBackend: true };
-      if (remoteAt === store.lastSyncedVersion()) return { ok: true, upToDate: true };
-      const got = await pullDb();
-      if (got?.ok && got.found && got.db) {
-        const merged = Number(store.tryLoad()?.sync?.pending || 0) > 0;
-        store.adoptRemote(got.db, { version: String(got.version || ''), merge: merged });
-        if (merged) scheduleSave();          // 本機改動仲喺度 → 繼續排隊存
-        return { ok: true, updated: true, merged, version: remoteAt };
-      }
-      return { ok: false, error: got?.error || '拉唔到後端資料' };
-    } finally { reconcileBusy = null; }
-  })();
-  return reconcileBusy;
-}
-
-/**
- * 「立即同步」＝ 一次過：**先讀後端**（有新版就拉＋合併）→ **再寫後端**。
- * 團長要嘅模式：改動淨係暫存喺瀏覽器，撳呢一下先至真係同後端交換。
- * （以前「立即同步」淨係拉、「立即儲存」淨係推 —— 兩下都要撳，
- *   而且唔撳「同步」直接撳「儲存」就會蓋，正正係佢投訴嗰樣。）
- */
-export async function syncNow() {
-  if (timer) { clearTimeout(timer); timer = null; }
-  if (isMock()) return { ok: false, reason: 'mock', error: '示範模式唔會寫後端' };
-  if (!remoteConfigured()) return { ok: false, reason: 'not_configured', error: '未設定後端' };
-  const rc = await reconcile({ silent: false });
-  if (!rc?.ok) return { ok: false, stage: 'pull', error: rc?.error || '讀唔到後端', reason: rc?.reason };
-  if (rc.oldBackend) warnOldBackend();
-  const pending = Number(tryLoad()?.sync?.pending || 0);
-  if (!pending) {
-    setState(rc.updated ? 'saved' : 'idle', rc.updated ? '已載入隊友最新改動' : '已同步');
-    return { ok: true, pulled: !!rc.updated, mergedPull: !!rc.merged, pushed: false, upToDate: !rc.updated };
-  }
-  const p = await pushDb({ silent: false });
-  return { ...p, stage: 'push', pulled: !!rc.updated, mergedPull: !!rc.merged, pushed: !!p.ok };
-}
-/**
- * 把成個資料庫寫入後端。
- *
- * 2026-09-18 事故修復（「一登入就把後端清空」）：
- *   以前 push 係「盲蓋」—— 本機咩版本都照寫上去。過時裝置（離線耐咗、
- *   或者開機拉唔到後端）一有改動（登入都會寫一筆 audit！）就會把
- *   另一部機啱啱同步嘅資料整個蓋走。
- *   而家：
- *   ① 送 baseVersion（本機上次見過嘅後端版本）做樂觀鎖 —— 後端版本
- *     對唔上就拒收（conflict），舊資料冇得盲蓋；
- *   ② 撞 conflict → 自動「拉後端 → 同本機未同步改動合併 → 重存一次」，
- *     全程寫入 sync log；只會自動重試一次（防無限迴圈）；
- *   ③ 空機保險閘：本機完全冇內容（新裝置／清咗 cache）又從未拉過後端
- *     → 唔會自動送空白資料上去，淨係等拉。
- *   ④ 2026-09-19 加：呢個 session **未成功讀到後端最新版本之前一律唔准寫**
- *     （團長回報「A 開佢未讀後端就已經複寫 …… 永遠自己睇自己」）。
- *     ①②③ 都堵唔到呢個位：③ 只擋空白新機，② 要後端係 v2.2.0+ 先至有效。
- *     讀唔到就排隊重試 —— 資料唔會蝕，但絕不盲蓋。
- */
-export async function pushDb({ silent = true, _retried = 0 } = {}) {
-  if (isMock()) return { ok: false, reason: 'mock', error: '示範模式唔會寫入後端' };
-  /* 注意一定要用 let：下面嘅 reconcile() 會 adoptRemote()，而 adoptRemote 係
-     `state.db = { ...merged }` —— **換一個新物件**。如果呢度用 const 抓住
-     舊引用，後面就會把「合併之前」嘅舊 db 序列化寫上後端，隊友啲資料照樣
-     冇咗（tests/remote.mjs 衝突復原一節釘住呢個位）。 */
-  let db = tryLoad();
-  if (!db) return { ok: false, reason: 'no_db', error: '資料庫未載入' };
-  const cfg = remoteCfg();
-  if (!cfg.ok) return { ok: false, reason: 'not_configured', error: '未設定後端網址' };
-  if (inFlight) return { ok: false, reason: 'busy', error: '上一次儲存仲未完成' };
-
-  const store = await import('./store.js');
-  /* ★ 一定要喺 reconcile() **之前**判斷「呢部機係咪空白」。
-     reconcile 會把後端資料拉落嚟，拉完之後 hasLocalContent() 一定係 true ——
-     事後先判斷就永遠擋唔到空白裝置，部新機就會無端端寫一次後端（推高版本，
-     搞到其他視窗全部以為有更新要重拉）。 */
-  const wasBlank = !store.hasLocalContent() && !store.lastSyncedVersion();
-
-  /* ④ 硬保險：未讀到後端最新版本之前，一律唔准寫。
-     對得到就即刻繼續（reconcile 已經順手把隊友嘅新版本拉咗落嚟＋合併）；
-     對唔到（離線／後端壞／平台未登記）就排隊重試，唔會盲蓋。 */
-  if (!reconciled) {
-    const rc = await reconcile({ silent: true });
-    if (!rc?.ok) {
-      setState('unreachable', '未讀到後端 —— 暫時唔寫入（避免蓋走另一部機嘅資料）');
-      if (Date.now() - blockLoggedAt > 300000) {       // 5 分鐘至記一次，唔好洗版
-        blockLoggedAt = Date.now();
-        const d0 = tryLoad();
-        d0.sync = d0.sync || {};
-        pushLog(d0, `⛔ 未讀到後端（${rc?.error || '未知'}）—— 暫時唔寫入，改動繼續排隊`);
-        commitMeta();
-      }
-      scheduleRetry();
-      /* 真正嘅原因要照實報出去（平台未登記／網址唔合格 …），唔好一律叫
-         not_reconciled —— 用家要分得清「自己即刻做得到」定「要等平台管理員」。
-         而 callBackend 對呢啲原因附上嘅自救 hint 一定要留住（2026-09-17 政策），
-         否則用家又變返淨係見到「同步失敗」，唔知原來自己貼 /exec 就救得返。 */
-      const specific = !!rc?.reason && rc.reason !== 'network';
-      return {
-        ok: false,
-        reason: specific ? rc.reason : 'not_reconciled',
-        error: '未讀到後端最新版本 —— 暫時唔寫入（怕蓋走另一部機嘅資料）'
-          + (specific && rc?.error ? `：${rc.error}` : ''),
-        hint: [rc?.hint,
-          '你嘅改動仲喺呢部機，冇蝕到；網絡／後端返嚟就會自動再試。'
-          + '想即刻查係邊一格斷咗，去「帳號與系統 → 資料管理 → 總表同步」撳「同步診斷」。'
-        ].filter(Boolean).join(' ')
-      };
-    }
-    /* ★ reconcile() 可能已經拉咗後端新版本落嚟合併（adoptRemote 換咗新物件）。
-       一定要重新讀一次 db —— 如果冇呢一行，下面就會把「合併之前」嘅舊 db
-       寫上後端，等於自己親手蓋走啱啱拉返嚟嘅隊友資料。 */
-    db = tryLoad();
-  }
-
-  const synced = store.lastSyncedVersion();
-  /* 空機保險閘：本機完全冇內容（新裝置／清咗 cache）又從未同後端對過版本
-     —— 呢種狀態只應該「拉」，唔應該「推」。
-     （例外：後端本身都仲係空 —— 新旅團第一筆資料都要存得到，所以先問一次 dbInfo。）
-     用 wasBlank（reconcile 之前嘅狀態）而唔係即場重算，理由見上。 */
-  if (wasBlank) {
-    const info = await callBackend({ action: 'dbInfo' }, { timeoutMs: 20000 });
-    if (info?.ok && info.found) {
-      db.sync = db.sync || {};
-      pushLog(db, '✗ 空白裝置唔會自動寫後端 —— 等拉到後端資料先');
-      commitMeta();
-      setState('idle', '空白裝置：等緊由後端載入資料');
-      scheduleSave();   // 遲啲再試（拉到資料就有嘢存）
-      return { ok: false, reason: 'blank_guard', error: '本機係空白裝置，唔會自動蓋後端（等拉資料）' };
-    }
-  }
-
-  /* 體積路由（v2.4.0）：
-     · < 2.8MB → 單一 saveDb（同以前一樣）
-     · ≥ 2.8MB → 自動分件（saveDbPart × N + saveDbCommit）—— 每件 < 2.8MB，
-       行得晒現有所有路徑（同源 proxy／直接 /exec），所以旅團用幾十年、
-       db 幾十 MB 都照存得，冇「要停止使用」嘅天花板。
-     · > 40MB → 硬止（GAS 6 分鐘執行上限先會真係有問題），叫去體積檢查。 */
-  let dbText = '';
-  try { dbText = JSON.stringify(db); } catch { /* ignore */ }
-  const dbBytes = dbText.length;
-  if (dbBytes > 40000000) {
-    db.sync = db.sync || {};
-    pushLog(db, `✗ 資料庫已達 ${fmtBytes(dbBytes)} —— 去「體積檢查」睇下邊個分頁食緊嘢`);
-    commitMeta();
-    setState('error', `資料庫太大（${fmtBytes(dbBytes)}）`);
-    return { ok: false, reason: 'too_big', hint: '去「帳號與系統 → 資料管理 → 總表同步 → 體積檢查」睇下邊個分頁食緊位（多數係試卷答卷／通告回應累積）。' };
-  }
-  const useParts = dbBytes > CHUNKED_ABOVE;
-
-  inFlight = true;
-  if (!silent) setState('saving', '儲存緊…');
-  else setState('saving');
-
-  /* 記住「我送出嘅係邊個版本」：送出期間如果又有新改動，
-     pending 唔可以當成 0（否則嗰啲改動會靜靜雞唔見咗）。 */
-  const sentPending = Number(db.sync?.pending || 0);
-  const sentAt = db.meta?.updatedAt || '';
-
-  try {
-    let r;
-    let usedParts = 0;
-    if (useParts) {
-      /* v2.4.0 分件：拆件 → 逐件送（任何一件撞版都即停）→ commit 拼合 */
-      const parts = splitDbIntoParts(db, PART_MAX_BYTES);
-      const saveId = `${cfg.unit}-stg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-      r = null;
-      let fellBack = false;   // 舊後端（未部署 v2.4.0）→ 退返單件路
-      for (let i = 0; i < parts.length; i++) {
-        setState('saving', `分件儲存中…（${i + 1}/${parts.length}）`);
-        let pr = await callBackend({ action: 'saveDbPart', unit: cfg.unit, data: parts[i],
-          partIdx: i, parts: parts.length, saveId, baseVersion: synced });
-        /* 後端話「未知 action」＝ 仲係 v2.3.0 舊版 → 退返單件 saveDb
-           （舊後端照收得到 4MB 以下；真係超標會喺單件路度如實回錯） */
-        if (!pr.ok && /未知 action/.test(String(pr.error || ''))) {
-          pushLog(load(), '⚠ 後端仲係舊版（未部署分件儲存 v2.4.0）—— 改用單一件儲存');
-          r = await callBackend({ action: 'saveDb', db, baseVersion: synced });
-          fellBack = true;
-          break;      // 已經成份存咗，唔好再送剩低嘅件
-        }
-        if (!fellBack && !pr.ok) {
-          const cur0 = load();
-          cur0.sync = cur0.sync || {};
-          if (pr.conflict) {
-            cur0.sync.lastError = pr.error || '後端有較新版本';
-            pushLog(cur0, `⚠ 第 ${i + 1}/${parts.length} 件撞版 —— 自動拉後端合併再重存`);
-            commitMeta();
-            inFlight = false;
-            return await recoverFromConflict(pr, silent, _retried);
-          }
-          cur0.sync.lastError = pr.error || '分件儲存失敗';
-          pushLog(cur0, `✗ 分件 ${i + 1}/${parts.length} 失敗：${pr.error || '未知錯誤'}`);
-          commitMeta();
-          setState('error', pr.error || '分件儲存失敗');
-          return { ok: false, reason: pr.reason || 'backend', error: pr.error || '分件儲存失敗' };
-        }
-      }
-      if (!fellBack) {
-        setState('saving', `分件完成，拼合中…（${parts.length} 件）`);
-        r = await callBackend({ action: 'saveDbCommit', unit: cfg.unit, saveId, parts: parts.length, baseVersion: synced });
-        usedParts = parts.length;
-      }
-    } else {
-      r = await callBackend({ action: 'saveDb', db, baseVersion: synced });
-    }
-    const cur = load();
-    cur.sync = cur.sync || {};
-
-    /* 樂觀鎖撞版：另一部機啱啱先寫入後端 → 自動復原（拉＋合併＋重存一次） */
-    if (!r.ok && r.conflict) {
-      cur.sync.lastError = r.error || '後端有較新版本';
-      pushLog(cur, `⚠ 後端有另一部機寫入嘅新版本 —— 自動拉返嚟合併（第 ${_retried + 1} 次）`);
-      commitMeta();
-      inFlight = false;
-      return await recoverFromConflict(r, silent, _retried);
-    }
-
-    if (r.ok) {
-      /* 送出期間新增嘅改動要留返 pending（送出時 snapshot 減走就啱） */
-      const now = Number(cur.sync.pending || 0);
-      cur.sync.pending = Math.max(0, now - sentPending);
-      cur.sync.lastPushAt = new Date().toISOString();
-      cur.sync.remoteVersion = r.version || sentAt;
-      /* 呢個版本嘅內容而家本機＝後端完全一致 —— 之後 push 用佢做 baseVersion */
-      if (r.version) cur.sync.lastSyncedVersion = String(r.version);
-      /* 本機＝後端 → 更新三方合併基準（淨係喺冇剩低未同步改動嗰陣；
-         否則送出期間新改嘅嘢會被當成「本機冇改過」而俾後端蓋返）。 */
-      if (!cur.sync.pending) store.markBaseAligned();
-      cur.sync.lastError = '';
-      if (usedParts) r.parts = usedParts;     // 測試／log 用：今次行咗分件
-      pushLog(cur, `✓ 已儲存到後端（${fmtBytes(r.bytes)}${usedParts ? `，分 ${usedParts} 件` : ''}）`);
-      setState(cur.sync.pending ? 'pending' : 'saved', cur.sync.pending ? '仲有新改動未儲存' : '已儲存到後端');
-      /* 送出期間又有改動 → 再存多次 */
-      if (cur.sync.pending && armed) scheduleSave();
-    } else {
-      cur.sync.lastError = r.error || '';
-      pushLog(cur, `✗ 儲存失敗：${r.error || '未知錯誤'}`);
-      setState('error', r.error || '儲存失敗');
-    }
-    /* 一定要用 commitMeta（唔係 commit）：簿記唔可以再標記成「有改動」，
-       否則會變成「存完又存」嘅無限迴圈。 */
-    commitMeta();
-    return r;
-  } finally {
-    inFlight = false;
-  }
-}
-
-/** 撞版復原（單件／分件共用）：拉後端 → 聯集合併 → 重存一次 */
-async function recoverFromConflict(r, silent, _retried) {
-  if (_retried >= 1) {
-    setState('conflict', '兩邊都改咗：已合併一次都仲撞版，請去「總表同步」核對');
-    return { ...r, ok: false, reason: 'conflict', hint: '已經自動合併咗一次都仲撞版 —— 好可能兩部機同時改緊。去「帳號與系統 → 資料管理 → 總表同步」撳「由後端還原」，或者等一陣再儲存。' };
-  }
-  const got = await pullDb();
-  if (got?.ok && got.found && got.db) {
-    try {
-      const store = await import('./store.js');
-      store.adoptRemote(got.db, { version: String(got.version || got.db?.meta?.updatedAt || ''), merge: true });
-      if (typeof window !== 'undefined') {
-        try { (await import('./util.js')).toast('另一部機更新咗後端 —— 已自動合併兩邊資料', 'ok'); } catch { /* */ }
-      }
-      setState('pending', '合併完成，儲存緊…');
-      return await pushDb({ silent, _retried: _retried + 1 });
-    } catch (e) {
-      setState('error', '合併失敗：' + (e?.message || ''));
-      return { ok: false, reason: 'conflict', error: '自動合併失敗：' + (e?.message || '') };
-    }
-  }
-  setState('conflict', '後端有新版本但拉唔到 —— 一陣再自動試');
-  scheduleRetry();
-  return { ...r, ok: false, reason: 'conflict', hint: '拉唔到後端最新版本嚟合併，會自動再試。' };
 }
 
 /** 由後端讀返成個資料庫（唔會自動覆蓋本機 —— 交返畀呼叫者決定） */
@@ -672,16 +332,16 @@ export async function remoteDiagnose() {
     add('write', '讀寫權（API Key）', 'ok',
       info.found
         ? `後端有資料庫：團員 ${c.members ?? '?'} · 帳目 ${c.transactions ?? '?'} · 通告 ${c.notices ?? '?'}（版本 ${String(info.version || info.at || '').slice(0, 19).replace('T', ' ')}）`
-        : '後端仲未有資料庫 —— 撳「立即儲存到後端」推第一筆上去');
+        : '後端仲未有資料庫 —— 撳「儲存到後端」推第一筆上去');
   }
 
   /* ⑥ 本機狀態 */
   const db = tryLoad();
+  const base = getBase();
   add('local', '本機狀態', 'ok',
     `團員 ${(db?.members || []).length} · 帳目 ${(db?.transactions || []).length}`
     + ` · 未儲存改動 ${Number(db?.sync?.pending || 0)} 項`
-    + ` · 自動儲存${db?.sync?.auto === false ? '已關（要自己撳「立即儲存」）' : '開著'}`
-    + ` · 上次同步版本 ${String(db?.sync?.lastSyncedVersion || '（未同步過）').slice(0, 19).replace('T', ' ')}`);
+    + ` · 登入基準 ${base ? String(base.at || '').slice(0, 19).replace('T', ' ') + '（後端版本 ' + (String(base.version || '').slice(0, 19).replace('T', ' ') || '空') + '）' : '（未由後端載入過）'}`);
 
   out.ok = !out.blockers.length && out.stages.every(s => s.state !== 'bad');
   out.summary = out.ok
@@ -693,110 +353,6 @@ export async function remoteDiagnose() {
 function firstBlocker(out) {
   const b = out.blockers[0] || out.stages.find(s => s.state !== 'ok');
   return b ? `${b.label}：${b.detail}` : '';
-}
-
-/* ============================================================
-   多人同時用（2026-09-18 團長要求：一齊開 APP 一齊做嘢）
-   ============================================================ */
-let checkBusy = false;
-let pollTimer = null;
-
-/**
- * 「立即同步」：問後端有冇隊友寫入嘅新版本 → 有就拉落嚟。
- * 本機有未同步改動 → 自動合併（聯集＋逐格深層合併，唔會盲蓋），
- * 合併完會照樣排隊存返上去。
- * 回 { updated:true } 表示有拉新嘢；{ upToDate:true } 表示已經係最新。
- */
-export async function checkRemote({ silent = false } = {}) {
-  if (checkBusy || inFlight) return { ok: false, reason: 'busy' };
-  checkBusy = true;
-  try {
-    /* 2026-09-19：同 reconcile() 統一 —— 「讀後端 → 有新版就拉＋合併」
-       而家成個 app 得一份實作（開機／poll／切視窗／push 之前／立即同步），
-       唔會再出現「呢條路記得先讀後端、嗰條路唔記得」呢類不一致。 */
-    return await reconcile({ silent });
-  } finally {
-    checkBusy = false;
-  }
-}
-
-/**
- * 會議模式：每 60 秒（有開住、冇收埋）靜靜問一次後端有冇隊友更新。
- * 有 → 拉落嚟；如果用家**唔係打緊字**（冇 input／textarea focus）
- * 就即刻重繪畫面 —— 一齊睇嗰陣大家都會見到對方嘅最新改動。
- * 用家打緊字就只彈提示，唔會炸走佢個表單。
- *
- * 2026-09-19（團長回報：同一帳戶，無痕同普通視窗見到唔同嘢）：
- * 本機有未存好嘅改動都照樣 poll —— checkRemote 會「拉後端＋聯集合併」，
- * 本機未存嘅改動原封不動照樣排隊存，唔會再因為 push 失敗而永遠唔拉人哋嘢。
- */
-export function startPolling(intervalMs = 60000) {
-  if (pollTimer) return;
-  pollTimer = setInterval(async () => {
-    try {
-      if (!armed || isMock() || !remoteConfigured()) return;
-      if (inFlight || checkBusy) return;             // 撞正自己存取就等下一轉
-      if (typeof document !== 'undefined' && document.hidden) return;
-      const r = await checkRemote({ silent: true });
-      if (r?.oldBackend) { warnOldBackend(); return; }
-      if (!r?.updated) return;
-      const util = await import('./util.js').catch(() => null);
-      const tag = typeof document !== 'undefined' ? String(document.activeElement?.tagName || '').toUpperCase() : '';
-      const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
-      if (typing) {
-        try { util?.toast?.('隊友更新咗後端 —— 撳右上「立即同步」就見到最新', 'info'); } catch { /* */ }
-        return;
-      }
-      try { window.dispatchEvent(new CustomEvent('v82:refresh')); } catch { /* */ }
-      try { util?.toast?.('已載入隊友嘅最新改動', 'ok'); } catch { /* */ }
-    } catch { /* 靜靜地失敗，下次再試 */ }
-  }, Math.max(20000, intervalMs));
-}
-export function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
-
-/* ============================================================
-   跨視窗／跨機同步（2026-09-19）
-   無痕視窗同普通視窗各有各嘅 localStorage —— 同一帳戶兩邊開，
-   以前要等最多 60 秒 poll 先會拉到對方嘅改動。而家：
-   一切返呢個視窗（visibilitychange / focus）就 1.2 秒內即刻對一次版本，
-   你撳過嚟嗰下就已經係最新。
-   ============================================================ */
-let visTimer = null;
-let oldBackendWarned = false;
-
-async function warnOldBackend() {
-  if (oldBackendWarned) return;
-  oldBackendWarned = true;
-  try {
-    const util = await import('./util.js');
-    util?.toast?.('後端係舊版 Code.gs（冇版本號）—— 兩邊視窗會對唔到料。請去「總表同步」下載新版重新部署', 'err');
-  } catch { /* */ }
-}
-
-export function startVisibilityWatch() {
-  if (typeof document === 'undefined' || typeof window === 'undefined') return;
-  const poke = () => {
-    if (document.hidden) return;
-    clearTimeout(visTimer);
-    visTimer = setTimeout(async () => {
-      try {
-        if (!armed || isMock() || !remoteConfigured()) return;
-        if (inFlight || checkBusy) return;
-        const tag = String(document.activeElement?.tagName || '').toUpperCase();
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;   // 打緊字唔搞
-        const r = await checkRemote({ silent: true });
-        if (r?.oldBackend) { warnOldBackend(); return; }
-        if (r?.updated) {
-          try { window.dispatchEvent(new CustomEvent('v82:refresh')); } catch { /* */ }
-          const util = await import('./util.js').catch(() => null);
-          try { util?.toast?.('已載入最新資料', 'ok'); } catch { /* */ }
-        }
-      } catch { /* 靜靜地失敗 */ }
-    }, 1200);
-  };
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) poke(); });
-  window.addEventListener('focus', poke);
-  window.addEventListener('pageshow', poke);
 }
 
 /* ============================================================
@@ -865,62 +421,314 @@ export async function uploadPhotos(photos = [], { id = '' } = {}) {
   return { ok: false, error: r?.error || '上載唔到', links: [] };
 }
 
-/* ---------------- 自動儲存 ---------------- */
+/* ============================================================
+   ① 登入／開機：由後端攞資料（＝基準）
+   ============================================================ */
 
 /**
- * 由 store.persist() 呼叫：改動之後排隊，debounce 幾秒先寫入後端。
- * 離線／失敗會自動重試，唔會靜靜雞唔見咗。
+ * 由後端攞成份資料，做呢部機嘅工作副本＋基準。
+ *
+ * 本機有未儲存改動（上次未撳儲存就閂咗）→ 唔會丟：三方比對之後
+ *   · 唔撞嘅改動保留喺本機（等你撳儲存）
+ *   · 撞嘅格暫時用後端，衝突名單回傳畀介面問用家（policy:'ask'），
+ *     或者直接用我嘅（policy:'mine'，團員入口交嘢用）
+ *
+ * @returns {Promise<{ok:boolean, found?:boolean, fresh?:boolean, merged?:boolean,
+ *   mine?:number, theirs?:number, same?:number, conflicts?:Array, ctx?:object,
+ *   version?:string, at?:string, error?:string, reason?:string, hint?:string}>}
  */
-export function scheduleSave() {
-  if (!armed || isMock()) return;
-  const cfg = remoteCfg();
-  if (!cfg.ok) return;
-  /* 2026-09-19：自動寫入已剷走（remoteCfg().auto 寫死 false）。
-     呢個函數而家**淨係更新狀態** —— 令頂部出「立即同步（N）」，
-     話畀團長知有幾多改動暫存咗等佢撳。佢唔會排任何 timer、唔會寫後端。 */
-  if (hasPending()) setState('pending', '未儲存 —— 撳「立即同步」先寫入後端');
-}
-
-/**
- * 2026-09-19：以前呢度係 `setTimeout(runSave, …)` —— 背景自動重試寫入。
- * 團長指示「唔好比佢有機會出事」，所以**自動重試一齊剷走**：
- * 寫入失敗就如實報，等用家自己撳多次。冇背景 timer ＝ 冇「唔知幾時會寫」。
- * 保留呢個函數名只係為咗唔使逐個 call site 改（佢而家淨係出狀態）。
- */
-function scheduleRetry() {
-  if (isMock()) return;
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-    setState('offline', '離線 —— 改動留喺呢部機，返到線撳「立即同步」');
-    return;
+export async function loadFromBackend({ policy = 'ask' } = {}) {
+  if (isMock()) return { ok: false, reason: 'mock', error: '示範模式唔會讀後端' };
+  if (!remoteConfigured()) return { ok: false, reason: 'not_configured', error: '未設定後端' };
+  const got = await pullDb();
+  if (!got.ok) {
+    setState('unreachable', got.error || '連唔到後端');
+    return { ok: false, error: got.error || '讀唔到後端', reason: got.reason || 'network', hint: got.hint || '' };
   }
-  setState('pending', '未儲存 —— 撳「立即同步」先寫入後端');
+  const version = String(got.version || '');
+  const at = String(got.at || '');
+  if (!got.found) {
+    /* 新旅團：後端仲係空。本機（種子／未存嘅嘢）保留，基準＝空 → 之後儲存全部當我加嘅 */
+    markBackendEmpty();
+    lastLoadAt = Date.now();
+    setState(hasPending() ? 'pending' : 'idle', hasPending() ? '後端仲係空 —— 撳「儲存到後端」建立第一份' : '後端仲未有資料');
+    return { ok: true, found: false, version: '', at: '' };
+  }
+  if (!version) {
+    /* 舊版 Code.gs（冇版本號）：版本對唔到，樂觀鎖亦冇用 —— 照載入，但要話人知 */
+    setState('error', '後端係舊版 Code.gs（冇版本號）—— 請更新 Apps Script');
+  }
+  const local = tryLoad();
+  const pending = Number(local?.sync?.pending || 0);
+  const base = getBase();
+  /* 「有冇未儲存改動」以 diff(基準, 本機) 為準（pending 只係次數提示）；
+     冇基準嘅舊裝置先至睇 pending */
+  const dirty = base?.db ? localChanges().length > 0 : (pending > 0 && hasLocalContent());
+
+  if (!dirty) {
+    adoptRemote(got.db, { version });
+    lastLoadAt = Date.now();
+    setState('idle', '已由後端載入');
+    return { ok: true, found: true, fresh: true, version, at };
+  }
+
+  const remoteN = normalizeRemote(got.db);
+  if (!base || !base.db) {
+    /* 升級前留低嘅裝置：有未存改動但冇基準快照，分唔到「我改咗乜」。
+       最穩陣：以後端為準，只把本機**多出嚟**嘅紀錄補入（唔刪、唔蓋任何格）。 */
+    const merged = unionAdditions(remoteN, local);
+    setLocalMerged(merged, remoteN, { version, pending });
+    lastLoadAt = Date.now();
+    setState(hasPending() ? 'pending' : 'idle');
+    return { ok: true, found: true, merged: true, legacy: true, version, at };
+  }
+
+  const tw = threeWay(base.db, stripForBase(local), remoteN);
+  let merged = tw.merged;
+  let conflicts = tw.conflicts;
+  if (policy === 'mine' && conflicts.length) {
+    merged = JSON.parse(JSON.stringify(merged));
+    applyChanges(merged, overridesFor(conflicts, true));
+    conflicts = [];
+  }
+  setLocalMerged(merged, remoteN, { version, pending });
+  lastLoadAt = Date.now();
+  setState(hasPending() ? 'pending' : 'idle');
+  return {
+    ok: true, found: true, merged: true, version, at,
+    mine: tw.mine.length, theirs: tw.theirs.length, same: tw.same.length,
+    conflicts, ctx: { local: stripForBase(local), remote: remoteN }
+  };
 }
 
-/** 即刻寫入（唔等 debounce）——「立即儲存」掣同離開頁面前用 */
-export async function flush() {
-  if (timer) { clearTimeout(timer); timer = null; }
-  if (!remoteConfigured()) return { ok: false, reason: 'not_configured' };
-  return pushDb({ silent: false });
-}
-
-/** 有冇改動仲未寫入後端 */
-export function hasPending() {
-  const db = tryLoad();
-  return !!(db?.sync?.pending);
-}
-
-/* 一返到線：淨係**讀**一次後端（對版本／拉隊友最新）＋ 更新狀態。
-   2026-09-19：以前呢度會 `runSave()` —— 一返到線就自動寫後端。
-   團長指示「唔好比佢有機會出事」，所以而家返到線都唔會自動寫；
-   頂部會顯示「立即同步（N）」，等用家自己撳。 */
-try {
-  window.addEventListener('online', () => {
-    if (!armed || isMock()) return;
-    if (!remoteConfigured()) return;
-    setState(hasPending() ? 'pending' : 'idle', hasPending() ? '未儲存 —— 撳「立即同步」先寫入後端' : '已連後端');
-    reconcile({ silent: true }).catch(() => { /* 讀唔到就算，唔阻用家 */ });
+/** 冇基準嘅舊裝置專用：後端為準 ＋ 本機多出嚟嘅紀錄（有 id）補入。唔刪、唔蓋。 */
+function unionAdditions(remote, local) {
+  const out = JSON.parse(JSON.stringify(remote));
+  Object.keys(local || {}).forEach(k => {
+    if (['sync', 'meta', 'backend', 'unitCode', 'schema', 'kind'].includes(k)) return;
+    const lv = local[k], rv = out[k];
+    if (!Array.isArray(lv)) { if (rv === undefined && lv !== undefined) out[k] = lv; return; }
+    if (rv === undefined) { out[k] = lv; return; }
+    if (!Array.isArray(rv)) return;
+    const ids = new Set(rv.map(x => (x && typeof x === 'object') ? String(x.id) : ''));
+    lv.forEach(x => { if (x && typeof x === 'object' && x.id !== undefined && !ids.has(String(x.id))) rv.push(x); });
   });
-} catch { /* 非瀏覽器環境 */ }
+  return out;
+}
+
+/** 上次成功由後端載入係幾耐之前（ms）；未載入過 ＝ Infinity */
+export function loadedAgo() { return lastLoadAt ? Date.now() - lastLoadAt : Infinity; }
+
+/**
+ * 登入嗰一刻要係「後端嗰一刻」：登入頁擺咗好耐先撳登入 → 再攞一次。
+ * 有未儲存改動就唔郁（唔會丟人哋嘢），交返畀之後嘅儲存流程核對。
+ */
+export async function ensureFresh({ maxAgeMs = 60000 } = {}) {
+  if (isMock() || !remoteConfigured()) return { ok: false, reason: 'not_configured' };
+  if (loadedAgo() <= maxAgeMs) return { ok: true, fresh: false };
+  if (hasPending()) return { ok: true, fresh: false, skipped: 'pending' };
+  const info = await callBackend({ action: 'dbInfo' }, { timeoutMs: 20000 });
+  if (!info.ok) return { ok: false, error: info.error || '問唔到後端', reason: info.reason || 'network' };
+  const base = getBase();
+  if (info.found && base && String(info.version || '') === String(base.version || '')) {
+    lastLoadAt = Date.now();
+    return { ok: true, fresh: false, upToDate: true };
+  }
+  return loadFromBackend();
+}
+
+/** 「由後端重新載入」：**丟棄**本機未儲存改動，成份用返後端（介面要先確認） */
+export async function discardAndReload() {
+  if (isMock()) return { ok: false, reason: 'mock', error: '示範模式唔會讀後端' };
+  const got = await pullDb();
+  if (!got.ok) return { ok: false, error: got.error || '讀唔到後端', reason: got.reason, hint: got.hint };
+  if (!got.found) return { ok: false, reason: 'empty', error: '後端仲未有資料庫' };
+  adoptRemote(got.db, { version: String(got.version || '') });
+  lastLoadAt = Date.now();
+  setState('idle', '已由後端重新載入');
+  return { ok: true, version: String(got.version || '') };
+}
+
+/* ============================================================
+   ③ 儲存到後端（唯一寫入路）
+   ============================================================ */
+
+/**
+ * 儲存到後端。
+ *
+ * @param policy   'ask'  → 撞嘅格暫時用後端、先寫其餘，然後交 resolver（介面）問用家
+ *                 'mine' → 撞嘅格用我嘅（團員入口交自己嘅 RSVP 用）
+ *                 'theirs' → 撞嘅格用後端，唔問
+ * @param resolver async ({ conflicts, ctx, remoteAt, savedCount }) → { useMine: string[] } | null
+ * @returns {Promise<{ok:boolean, pushed?:boolean, version?:string, remoteChanged?:boolean,
+ *   mine?:number, theirs?:number, same?:number, applied?:number,
+ *   conflicts?:Array, resolved?:number, kept?:number,
+ *   error?:string, reason?:string, hint?:string, bytes?:number, parts?:number}>}
+ */
+export async function saveToBackend({ policy = 'ask', resolver = null, silent = true, _attempt = 0 } = {}) {
+  if (isMock()) return { ok: false, reason: 'mock', error: '示範模式唔會寫入後端' };
+  const cfg = remoteCfg();
+  if (!cfg.ok) return { ok: false, reason: 'not_configured', error: '未設定後端網址' };
+  const local = tryLoad();
+  if (!local) return { ok: false, reason: 'no_db', error: '資料庫未載入' };
+  if (inFlight) return { ok: false, reason: 'busy', error: '上一次儲存仲未完成' };
+
+  inFlight = true;
+  setState('saving', silent ? '' : '核對緊後端版本…');
+  try {
+    /* ① 問後端而家係咩版本（平，唔使成份拉） */
+    const info = await callBackend({ action: 'dbInfo' }, { timeoutMs: 20000 });
+    if (!info.ok) {
+      setState('unreachable', info.error || '連唔到後端');
+      logLocal(`✗ 未讀到後端版本，唔會寫（${info.error || '未知'}）`);
+      return {
+        ok: false, reason: info.reason || 'network', bytes: 0,
+        error: `未讀到後端版本，唔會盲寫：${info.error || '連唔到後端'}`,
+        hint: (info.hint ? info.hint + ' ' : '') + '你嘅改動冇蝕到，仲喺呢部機 —— 連返後端再撳「儲存到後端」。'
+      };
+    }
+    const base = getBase();
+    const baseVersion = String(base?.version || '');
+    const remoteVersion = String(info.version || '');
+    const remoteChanged = !!info.found && remoteVersion !== baseVersion;
+    const localStripped = stripForBase(local);
+
+    /* 未由後端載入過就撳儲存（例如開機時後端斷咗）：後端有嘢就一定要先載入，唔可以盲寫 */
+    if (info.found && !base) {
+      setState('pending', '未由後端載入過 —— 請先重新載入');
+      return { ok: false, reason: 'no_base',
+        error: '呢部機仲未由後端載入過資料（開機嗰陣連唔到後端）—— 唔會盲寫。請先撳「重新載入」。' };
+    }
+
+    /* ② 三方比對（只有「有人喺我登入後儲存過」先要拉成份） */
+    let finalDb = localStripped;
+    let mineN = 0, theirsN = 0, sameN = 0, appliedN = 0;
+    let conflicts = [];
+    let ctx = null;
+    let remoteAt = String(info.at || '');
+    if (remoteChanged) {
+      const got = await pullDb();
+      if (!got.ok || !got.found || !got.db) {
+        setState('error', got.error || '拉唔到後端資料');
+        return { ok: false, reason: got.reason || 'network', error: got.error || '後端有新版本但拉唔到 —— 改動仲喺呢部機' };
+      }
+      const remoteN = normalizeRemote(got.db);
+      const tw = threeWay(base?.db || {}, localStripped, remoteN);
+      mineN = tw.mine.length; theirsN = tw.theirs.length; sameN = tw.same.length; appliedN = tw.applied.length;
+      conflicts = tw.conflicts;
+      finalDb = tw.merged;
+      ctx = { local: localStripped, remote: remoteN };
+      remoteAt = String(got.at || remoteAt);
+      if (conflicts.length && policy === 'mine') {
+        applyChanges(finalDb, overridesFor(conflicts, true));
+        conflicts = [];
+      }
+      /* 版本要用**啱啱拉嗰份**嘅（dbInfo 同 loadDb 之間都可能有人寫入） */
+      if (got.version) info.version = got.version;
+    } else {
+      mineN = base?.db ? diffDb(base.db, localStripped).length : 0;
+      appliedN = mineN;
+    }
+
+    /* ③ 寫入（樂觀鎖 baseVersion ＝ 我啱啱見到嘅後端版本） */
+    const payload = exportForBackend({ ...local, ...finalDb });
+    const r = await pushPayload(payload, { baseVersion: String(info.version || ''), unit: cfg.unit, silent });
+    if (r.conflict) {
+      /* dbInfo → 寫入之間又有人寫咗（幾秒內撞正）→ 由頭核對多一次（唔會自動蓋） */
+      if (_attempt < 2) {
+        inFlight = false;
+        logLocal('⚠ 寫入嗰一刻後端又有新版本 —— 重新核對');
+        return saveToBackend({ policy, resolver, silent, _attempt: _attempt + 1 });
+      }
+      setState('conflict', '後端不停有人寫入 —— 請等一陣再儲存');
+      return { ok: false, reason: 'conflict', error: '後端連續有人寫入，核對咗三次都撞版 —— 請等一陣再撳「儲存到後端」' };
+    }
+    if (!r.ok) {
+      setState('error', r.error || '儲存失敗');
+      logLocal(`✗ 儲存失敗：${r.error || '未知錯誤'}`);
+      return { ok: false, reason: r.reason || 'backend', error: r.error || '儲存失敗', hint: r.hint || '' };
+    }
+
+    /* ④ 成功：本機 ＝ 後端 ＝ 新基準 */
+    commitSaved({ ...local, ...finalDb }, { version: String(r.version || ''), bytes: r.bytes || 0, parts: r.parts || 0 });
+    lastLoadAt = Date.now();
+    if (remoteChanged) {
+      logLocal(`ℹ 後端喺你登入後有人儲存過（${remoteAt.slice(0, 19).replace('T', ' ')}）：對方 ${theirsN} 項、你 ${mineN} 項、相同 ${sameN} 項、衝突 ${conflicts.length} 項`);
+    }
+    const out = {
+      ok: true, pushed: true, version: String(r.version || ''), bytes: r.bytes || 0, parts: r.parts || 0,
+      remoteChanged, remoteAt, mine: mineN, theirs: theirsN, same: sameN, applied: appliedN,
+      conflicts, ctx, resolved: 0, kept: conflicts.length
+    };
+    inFlight = false;
+
+    /* ⑤ 有衝突 → 問用家（呢啲格已經用咗後端版本，未寫入我嘅）；佢確認咗先至再寫一次 */
+    if (conflicts.length && policy === 'ask' && typeof resolver === 'function') {
+      setState('conflict', `${conflicts.length} 項同後端唔同，未寫入 —— 等你確認`);
+      let choice = null;
+      try { choice = await resolver({ conflicts, ctx, remoteAt, savedCount: appliedN, mode: 'save' }); } catch { choice = null; }
+      const keys = choice?.useMine === true ? true : (Array.isArray(choice?.useMine) ? choice.useMine : []);
+      const ov = overridesFor(conflicts, keys);
+      if (ov.length) {
+        applyChangesLocal(ov);
+        const again = await saveToBackend({ policy: 'ask', resolver: null, silent, _attempt: 0 });
+        out.resolved = again.ok ? ov.length : 0;
+        out.kept = conflicts.length - out.resolved;
+        out.overrideOk = !!again.ok;
+        if (!again.ok) out.overrideError = again.error || '';
+        if (again.ok) { out.version = again.version; logLocal(`✓ 已按你確認蓋過 ${ov.length} 項`); }
+      }
+    }
+    setState(hasPending() ? 'pending' : 'saved', hasPending() ? '仲有改動未儲存' : '已儲存到後端');
+    return out;
+  } finally {
+    inFlight = false;
+  }
+}
+
+/** 實際送出（單件 saveDb／大過閾值自動分件）—— 回 { ok, conflict, version, bytes, parts, error } */
+async function pushPayload(payload, { baseVersion, unit, silent }) {
+  let text = '';
+  try { text = JSON.stringify(payload); } catch { /* ignore */ }
+  const bytes = text.length;
+  if (bytes > 40000000) {
+    return { ok: false, reason: 'too_big', error: `資料庫太大（${fmtBytes(bytes)}）`, hint: '去「帳號與系統 → 資料管理 → 總表同步 → 體積檢查」睇下邊個分頁食緊位。' };
+  }
+  if (!silent) setState('saving', '寫入緊後端…');
+  if (bytes <= CHUNKED_ABOVE) {
+    const r = await callBackend({ action: 'saveDb', db: payload, baseVersion });
+    return { ...r, bytes: r.bytes || bytes, parts: 0 };
+  }
+  /* v2.4.0 分件：拆件 → 逐件送（任何一件撞版即停）→ commit 拼合 */
+  const parts = splitDbIntoParts(payload, PART_MAX_BYTES);
+  const saveId = `${unit}-stg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  for (let i = 0; i < parts.length; i++) {
+    setState('saving', `分件儲存中…（${i + 1}/${parts.length}）`);
+    const pr = await callBackend({ action: 'saveDbPart', unit, data: parts[i], partIdx: i, parts: parts.length, saveId, baseVersion });
+    if (!pr.ok && /未知 action/.test(String(pr.error || ''))) {
+      /* 舊後端（未部署 v2.4.0）→ 退返單件 */
+      logLocal('⚠ 後端仲係舊版（未部署分件儲存）—— 改用單一件儲存');
+      const r = await callBackend({ action: 'saveDb', db: payload, baseVersion });
+      return { ...r, bytes: r.bytes || bytes, parts: 0 };
+    }
+    if (!pr.ok) return { ...pr, bytes: 0, parts: parts.length };
+  }
+  setState('saving', `分件完成，拼合中…（${parts.length} 件）`);
+  const r = await callBackend({ action: 'saveDbCommit', unit, saveId, parts: parts.length, baseVersion });
+  return { ...r, bytes: r.bytes || bytes, parts: parts.length };
+}
+
+/** 衝突講成人話（畀介面／測試） */
+export function describeConflicts(conflicts, ctx) {
+  return (conflicts || []).map(c => ({ key: c.key, ...describeConflict(c, ctx || {}) }));
+}
+
+function logLocal(msg) {
+  const db = tryLoad();
+  if (!db) return;
+  pushLog(db, msg);
+  commitMeta();
+}
 
 /* ---------------- 小工具 ---------------- */
 function pushLog(db, msg) {

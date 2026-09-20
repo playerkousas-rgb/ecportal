@@ -5,7 +5,8 @@
    ① 開機會由旅團後端（Google Sheet）拉最新資料 —— 以前淨係讀本機
      localStorage，新裝置／無痕視窗／團員手機全部空白（登入都唔得、
      IG／FB連結／活動／通告全部「未公開」）。而家同執委版一樣：
-     開機對版本 → 拉後端 → 有改動自動存返上去 → 60 秒睇隊友更新。
+     開機由後端攞成份資料做基準 → 團員交嘢即刻行同一條儲存路寫返上去
+     （核對版本＋三方比對，只寫自己嗰格）。冇背景 poll。
    ② 回覆出席／交卷直接用登入身份（YMIS 登入咗就知你係邊個）——
      以前要「填自己個名」，但個名欄原來冇 render 到，結果次次
      都彈「請填名」而根本冇位填（= 報出席永遠失敗）。
@@ -37,19 +38,20 @@ let hubRemote = null;
 /**
  * 團員交嘢（回覆出席／交卷）之後**即刻**寫返後端。
  *
- * 點解呢度唔跟團長嘅「手動模式」：手動模式講嘅係**團長自己部機**嘅工作副本 ——
- * 「我改住先，撳同步先一次過寫」。但團員交嘅嘢係**入站資料**：呢部機係團員嘅，
- * 佢而家交完就關，永遠唔會有人喺佢部機撳「立即同步」。如果跟手動模式暫存住，
- * 份回覆就永遠困喺團員部機，團長永遠收唔到 —— 等如冇交過。
+ * 團員交嘅嘢係**入站資料**：呢部機係團員嘅，佢交完就關，永遠唔會有人喺佢部機
+ * 撳「儲存到後端」。如果暫存住，份回覆就永遠困喺團員部機 —— 等如冇交過。
  *
- * 所以入站提交一律即刻寫。注意佢仍然行 pushDb() 嗰個硬保險（寫之前先讀
- * 後端合併），所以一樣唔會蓋走執委啲資料。
+ * 所以入站提交即刻行**同一條**儲存路 saveToBackend()：先核對後端版本、三方比對，
+ * 只會寫團員自己嗰格（佢嘅 RSVP／答卷）；執委嘅資料一格都唔會蓋。
+ * policy:'mine' ＝ 撞正同一格（例如執委同時幫佢改咗出席）就以團員自己啱啱交嘅為準
+ * （團員部機冇人可以答對話框）。
  */
 async function pushSubmit(what) {
   if (!hubRemote?.remoteConfigured?.()) return;
   try {
-    const r = await hubRemote.flush();
+    const r = await hubRemote.saveToBackend({ policy: 'mine', silent: true });
     if (!r?.ok) toast(`${what}已記低喺呢部機，但暫時送唔到後端（${r?.error || '未知'}）—— 請話畀執委知`, 'warn');
+    else if (r.remoteChanged) paint();   /* 順便併入咗執委嘅新資料 → 重畫 */
   } catch (e) {
     toast(`${what}已記低喺呢部機，但暫時送唔到後端 —— 請話畀執委知`, 'warn');
   }
@@ -83,13 +85,11 @@ async function syncBoot() {
       syncReady = true; paint(); return;
     }
     store.setSaveHook(() => remoteApi.scheduleSave());
-    /* 2026-09-19：改用 remote.reconcile() —— 同 main.js 嘅 syncBoot 行同一個
-       函數（「先讀後端版本 → 有新版就拉＋合併」），唔使兩邊各寫一份。
-       最緊要係：reconcile() 讀成功嗰陣會把 remote 標記做「已對版本」，
-       pushDb 先至肯寫。讀唔到就一律唔寫 —— 團員入口呢度雖然多數唯讀，
-       但交卷／借還都會寫，一樣唔可以盲蓋執委啲資料。 */
+    /* 2026-09-20：同 main.js 一樣行 loadFromBackend() —— 開機由後端攞成份資料做基準。
+       上次交咗但送唔出嘅嘢（pending）會三方比對保留（撞正就以團員自己嘅為準）。
+       讀唔到就一律唔寫 —— 交卷／回覆都要先有基準先至可以寫。 */
     try {
-      const rc = await remoteApi.reconcile({ silent: true });
+      const rc = await remoteApi.loadFromBackend({ policy: 'mine' });
       if (!rc?.ok) {
         /* 讀唔到名冊 ＝ 團員一定入唔到。原因如實講（唔好靜靜雞）。
            團員入口要讀成個資料庫（名冊＋密碼），呢個 action 後端要 API Key，
@@ -99,26 +99,16 @@ async function syncBoot() {
             ? '（平台伺服器端未登記呢個旅團：要管理員喺 Vercel 加 TROOP_<編號>_BACKEND／_APIKEY 再 Redeploy。'
               + '團員入口要讀名冊，呢一步冇得由團員自己繞過。）' : '');
       } else if (rc.found === false) {
-        syncError = '後端仲未有資料庫 —— 執委請先喺系統撳「立即儲存到後端」。';
-      } else if (rc.oldBackend) {
+        syncError = '後端仲未有資料庫 —— 執委請先喺系統撳「儲存到後端」。';
+      } else if (!rc.version) {
         syncError = '後端版本舊咗（讀唔到改動版本）—— 執委請更新 Apps Script 去 v2.5.0。';
       }
+      /* 上次困住嘅回覆／答卷 → 而家有基準喇，即刻送 */
+      if (rc?.ok && rc.found !== false && remoteApi.hasPending?.()) pushSubmit('上次未送出嘅回覆');
     } catch (e) {
       console.warn('[hub] 開機拉後端失敗（照用本機資料）', e);
       syncError = e?.message || String(e);
     }
-    remoteApi.arm?.();
-    remoteApi.startPolling?.();
-    remoteApi.startVisibilityWatch?.();
-    /* 隊友（執委／其他團員）更新咗後端 → 60 秒 poll 會彈 v82:refresh */
-    window.addEventListener('v82:refresh', () => {
-      /* 交緊卷／開緊彈窗／打緊字就唔好重繪（會食走佢啲答案） */
-      if (document.querySelector('.overlay')) return;
-      if (document.querySelector('[data-ans]')) return;
-      const tag = String(document.activeElement?.tagName || '').toUpperCase();
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-      paint();
-    });
     window.addEventListener('v82:sync', paintSyncBadge);
   } catch { /* remote 模組載入唔到 —— 照用本機 */ }
   syncReady = true;
@@ -143,7 +133,7 @@ function paintSyncBadge() {
       loading: ['b-info', 'cloud', '讀取緊…'],
       error: ['b-danger', 'alert', '同步失敗'],
       conflict: ['b-warn', 'alert', '撞版'],
-      offline: ['b-warn', 'alert', '離線'],
+      unreachable: ['b-danger', 'alert', '連唔到後端'],
       idle: ['b-ok', 'check', '已同步']
     };
     const [cls, ic, label] = map[s.state] || ['b-grey', 'cloud', ''];

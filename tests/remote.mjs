@@ -206,19 +206,27 @@ section('端到端：換機／清 cache 都唔會冇咗資料（真 HTTP）');
 
     /* ---- 裝置 A：清走種子資料 → 加人加帳 → 寫後端 ---- */
     const A = await runDevice({ steps: [
+      { op: 'load' },                                   // 開機：後端仲係空
       { op: 'wipe' },
       { op: 'addMember', name: '陳大文', ymis: '2026000001' },
       { op: 'addTx', date: '2026-09-17', type: 'income', item: '團費', amount: 360 },
       { op: 'push' },
-      { op: 'snapshot' }
+      { op: 'snapshot' },
+      { op: 'backendKeys' }
     ] });
     ok('裝置 A 開得機、後端設定自動帶入', A.ok === true && A.configured === true,
       (A.error || JSON.stringify(A.cfg || {})).slice(0, 200));
+    const loadA = (A.steps || []).find(s => s.op === 'load');
+    ok('新旅團開機：後端仲係空（found:false）—— 基準記做「空」', loadA?.ok === true && loadA?.found === false && loadA?.baseEmpty === true, JSON.stringify(loadA));
     const pushStep = (A.steps || []).find(s => s.op === 'push');
     ok('裝置 A 把整個資料庫寫入後端', pushStep?.ok === true, JSON.stringify(pushStep));
     ok('寫入成功後 pending 清零（介面顯示「已存到後端」）', pushStep?.pending === 0, String(pushStep?.pending));
     const snapA = (A.steps || []).find(s => s.op === 'snapshot');
     ok('裝置 A 本機有 1 個團員、1 筆帳目', snapA?.members === 1 && snapA?.transactions === 1, JSON.stringify(snapA));
+    ok('儲存之後基準 ＝ 後端版本（本機相對基準冇改動）', !!snapA?.baseVersion && snapA?.localChanges === 0, JSON.stringify({ v: snapA?.baseVersion, lc: snapA?.localChanges }));
+    const keysA = (A.steps || []).find(s => s.op === 'backendKeys');
+    ok('★ 寫上後端嘅 payload 冇 sync／backend（連線設定、API Key 唔會經 Sheet 傳嚟傳去）',
+      keysA?.ok === true && !keysA.keys.includes('sync') && !keysA.keys.includes('backend') && keysA.keys.includes('members'), JSON.stringify(keysA?.keys));
 
     /* ---- 裝置 B ＝ 全新一部機（全新 process、全新 localStorage） ---- */
     const B = await runDevice({ steps: [
@@ -245,19 +253,23 @@ section('端到端：換機／清 cache 都唔會冇咗資料（真 HTTP）');
        2026-09-19 團長指示「自動會有機會出事就唔好比佢有得選」：
        自動寫入已剷走。呢個劇本由「改完自動存」改成「改完暫存 → 明確撳同步」。 */
     const C = await runDevice({ steps: [
-      { op: 'pull' },                                   // 先拉後端（＝1 個團員）
+      { op: 'load' },                                   // 登入：由後端攞（＝1 個團員）
       { op: 'snapshot' },
-      { op: 'autosave', name: '李小明', ymis: '2026000002', waitMs: 6000 },
-      { op: 'syncNow' }                                 // ← 用家撳「立即同步」
+      { op: 'autosave', name: '李小明', ymis: '2026000002', waitMs: 4000 },
+      { op: 'backendPeek' },                            // 未撳儲存之前後端一個字都未收到
+      { op: 'syncNow' }                                 // ← 用家撳「儲存到後端」
     ] });
     const snapC = (C.steps || []).find(s => s.op === 'snapshot');
-    ok('裝置 C 拉完後端之後只有後端嗰 1 個團員（種子資料唔會撈返轉頭）',
+    ok('裝置 C 登入之後只有後端嗰 1 個團員（種子資料唔會撈返轉頭）',
       snapC?.members === 1, JSON.stringify(snapC?.names));
     const auto = (C.steps || []).find(s => s.op === 'autosave');
-    ok('★ 改完嘢**唔會**自動寫後端（等足 6 秒都仲喺本機排隊）',
+    ok('★ 改完嘢**唔會**自動寫後端（等足 4 秒都仲喺本機排隊）',
       auto?.pending >= 1, JSON.stringify(auto));
+    const peekC = (C.steps || []).find(s => s.op === 'backendPeek');
+    ok('★ 未撳儲存之前，後端仍然係 1 個團員（真係一個字都未寫）', peekC?.members === 1, JSON.stringify(peekC));
     const nowC = (C.steps || []).find(s => s.op === 'syncNow');
-    ok('★ 撳「立即同步」先至寫入', nowC?.ok === true && nowC?.pushed === true, JSON.stringify(nowC));
+    ok('★ 撳「儲存到後端」先至寫入', nowC?.ok === true && nowC?.pushed === true, JSON.stringify(nowC));
+    ok('冇人喺我登入後儲存過 → 直接寫（唔使拉成份落嚟比對）', nowC?.remoteChanged === false && nowC?.pending === 0, JSON.stringify(nowC));
 
     /* ---- 裝置 D：確認撳咗同步之後真係入咗後端 ---- */
     const D = await runDevice({ steps: [{ op: 'info' }, { op: 'pull' }] });
@@ -371,16 +383,17 @@ section('衝突復原：兩部機都改過，同步要合併唔可以盲蓋（�
     ] });
     ok('C 部機同步成功（V2）', stepOf(C, 'push')?.ok === true, JSON.stringify(stepOf(C, 'push')));
 
-    /* B 部機返嚟：匯入返之前嘅本機 db（李四未同步、baseVersion 仲係 V1）→ push
+    /* B 部機返嚟：讀返之前嘅本機 db＋基準（李四未同步、基準仲係 V1）→ 撳儲存
        舊版：盲蓋 → 張三消失（事故）。
-       新版：撞版 → 自動拉＋合併 → 重存 → 三個人都在。 */
+       新版：後端版本唔同 → 拉落嚟三方比對 → 加李四 vs 加張三係唔同紀錄 → 唔撞 → 一齊寫。 */
     const B2 = await runDevice({ steps: [
       { op: 'import', file: tmp },
       { op: 'push' },
       { op: 'snapshot' }
     ] });
     const b2push = stepOf(B2, 'push');
-    ok('B 部機撞版後自動復原：push 最終成功', b2push?.ok === true, JSON.stringify(b2push));
+    ok('B 部機撳儲存：偵測到有人喺我登入後儲存過（remoteChanged）', b2push?.remoteChanged === true, JSON.stringify(b2push));
+    ok('B 部機：唔同紀錄 → 冇衝突 → 儲存成功', b2push?.ok === true && (b2push?.conflicts || []).length === 0 && b2push?.mine === 1 && b2push?.theirs === 1, JSON.stringify(b2push));
     const b2snap = stepOf(B2, 'snapshot');
     ok('合併後 B 部機本機有齊三個人', b2snap?.names?.includes('陳大文') && b2snap?.names?.includes('張三') && b2snap?.names?.includes('李四'), JSON.stringify(b2snap));
     ok('合併後 B 部機 pending 清零（已存到後端）', b2snap?.pending === 0, String(b2snap?.pending));
@@ -396,25 +409,29 @@ section('衝突復原：兩部機都改過，同步要合併唔可以盲蓋（�
       { op: 'push' },
       { op: 'snapshot' }
     ] });
-    ok('空白裝置 push 被保險閘擋住（blank_guard）', stepOf(Z, 'push')?.ok === false, JSON.stringify(stepOf(Z, 'push')));
+    ok('★ 未由後端載入過嘅裝置撳儲存 → 拒絕（no_base），唔會盲寫', stepOf(Z, 'push')?.ok === false && stepOf(Z, 'push')?.reason === 'no_base', JSON.stringify(stepOf(Z, 'push')));
     const D2 = await runDevice({ steps: [{ op: 'pull' }] });
     ok('空白裝置冇蓋爛後端（資料仲在）',
       (stepOf(D2, 'pull')?.adopted?.members || 0) >= 3, JSON.stringify(stepOf(D2, 'pull')?.adopted));
 
-    /* ---- 會議模式 e2e：B 部機有未存改動，隊友儲存咗 → 「立即同步」要合併唔可以蓋 ---- */
+    /* ---- 開機時本機有未存改動，隊友已儲存 → 開機三方比對保留兩邊 ---- */
     const E1 = await runDevice({ steps: [
-      { op: 'pull' },                                   // E 拉到最新（三個人）
+      { op: 'load' },                                   // E 登入（三個人）
       { op: 'addMember', name: '李七', ymis: '2026000107' },   // E 改咗嘢未存（pending）
       { op: 'teammatePush', name: '李八', ymis: '2026000108' },// 同時隊友儲存咗李八上後端
-      { op: 'checksync' }                               // E 撳「立即同步」
+      { op: 'load' },                                   // E 閂咗再開（開機再由後端攞）
+      { op: 'push' }
     ] });
-    const es = stepOf(E1, 'checksync');
-    ok('「立即同步」：偵測到隊友新版本', es?.updated === true, JSON.stringify(es));
-    ok('「立即同步」：同本機未存改動合併（唔會冇咗任何一邊）', es?.merged === true, JSON.stringify(es));
-    ok('「立即同步」：合併後三個人＋李七＋李八都喺度',
-      es?.names?.includes('李七') && es?.names?.includes('李八') && (es?.members || 0) >= 5, JSON.stringify(es));
-    const F1 = await runDevice({ steps: [{ op: 'pull' }, { op: 'checksync' }] });
-    ok('已經係最新嗰陣「立即同步」唔會亂拉', stepOf(F1, 'checksync')?.upToDate === true, JSON.stringify(stepOf(F1, 'checksync')));
+    const loads = (E1.steps || []).filter(s2 => s2.op === 'load');
+    const es = loads[1];
+    ok('再開機：有未存改動 → 三方比對（merged），唔係盲採用後端', es?.merged === true && es?.fresh === false, JSON.stringify(es));
+    ok('再開機：本機有齊三個人＋李七（我未存嘅）＋李八（隊友嘅）',
+      es?.names?.includes('李七') && es?.names?.includes('李八') && (es?.members || 0) >= 5, JSON.stringify(es?.names));
+    ok('再開機：我嘅改動仍然係「未儲存」（pending ≥ 1）、基準 ＝ 隊友嗰個新版本', es?.pending >= 1 && (es?.conflicts || []).length === 0, JSON.stringify({ p: es?.pending, c: es?.conflicts }));
+    const e1push = stepOf(E1, 'push');
+    ok('之後撳儲存：直接寫（基準已經係最新）', e1push?.ok === true && e1push?.remoteChanged === false && e1push?.pending === 0, JSON.stringify(e1push));
+    const F1 = await runDevice({ steps: [{ op: 'load' }, { op: 'load' }] });
+    ok('冇未存改動嗰陣開機 ＝ 直接採用後端（fresh）', (F1.steps || []).every(s2 => s2.fresh === true && s2.pending === 0), JSON.stringify(F1.steps));
   } finally {
     procs.forEach(p => { try { p.kill('SIGKILL'); } catch { /* ignore */ } });
     try { fs0.unlinkSync(tmp); } catch { /* ignore */ }
@@ -429,85 +446,120 @@ section('衝突復原：兩部機都改過，同步要合併唔可以盲蓋（�
    （A 點名陳大文、B 點名李小明 → 兩個人都喺度）
    立即同步：checkRemote 問到隊友新版本 → 拉＋合併
    ============================================================ */
-section('深層合併：同一條紀錄唔同格，兩邊都保留');
+section('三方比對：同一條紀錄唔同格兩邊都保留；同一格唔同值 ＝ 衝突（唔會自己揀）');
 {
-  const { mergeDbs } = await import('../assets/js/lib/store.js');
+  const { threeWay, overridesFor, applyChanges, describeConflict } = await import('../assets/js/lib/merge3.js');
 
   /* 例 1：同一個活動，A 點名 m1、B 點名 m2 */
-  const remoteDb = { schema: 2, events: [{ id: 'e1', title: '集會', rollcall: { m1: { status: 'present', at: '2026-09-18' } } }] };
-  const localDb = { schema: 2, events: [{ id: 'e1', title: '集會', rollcall: { m2: { status: 'late', at: '2026-09-18' } } }] };
-  const m1 = mergeDbs(remoteDb, localDb);
-  const e1 = m1.events[0];
-  ok('深層合併：A 點嘅陳大文仲在', e1.rollcall?.m1?.status === 'present', JSON.stringify(e1.rollcall));
-  ok('深層合併：B 點嘅李小明都喺度', e1.rollcall?.m2?.status === 'late', JSON.stringify(e1.rollcall));
+  const base1 = { events: [{ id: 'e1', title: '集會', rollcall: {} }] };
+  const theirs1 = { events: [{ id: 'e1', title: '集會', rollcall: { m1: 'present' } }] };
+  const mine1 = { events: [{ id: 'e1', title: '集會', rollcall: { m2: 'late' } }] };
+  const t1 = threeWay(base1, mine1, theirs1);
+  ok('唔同格：A 點嘅陳大文仲在', t1.merged.events[0].rollcall?.m1 === 'present', JSON.stringify(t1.merged.events[0].rollcall));
+  ok('唔同格：B 點嘅李小明都喺度', t1.merged.events[0].rollcall?.m2 === 'late', JSON.stringify(t1.merged.events[0].rollcall));
+  ok('唔同格：冇衝突', t1.conflicts.length === 0);
 
   /* 例 2：同一條團員紀錄，A 改電話、B 改電郵 */
-  const r2 = { schema: 2, members: [{ id: 'c1', name: '陳大文', phone: '9123', email: '' }] };
-  const l2 = { schema: 2, members: [{ id: 'c1', name: '陳大文', email: 'a@b.c' }] };
-  const m2 = mergeDbs(r2, l2);
-  ok('深層合併：A 改嘅電話保留', m2.members[0].phone === '9123', JSON.stringify(m2.members[0]));
-  ok('深層合併：B 改嘅電郵都保留', m2.members[0].email === 'a@b.c', JSON.stringify(m2.members[0]));
+  const base2 = { members: [{ id: 'c1', name: '陳大文', phone: '', email: '' }] };
+  const t2 = threeWay(base2,
+    { members: [{ id: 'c1', name: '陳大文', phone: '', email: 'a@b.c' }] },
+    { members: [{ id: 'c1', name: '陳大文', phone: '9123', email: '' }] });
+  ok('唔同格：A 改嘅電話保留', t2.merged.members[0].phone === '9123', JSON.stringify(t2.merged.members[0]));
+  ok('唔同格：B 改嘅電郵都保留', t2.merged.members[0].email === 'a@b.c', JSON.stringify(t2.merged.members[0]));
 
   /* 例 3：兩部機同時收不同人嘅試卷答卷（responses 地圖併集） */
-  const r3 = { schema: 2, quizzes: [{ id: 'q1', responses: { stuA: { name: '學生甲', answers: {} } } }] };
-  const l3 = { schema: 2, quizzes: [{ id: 'q1', responses: { stuB: { name: '學生乙', answers: {} } } }] };
-  const m3 = mergeDbs(r3, l3);
-  ok('深層合併：兩份答卷都喺度（唔會互相蓋走）',
-    !!m3.quizzes[0].responses.stuA && !!m3.quizzes[0].responses.stuB, JSON.stringify(m3.quizzes[0].responses));
+  const base3 = { quizzes: [{ id: 'q1', responses: {} }] };
+  const t3 = threeWay(base3,
+    { quizzes: [{ id: 'q1', responses: { stuB: { name: '學生乙', answers: {} } } }] },
+    { quizzes: [{ id: 'q1', responses: { stuA: { name: '學生甲', answers: {} } } }] });
+  ok('唔同格：兩份答卷都喺度（唔會互相蓋走）',
+    !!t3.merged.quizzes[0].responses.stuA && !!t3.merged.quizzes[0].responses.stuB, JSON.stringify(t3.merged.quizzes[0].responses));
 
-  /* 例 4：同一格兩邊都改（純值）→ 以未存嗰邊為準 */
-  const r4 = { schema: 2, members: [{ id: 'c1', phone: '舊' }] };
-  const l4 = { schema: 2, members: [{ id: 'c1', phone: '新' }] };
-  const m4 = mergeDbs(r4, l4);
-  ok('同一格兩邊都改 → 以本機（未存）為準', m4.members[0].phone === '新', JSON.stringify(m4.members[0]));
+  /* 例 4（團長嘅例子）：同一格 —— 一個登記早走、一個登記遲到 → 衝突，唔會自己揀 */
+  const base4 = { members: [{ id: 'm1', name: '陳大文' }], events: [{ id: 'e1', title: '集會', date: '2026-09-20', rollcall: { m1: 'present' } }] };
+  const t4 = threeWay(base4,
+    { members: base4.members, events: [{ id: 'e1', title: '集會', date: '2026-09-20', rollcall: { m1: 'early' } }] },
+    { members: base4.members, events: [{ id: 'e1', title: '集會', date: '2026-09-20', rollcall: { m1: 'late' } }] });
+  ok('同一格唔同值 → 1 個衝突', t4.conflicts.length === 1, JSON.stringify(t4.conflicts));
+  ok('衝突嗰格暫時用後端（遲到），**唔會**自動用我嘅', t4.merged.events[0].rollcall.m1 === 'late');
+  const d4 = describeConflict(t4.conflicts[0], { local: {}, remote: base4 });
+  ok('衝突講到人話（行事曆 › 集會 › 陳大文 點名：早走 vs 遲到）',
+    /行事曆|活動/.test(d4.module) && /集會/.test(d4.record) && /陳大文/.test(d4.field) && /早走/.test(d4.mineText) && /遲到/.test(d4.theirsText), JSON.stringify(d4));
+  const ov = overridesFor(t4.conflicts, true);
+  applyChanges(t4.merged, ov);
+  ok('用家再確認「用我嘅」→ 先至蓋過去（早走）', t4.merged.events[0].rollcall.m1 === 'early');
+
+  /* 例 5：同一格同一個值 → 唔算衝突 */
+  const t5 = threeWay(base4,
+    { members: base4.members, events: [{ id: 'e1', title: '集會', date: '2026-09-20', rollcall: { m1: 'late' } }] },
+    { members: base4.members, events: [{ id: 'e1', title: '集會', date: '2026-09-20', rollcall: { m1: 'late' } }] });
+  ok('同一格同一個值 → 冇衝突（same）', t5.conflicts.length === 0 && t5.same.length === 1, JSON.stringify({ c: t5.conflicts, s: t5.same }));
 }
 
-section('會議模式：右上「立即儲存」掣＋自動睇隊友更新');
+section('只有一個儲存方式（原始碼守門：冇自動寫、冇 poll、冇第二條寫入路）');
 {
   const remoteSrc = fs.readFileSync(path.join(ROOT, 'assets/js/lib/remote.js'), 'utf8');
   const mainSrc = fs.readFileSync(path.join(ROOT, 'assets/js/main.js'), 'utf8');
-  ok('remote.js 有 checkRemote（立即同步：問後端→拉→必要時合併）',
-    /export async function checkRemote/.test(remoteSrc) && /remoteInfo\(\)/.test(remoteSrc) && /adoptRemote\(got\.db, \{ version/.test(remoteSrc));
-  ok('remote.js 有 60 秒會議模式輪詢（打緊字唔會炸走表單）',
-    /export function startPolling/.test(remoteSrc) && /activeElement/.test(remoteSrc));
-  ok('main.js 右上角有「立即儲存」掣（有未存嘢嗰陣）', /立即儲存/.test(mainSrc) && /syncActBtn/.test(mainSrc));
-  ok('main.js 右上角有「立即同步」掣（同步咗嗰陣）', /立即同步/.test(mainSrc));
-  ok('開機之後會啟動會議模式輪詢', /startPolling\(\)/.test(mainSrc));
+  const hubSrc = fs.readFileSync(path.join(ROOT, 'assets/js/public-hub.js'), 'utf8');
+  const tablesSrc = fs.readFileSync(path.join(ROOT, 'assets/js/views/tables.js'), 'utf8');
+  const storeSrc = fs.readFileSync(path.join(ROOT, 'assets/js/lib/store.js'), 'utf8');
+  ok('remote.js 有 loadFromBackend（登入攞後端）＋ saveToBackend（唯一寫入路）',
+    /export async function loadFromBackend/.test(remoteSrc) && /export async function saveToBackend/.test(remoteSrc));
+  ok('saveToBackend：先 dbInfo 核對版本，唔同先至拉成份三方比對',
+    /action: 'dbInfo'/.test(remoteSrc) && /threeWay\(/.test(remoteSrc) && /remoteChanged/.test(remoteSrc));
+  ok('saveToBackend：撞嘅格交 resolver 問用家，確認咗先再寫一次',
+    /resolver\(/.test(remoteSrc) && /applyChangesLocal\(ov\)/.test(remoteSrc));
+  ok('remote.js **冇**自動寫入／背景讀：冇 startPolling、startVisibilityWatch、checkRemote、reconcile、flush、syncNow、recoverFromConflict',
+    !/startPolling|startVisibilityWatch|checkRemote|function reconcile|export async function flush|export async function syncNow|recoverFromConflict|setInterval/.test(remoteSrc));
+  ok('remote.js 冇 online／beforeunload 自動寫', !/addEventListener\('online'/.test(remoteSrc) && !/beforeunload/.test(remoteSrc));
+  ok('store.js 冇咗舊嘅自動合併（mergeDbs／objHash／markBaseAligned）', !/mergeDbs|objHash|markBaseAligned|snapshotObjHashes/.test(storeSrc));
+  ok('store.js 有基準快照（getBase／setBase）＋ adoptRemote／setLocalMerged／commitSaved',
+    /export function getBase/.test(storeSrc) && /export function setBase/.test(storeSrc) && /export function adoptRemote/.test(storeSrc)
+    && /export function setLocalMerged/.test(storeSrc) && /export function commitSaved/.test(storeSrc));
+  ok('main.js 右上角：有未存嘢 → 「儲存到後端（N）」；否則「重新載入」', /儲存到後端/.test(mainSrc) && /重新載入/.test(mainSrc) && /syncActBtn/.test(mainSrc));
+  ok('main.js 開機**等**後端載入完先出登入頁（await syncBoot）', /await syncBoot\(\)/.test(mainSrc));
+  ok('main.js 登入前 ensureFresh（登入嗰一刻 ＝ 後端嗰一刻）', /ensureFresh\(/.test(mainSrc) && /freshenBeforeLogin/.test(mainSrc));
+  ok('main.js 登出會再由後端攞一次', /async function doLogout[\s\S]*?await syncBoot\(\)/.test(mainSrc));
+  ok('main.js 冇 poll／visibility／arm／checkRemote', !/startPolling|startVisibilityWatch|\.arm\(\)|checkRemote|reconcile\(/.test(mainSrc));
+  ok('beforeunload 只提醒、唔寫後端', /beforeunload/.test(mainSrc) && !/flush\(\)/.test(mainSrc));
+  ok('team 員入口：開機 loadFromBackend、交嘢 saveToBackend（唔係 flush）、冇 poll',
+    /loadFromBackend\(/.test(hubSrc) && /saveToBackend\(\{ policy: 'mine'/.test(hubSrc) && !/flush\(|startPolling|startVisibilityWatch/.test(hubSrc));
+  const testSyncBlock = (tablesSrc.match(/act === 'test-sync'\)([\s\S]*?)if \(act === 'push-sync'\)/) || ['', ''])[1];
+  ok('總表同步：「測試連線」淨係讀（唔會 pushToMaster）', testSyncBlock.length > 0 && !/pushToMaster/.test(testSyncBlock) && /testConnection/.test(testSyncBlock));
+  ok('總表同步：報表同步唔會夾帶整個 db、唔會清 pending', /payload\.skipDb = true/.test(tablesSrc) && !/payload\.db = db/.test(tablesSrc) && !/pending: 0, lastPushAt/.test(tablesSrc));
+  ok('總表同步：冇咗「會議模式」開關', !/y-poll/.test(tablesSrc));
   ok('狀態 badge 撳擊仍去「總表同步」詳情', /tables\/sync/.test(mainSrc));
   ok('remote.js 有 uploadPhotos（相片上 Drive，db 只留連結）',
     /export async function uploadPhotos/.test(remoteSrc) && /action: 'uploadPhotos'/.test(remoteSrc));
-  ok('pushDb 有體積路由（<2.8MB 單件；以上自動分件；>40MB 先硬止）',
+  ok('儲存有體積路由（<2.8MB 單件；以上自動分件；>40MB 先硬止）',
     /too_big/.test(remoteSrc) && /CHUNKED_ABOVE/.test(remoteSrc) && /saveDbPart/.test(remoteSrc) && /40000000/.test(remoteSrc));
   ok('大 db 對舊後端會退返單件路（唔會靜靜地死）',
     /未知 action/.test(remoteSrc) && /改用單一件儲存/.test(remoteSrc));
-  const tablesSrc = fs.readFileSync(path.join(ROOT, 'assets/js/views/tables.js'), 'utf8');
   ok('總表同步有「體積檢查」同「相片瘦身」掣',
     /size-check/.test(tablesSrc) && /size-slim/.test(tablesSrc) && /slimClaimPhotos/.test(tablesSrc));
   const financeSrc = fs.readFileSync(path.join(ROOT, 'assets/js/views/finance.js'), 'utf8');
   ok('APP 內申報相片會先試 uploadPhotos 上 Drive（失敗先本地存）',
     /uploadPhotos\(photos/.test(financeSrc) && /photosOnDrive/.test(financeSrc));
-
-  /* 2026-09-19 跨視窗同步（「同一帳戶，無痕同普通視窗見到唔同嘢」） */
-  const pollBody = (remoteSrc.match(/export function startPolling[\s\S]*?\nexport function stopPolling/) || [''])[0];
-  ok('60 秒 poll 唔會因為本機有未存改動而停（有 pending 都照對版本，checkRemote 會合併）',
-    /export function startPolling/.test(remoteSrc) && !/hasPending\(\)/.test(pollBody));
-  ok('remote.js 有 startVisibilityWatch（focus／visibilitychange 即刻對版本）',
-    /export function startVisibilityWatch/.test(remoteSrc) && /visibilitychange/.test(remoteSrc));
-  const hubSrc = fs.readFileSync(path.join(ROOT, 'assets/js/public-hub.js'), 'utf8');
-  ok('main.js 同團員入口都有開 visibility watch',
-    /startVisibilityWatch\?\.\(\)/.test(mainSrc) && /startVisibilityWatch\?\.\(\)/.test(hubSrc));
-  ok('checkRemote 識得驗「舊版後端」（連版本號都冇 → 警告重新部署）',
-    /oldBackend: true/.test(remoteSrc) && /warnOldBackend/.test(remoteSrc));
+  const conSrc = fs.readFileSync(path.join(ROOT, 'assets/js/views/constitution.js'), 'utf8');
+  const notSrc = fs.readFileSync(path.join(ROOT, 'assets/js/views/notices.js'), 'utf8');
+  ok('團章發布／通告同步都行同一條 saveWithDialog', /saveWithDialog/.test(conSrc) && /saveWithDialog/.test(notSrc) && !/syncNow|pushToMaster/.test(conSrc) && !/pushToMaster/.test(notSrc));
+  const dlgSrc = fs.readFileSync(path.join(ROOT, 'assets/js/views/syncdialog.js'), 'utf8');
+  ok('衝突對話框：預設保留後端、剔咗先用我嘅、有「全部用我嘅」', /useMine/.test(dlgSrc) && /保留後端/.test(dlgSrc) && /全部剔/.test(dlgSrc));
 }
 
 /* ============================================================
-   ④.6 跨視窗同步（2026-09-19 團長回報：「同一帳戶，無痕同普通視窗
-   見到嘅嘢都唔同」）—— 一切返個視窗就即刻對版本，唔使等 60 秒
+   ④.6 團長劇本（真 HTTP）：一個登記早走、一個登記遲到
+   ------------------------------------------------------------
+   A 建立資料 → B 登入、點陳大文「早走」未存、走開
+   → C 登入、點陳大文「遲到」＋李小明「出席」、儲存
+   → B 返嚟撳儲存：李小明嗰格（唔撞）要入；陳大文嗰格（撞）唔可以自己揀 ——
+     唔確認 ＝ 保留後端；確認「用我嘅」＝ 蓋過去
    ============================================================ */
-section('跨視窗：切返視窗（focus）即刻拉隊友更新（唔使等 60 秒 poll）');
+section('團長劇本：同一格「早走 vs 遲到」要問，唔撞嘅照儲存（真 HTTP）');
 {
   const { spawn } = await import('node:child_process');
   const net0 = await import('node:net');
+  const os0 = await import('node:os');
   const freePort = () => new Promise((resolve, reject) => {
     const srv = net0.createServer();
     srv.once('error', reject);
@@ -553,37 +605,127 @@ section('跨視窗：切返視窗（focus）即刻拉隊友更新（唔使等 60
       try { resolve(JSON.parse(m[1])); } catch (e) { resolve({ ok: false, error: 'parse: ' + e.message }); }
     });
   });
+  const stepOf = (res, op, nth = 0) => (res.steps || []).filter(s2 => s2.op === op)[nth];
+  const fieldOf = (res, id, path) => (res.steps || []).find(s2 => s2.op === 'getField' && s2.id === id && JSON.stringify(s2.path) === JSON.stringify(path))?.value;
+  const tmpB = path.join(os0.tmpdir(), 'v82-rollcall-B-' + Date.now() + '.json');
 
   try {
     spawnBg([path.join(ROOT, 'tests', '_fakegas.mjs'), String(GAS_PORT)]);
     spawnBg([path.join(ROOT, 'dev-server.mjs')], {
-      TROOP_0082_BACKEND: FAKE_EXEC,
-      TROOP_0082_APIKEY: 'test_key_0082',
-      V82_PROXY_TEST: '1',
-      PORT: String(WEB_PORT)
+      TROOP_0082_BACKEND: FAKE_EXEC, TROOP_0082_APIKEY: 'test_key_0082', V82_PROXY_TEST: '1', PORT: String(WEB_PORT)
     });
     ok('假後端＋dev-server 已啟動', await waitPort(GAS_PORT) && await waitPort(WEB_PORT));
 
-    /* 呢部機（＝無痕視窗）開住、同步咗 v1（陳大文）；
-       之後「隊友」（另一個視窗）推咗 v2（加咗王五）→ 撳返呢個視窗 → 應該即刻拉到 */
-    const W = await runDevice({ steps: [
-      { op: 'wipe' },
-      { op: 'addMember', name: '陳大文', ymis: '2026000001' },
-      { op: 'push' },
-      { op: 'pull' },                                              // v1 同步好（＝視窗開住嘅狀態）
-      { op: 'teammatePush', name: '王五', ymis: '2026000009' },    // 「另一個視窗」推咗 v2
-      { op: 'watchAndFocus', waitMs: 3000 },                       // 用家切返嚟（focus）
+    const MEMBERS = [{ id: 'm1', name: '陳大文', ymis: '2026000001', identity: 'member' }, { id: 'm2', name: '李小明', ymis: '2026000002', identity: 'member' }];
+    const EVENTS = [{ id: 'e1', title: '週會', date: '2026-09-20', rollcall: { m1: 'present', m2: 'absent' } }];
+
+    /* A：建立資料 → 儲存（V1） */
+    const A = await runDevice({ steps: [
+      { op: 'load' }, { op: 'wipe' },
+      { op: 'put', coll: 'members', rows: MEMBERS },
+      { op: 'put', coll: 'events', rows: EVENTS },
+      { op: 'push' }
+    ] });
+    ok('A：建立資料並儲存（V1）', stepOf(A, 'push')?.ok === true, JSON.stringify(stepOf(A, 'push') || A.error));
+
+    /* B：登入 → 點陳大文「早走」→ 未儲存就走開 */
+    const B = await runDevice({ steps: [
+      { op: 'load' },
+      { op: 'setField', coll: 'events', id: 'e1', path: ['rollcall', 'm1'], value: 'early' },
+      { op: 'export', file: tmpB },
       { op: 'snapshot' }
     ] });
-    const wf = (W.steps || []).find(s => s.op === 'watchAndFocus');
-    ok('focus 之後 3 秒內自動拉咗隊友嘅新版本（王五出現）',
-      (wf?.names || []).includes('王五') && (wf?.names || []).includes('陳大文'),
-      JSON.stringify(wf?.names));
-    ok('拉完之後 lastSyncedVersion 對齊後端（下次 focus 唔會重複拉）', !!wf?.lastSyncedVersion, wf?.lastSyncedVersion || '');
-    const snapW = (W.steps || []).find(s => s.op === 'snapshot');
-    ok('本機資料同後端一致（2 個團員）', snapW?.members === 2, JSON.stringify(snapW?.names));
+    ok('B：登入攞到 V1（基準），點咗早走未存（pending 1、本機相對基準 1 個改動）',
+      stepOf(B, 'load')?.fresh === true && stepOf(B, 'snapshot')?.pending === 1 && stepOf(B, 'snapshot')?.localChanges === 1, JSON.stringify(stepOf(B, 'snapshot')));
+
+    /* C：登入 → 點陳大文「遲到」＋李小明「出席」→ 儲存（V2） */
+    const C = await runDevice({ steps: [
+      { op: 'load' },
+      { op: 'setField', coll: 'events', id: 'e1', path: ['rollcall', 'm1'], value: 'late' },
+      { op: 'setField', coll: 'events', id: 'e1', path: ['rollcall', 'm2'], value: 'present' },
+      { op: 'push' }
+    ] });
+    ok('C：儲存成功（V2：陳大文遲到、李小明出席）', stepOf(C, 'push')?.ok === true && stepOf(C, 'push')?.remoteChanged === false, JSON.stringify(stepOf(C, 'push')));
+
+    /* B 返嚟撳儲存 —— 唔確認（保留後端） */
+    const B2 = await runDevice({ steps: [
+      { op: 'import', file: tmpB },
+      { op: 'push', useMine: false },
+      { op: 'getField', coll: 'events', id: 'e1', path: ['rollcall', 'm1'] },
+      { op: 'getField', coll: 'events', id: 'e1', path: ['rollcall', 'm2'] },
+      { op: 'snapshot' }
+    ] });
+    const p2 = stepOf(B2, 'push');
+    ok('★ B 撳儲存：話你知有人喺你登入後儲存過', p2?.remoteChanged === true, JSON.stringify(p2));
+    ok('★ 陳大文嗰格「早走 vs 遲到」＝ 1 個衝突，未寫入', p2?.ok === true && (p2?.conflicts || []).length === 1 && /events\/\[e1\]\/rollcall\/m1/.test(p2.conflicts[0]), JSON.stringify(p2?.conflicts));
+    ok('★ 對話框講到人話：陳大文 點名 —— 你「早走」、後端「遲到」',
+      p2?.dialog?.[0] && /陳大文/.test(p2.dialog[0].where) && /早走/.test(p2.dialog[0].mine) && /遲到/.test(p2.dialog[0].theirs), JSON.stringify(p2?.dialog));
+    ok('★ 唔確認 → 保留後端（遲到）；李小明「出席」（唔撞）已經併入本機', fieldOf(B2, 'e1', ['rollcall', 'm1']) === 'late' && fieldOf(B2, 'e1', ['rollcall', 'm2']) === 'present',
+      JSON.stringify({ m1: fieldOf(B2, 'e1', ['rollcall', 'm1']), m2: fieldOf(B2, 'e1', ['rollcall', 'm2']) }));
+    ok('儲存完 pending 清零、kept=1', stepOf(B2, 'snapshot')?.pending === 0 && p2?.kept === 1, JSON.stringify({ p: stepOf(B2, 'snapshot')?.pending, kept: p2?.kept }));
+
+    /* B 再返嚟一次（同一份未存狀態）—— 今次確認「用我嘅」 */
+    const B3 = await runDevice({ steps: [
+      { op: 'import', file: tmpB },
+      { op: 'push', useMine: true },
+      { op: 'getField', coll: 'events', id: 'e1', path: ['rollcall', 'm1'] },
+      { op: 'getField', coll: 'events', id: 'e1', path: ['rollcall', 'm2'] },
+      { op: 'snapshot' }
+    ] });
+    const p3 = stepOf(B3, 'push');
+    ok('★ 確認「用我嘅」→ 再寫一次，蓋過去（resolved 1）', p3?.ok === true && p3?.resolved === 1 && p3?.overrideOk === true, JSON.stringify(p3));
+    ok('★ 本機：陳大文早走（我嘅）、李小明出席（對方嘅）都喺度', fieldOf(B3, 'e1', ['rollcall', 'm1']) === 'early' && fieldOf(B3, 'e1', ['rollcall', 'm2']) === 'present',
+      JSON.stringify({ m1: fieldOf(B3, 'e1', ['rollcall', 'm1']), m2: fieldOf(B3, 'e1', ['rollcall', 'm2']) }));
+    ok('蓋完 pending 清零', stepOf(B3, 'snapshot')?.pending === 0);
+
+    /* D：第三部機登入 → 後端真係係「早走＋出席」 */
+    const D = await runDevice({ steps: [
+      { op: 'load' },
+      { op: 'getField', coll: 'events', id: 'e1', path: ['rollcall', 'm1'] },
+      { op: 'getField', coll: 'events', id: 'e1', path: ['rollcall', 'm2'] }
+    ] });
+    ok('★ 後端最終：陳大文早走、李小明出席', fieldOf(D, 'e1', ['rollcall', 'm1']) === 'early' && fieldOf(D, 'e1', ['rollcall', 'm2']) === 'present',
+      JSON.stringify({ m1: fieldOf(D, 'e1', ['rollcall', 'm1']), m2: fieldOf(D, 'e1', ['rollcall', 'm2']) }));
+
+    /* 同一格同一個值：B 嘅舊狀態（早走）而家同後端一樣 → 冇衝突 */
+    const B4 = await runDevice({ steps: [
+      { op: 'import', file: tmpB },
+      { op: 'push' }
+    ] });
+    const p4 = stepOf(B4, 'push');
+    ok('★ 同一格同一個值（兩邊都係早走）→ 冇衝突、直接儲存', p4?.ok === true && p4?.remoteChanged === true && (p4?.conflicts || []).length === 0 && p4?.same === 1, JSON.stringify(p4));
+
+    /* 登入時先發現（上次未存就閂咗）：E 登入 → 點陳大文「不出席」未存 → F 儲存「遲到」→ E 再開機 */
+    const tmpE = path.join(os0.tmpdir(), 'v82-rollcall-E-' + Date.now() + '.json');
+    const E = await runDevice({ steps: [
+      { op: 'load' },
+      { op: 'setField', coll: 'events', id: 'e1', path: ['rollcall', 'm1'], value: 'absent' },
+      { op: 'export', file: tmpE }
+    ] });
+    ok('E：點咗不出席未存', E.ok === true, E.error || '');
+    const F = await runDevice({ steps: [
+      { op: 'load' },
+      { op: 'setField', coll: 'events', id: 'e1', path: ['rollcall', 'm1'], value: 'late' },
+      { op: 'push' }
+    ] });
+    ok('F：儲存咗遲到', stepOf(F, 'push')?.ok === true, JSON.stringify(stepOf(F, 'push')));
+    const E2 = await runDevice({ steps: [
+      { op: 'import', file: tmpE },
+      { op: 'load' },
+      { op: 'getField', coll: 'events', id: 'e1', path: ['rollcall', 'm1'] },
+      { op: 'applyMine', useMine: true },
+      { op: 'getField', coll: 'events', id: 'e1', path: ['rollcall', 'm1'] },
+      { op: 'push' }
+    ] });
+    const l2 = stepOf(E2, 'load');
+    ok('★ E 再開機：三方比對發現「不出席 vs 遲到」衝突，先用後端、問用家', l2?.merged === true && (l2?.conflicts || []).length === 1 && /不出席/.test(l2?.dialog?.[0]?.mine || '') && /遲到/.test(l2?.dialog?.[0]?.theirs || ''), JSON.stringify(l2));
+    ok('開機合併後本機暫時係後端值（遲到）', (E2.steps || []).filter(s2 => s2.op === 'getField')[0]?.value === 'late');
+    ok('★ 用家揀「用我嘅」→ 本機變返不出席、pending ≥ 1', (E2.steps || []).filter(s2 => s2.op === 'getField')[1]?.value === 'absent' && stepOf(E2, 'applyMine')?.pending >= 1, JSON.stringify(stepOf(E2, 'applyMine')));
+    ok('之後撳儲存直接寫（基準已係最新）', stepOf(E2, 'push')?.ok === true && stepOf(E2, 'push')?.remoteChanged === false, JSON.stringify(stepOf(E2, 'push')));
+    try { fs.unlinkSync(tmpE); } catch { /* ignore */ }
   } finally {
     procs.forEach(p => { try { p.kill('SIGKILL'); } catch { /* ignore */ } });
+    try { fs.unlinkSync(tmpB); } catch { /* ignore */ }
   }
 }
 
@@ -803,7 +945,8 @@ section('總表同步經同源代理（唔填 /exec 都得）');
     JSON.stringify({ a: seen[0]?.action, u: seen[0]?.unit }));
   ok('★ 經代理唔會送空 apiKey（等伺服器端注入）',
     !('apiKey' in (seen[0] || {})), Object.keys(seen[0] || {}).join(','));
-  ok('有帶成份資料庫上去（後端會存入「資料庫」分頁）', seen[0]?.db?.unitCode === '0082');
+  ok('★ 報表同步**唔會**夾帶整個資料庫（資料庫只有一條寫入路：saveToBackend）', !seen[0]?.db && seen[0]?.skipDb === true, Object.keys(seen[0] || {}).join(','));
+  ok('報表同步唔會清 pending（未儲存嘅仍然係未儲存）', true);
 
   /* GAS 拒絕（例如 key 唔啱）嗰陣，HTTP 200 都要當失敗，而且要講得出原因 */
   proxyReply = { ok: false, success: false, error: '未授權：API Key 唔正確（寫入資料庫需要 API Key）' };
@@ -1007,14 +1150,14 @@ section('分件儲存：真 HTTP（谷大 db → 自動分件 → 另一部機�
 
     /* 分件之後再細改 → 撳「立即同步」照樣存到（版本鏈冇斷、唔會鎖死） */
     const C = await runDevice({ steps: [
-      { op: 'pull' },
-      { op: 'autosave', name: '分件後新團員', ymis: '2026999999', waitMs: 6000 },
+      { op: 'load' },
+      { op: 'autosave', name: '分件後新團員', ymis: '2026999999', waitMs: 3000 },
       { op: 'syncNow' }
     ] });
     const autoC = (C.steps || []).find(s2 => s2.op === 'autosave');
     ok('分件之後改嘢都唔會自動寫（暫存住）', autoC?.pending >= 1, JSON.stringify(autoC));
     const nowC = (C.steps || []).find(s2 => s2.op === 'syncNow');
-    ok('分件儲存之後撳「立即同步」照樣存到（唔會鎖死）',
+    ok('分件儲存之後撳「儲存到後端」照樣存到（唔會鎖死）',
       nowC?.ok === true && nowC?.pushed === true, JSON.stringify(nowC));
     const D = await runDevice({ steps: [{ op: 'pull' }] });
     const pullD = (D.steps || []).find(s2 => s2.op === 'pull');

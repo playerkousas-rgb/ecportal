@@ -10,13 +10,13 @@
       由 Script 寫入後端「總 Sheet」（一張 Sheet 統管整個 Venture）
    ============================================================ */
 
-import { load, commit, collection, add, update, remove, find } from '../lib/store.js';
+import { load, commit, commitMeta, collection, add, update, remove, find, getBase } from '../lib/store.js';
 import { esc, icon, modal, confirmDlg, toast, uid, nf, todayISO, nowStamp, download, copyText } from '../lib/util.js';
 import { toCSV, toWord, download as dlFile, stamp } from '../lib/exporter.js';
 import { go, parse, setQuery } from '../lib/router.js';
 import { can, current } from '../lib/auth.js';
 import { profile, settings } from '../lib/model.js';
-import { fmtBytes, remoteCfg, remoteConfigured, remoteDiagnose, syncState } from '../lib/remote.js';
+import { fmtBytes, remoteConfigured, remoteDiagnose, syncState } from '../lib/remote.js';
 import { pageHead, tabs, stat, empty, noteBox, kv, storageBar } from './ui.js';
 
 let tab = 'design';
@@ -528,23 +528,26 @@ function syncView() {
   const backend = load().backend || null;
   /* 「有冇接後端」唔可以再淨係睇 db.backend —— 佢只喺**前端** Registry 有 gasUrl
      嗰陣先會 set，而平台用 Vercel 環境變數登記嘅旅團（正路做法）永遠唔會有。
-     結果：個頁話「未設定後端」，連「立即儲存到後端」「由後端還原資料」
+     結果：個頁話「未設定後端」，連「儲存到後端」「由後端還原資料」
      「睇後端有咩資料」「體積檢查」全部一齊收埋 —— 用家根本撳唔到
      文件叫佢撳嘅嗰啲掣（2026-09-19 團長回報「有嘢把解決方法封死」）。
      而家改用 remoteConfigured()（有同源代理＋旅團編號就算接得通）。 */
   const wired = !!backend || remoteConfigured();
-  /* 2026-09-19：自動寫入已剷走（remoteCfg().auto 寫死 false），
-     所以界面唔再有「同步方式」選擇 —— 只剩「會議模式」（淨係讀）呢個開關。 */
-  const pollOn = !!remoteCfg().poll;
   const log = s.log || [];
   const pending = Number(s.pending || 0);
   const lastPush = s.lastPushAt ? String(s.lastPushAt).slice(0, 19).replace('T', ' ') : '';
   const lastPull = s.lastPullAt ? String(s.lastPullAt).slice(0, 19).replace('T', ' ') : '';
+  const base = getBase();
+  const baseAt = base?.at ? String(base.at).slice(0, 19).replace('T', ' ') : '';
+  const baseVer = base ? (base.empty ? '（後端仲係空）' : String(base.version || '').slice(0, 19).replace('T', ' ')) : '';
   return `
   <div class="note-box mb-16">${icon('cloud', 15)}<div>
-    <b>資料真正嘅家係你自己嘅 Google Sheet。</b>
-    App 每次改動都會自動把<b>整個資料庫</b>寫入 Sheet 嘅「<b>資料庫</b>」分頁；
-    開機會由後端讀返最新版本 —— 所以<b>換手機、換瀏覽器、清 cache 都唔會冇咗資料</b>。<br>
+    <b>資料真正嘅家係你自己嘅 Google Sheet。只有一個方式：</b>
+    ① 登入嗰陣由後端攞成份資料（＝登入嗰一刻嘅後端）→
+    ② 之後改乜都<b>淨係暫存喺呢部機</b> →
+    ③ 撳「<b>儲存到後端</b>」先寫入：系統會先核對後端版本，有人喺你登入後儲存過就<b>逐格</b>比對 ——
+    改同一格同一個值＝冇問題；改唔同嘅格＝一齊儲存；同一格唔同值（例如一個登記早走、一個登記遲到）
+    ＝嗰格<b>唔會</b>寫入，會列出嚟等你再確認，確認咗先蓋過去。<br>
     <span class="xs">其他分頁（帳目／團員／物資…）係攤平出嚟畀你自己睇同用公式嘅「報表」。
     同一個後端仲會處理 <b>成員手機記帳</b>（entry.html）同 <b>通告報名</b>（notice.html）。</span>
   </div></div>
@@ -556,6 +559,7 @@ function syncView() {
       : `<span class="badge b-ok"><span class="dot"></span>全部已儲存</span>`}
   </div>
   <div style="padding:12px 16px" class="sm muted">
+    <div class="kv-row"><span>登入時攞到嘅後端版本（基準）</span><span>${esc(baseVer ? `${baseVer}${baseAt ? `，攞於 ${baseAt}` : ''}` : '（未由後端載入過）')}</span></div>
     <div class="kv-row"><span>最後寫入後端</span><span>${esc(lastPush || '（未試過）')}</span></div>
     <div class="kv-row"><span>最後由後端讀取</span><span>${esc(lastPull || '（未試過）')}</span></div>
     ${s.lastError ? `<div class="kv-row"><span>上次錯誤</span><span style="color:var(--danger)">${esc(String(s.lastError).slice(0, 120))}</span></div>` : ''}
@@ -570,8 +574,8 @@ function syncView() {
       咁條 key 淨係留喺伺服器端，瀏覽器完全唔會見到。
     </div></div>` : ''}
     <div class="row gap-8 mt-12 wrap">
-      <button class="btn btn-primary btn-sm" data-act="push-db">${icon('cloud', 15)} 立即儲存到後端</button>
-      <button class="btn btn-sm" data-act="pull-db">${icon('download', 15)} 由後端還原資料</button>
+      <button class="btn btn-primary btn-sm" data-act="push-db">${icon('cloud', 15)} 儲存到後端${pending ? `（${pending}）` : ''}</button>
+      <button class="btn btn-sm" data-act="pull-db">${icon('download', 15)} 由後端重新載入${pending ? '（會丟棄未儲存改動）' : ''}</button>
       <button class="btn btn-sm" data-act="db-info">${icon('search', 15)} 睇後端有咩資料</button>
       <button class="btn btn-sm" data-act="diagnose">${icon('search', 15)} 同步診斷</button>
       <button class="btn btn-sm" data-act="migrate-check">${icon('shield', 15)} 搬遷檢查</button>
@@ -587,7 +591,7 @@ function syncView() {
       ${bk.photoBytes > 0 ? `<button class="btn btn-xs" data-act="size-slim">${icon('image', 13)} 相片瘦身（${fmtBytes(bk.photoBytes)}）</button>` : ''}
     </div>`;
     })()}
-    <div class="hint mt-8">「由後端還原」會<b>用後端嘅資料覆蓋呢部機</b>（換咗新手機／清咗 cache 就用呢個）。</div>
+    <div class="hint mt-8">「由後端重新載入」會<b>用後端嘅資料覆蓋呢部機</b>（換咗新手機／清咗 cache，或者想放棄未儲存嘅改動就用呢個）。</div>
   </div></div>` : `
   <div class="note-box danger mb-16">${icon('alert', 15)}<div>
     <b>未設定後端 —— 你嘅資料而家淨係存喺呢部機嘅瀏覽器。</b>
@@ -650,21 +654,18 @@ function syncView() {
           瀏覽器唔會見到。上面兩格<b>淨係</b>喺純靜態部署（冇 <code>/api/proxy</code>，例如 GitHub Pages）先需要填。
         </div>
         <div class="note-box info mt-12">${icon('shield', 15)}<div>
-          <b>同步方式：手動（冇得改，亦唔會再出事）</b><br>
-          改動淨係<b>暫存喺呢部機嘅瀏覽器</b>。要寫入後端，就撳頂部
-          「<b>立即同步（N）</b>」—— 佢會先讀後端最新版本（有隊友新改動就拉落嚟
-          同你嘅合併，兩邊都保留），然後把呢部機<b>而家所有</b>暫存咗嘅改動一次過寫曬。<br>
-          <span class="faint">2026-09-19 起<b>自動寫入已完全剷走</b>（唔係「預設熄咗」，係冇呢條路）。
-          改嘢、等幾秒、關視窗、相片瘦身，全部都<b>唔會</b>偷偷寫後端 ——
+          <b>儲存方式：得一個，冇得揀</b><br>
+          登入攞後端 → 改動暫存喺呢部機 → 撳頂部「<b>儲存到後端（N）</b>」先寫入。
+          寫入之前先核對後端版本；有人喺你之後儲存過就逐格比對，撞嘅格會問你先。<br>
+          <span class="faint">冇自動儲存、冇背景讀取、冇關視窗自動寫、冇「同步全部順便寫」——
           所以唔會再出現「兩部機互相蓋走對方資料」。</span>
         </div></div>
-        <label class="check mt-6"><input type="checkbox" id="y-poll" ${pollOn ? 'checked' : ''}> <b>會議模式</b>：每 60 秒自動<b>讀</b>一次後端，睇到有隊友更新就彈提示（多人一齊做嘢先用；<b>淨係讀，永遠唔會寫</b>）</label>
         ${pending ? `<div class="hint" style="color:var(--warn)">有 <b>${pending}</b> 次改動仲未寫入後端。</div>` : ''}
         <label class="check mt-6"><input type="checkbox" id="y-share" ${(load().settings?.publicEntry?.submitUrl || load().settings?.notice?.submitUrl) === s.url ? 'checked' : ''}> <b>同一條網址共用</b>畀「手機記帳」同「通告報名」</label>
         <div class="row gap-8 mt-12 wrap">
           <button class="btn btn-primary" data-act="save-sync">${icon('save', 16)} 儲存設定</button>
-          <button class="btn" data-act="test-sync">${icon('send', 16)} 測試連線</button>
-          <button class="btn" data-act="push-sync">${icon('cloud', 16)} 立即同步全部</button>
+          <button class="btn" data-act="test-sync">${icon('send', 16)} 測試連線（淨係讀）</button>
+          <button class="btn" data-act="push-sync">${icon('table', 16)} 更新報表分頁</button>
         </div>
         <div class="hint mt-8">未設定網址都用得：所有資料仍然喺瀏覽器，可隨時匯出 CSV／JSON 手動上載去總表。</div>
       </div>
@@ -877,16 +878,10 @@ export function buildPayload({ sample = false } = {}) {
     counts: Object.fromEntries(Object.entries(tables).map(([k, v]) => [k, v.length])),
     tables
   };
-  /* 真正嘅同步：報表之便也帶埋**整個資料庫**（原樣 JSON）入「資料庫」分頁。
-     v2.4.0：db 大過 2.5MB 就唔好搭報表便車 —— 整個 db 由 remote.js 嘅
-     自動儲存／「立即儲存到後端」負責（嗰條路識分件，幾大都得）。
-     baseVersion ＝ 樂觀鎖：後端版本對唔上就拒收（防過時裝置盲蓋後端）。 */
-  if (!sample) {
-    let bytes = 0;
-    try { bytes = JSON.stringify(db).length; } catch { /* ignore */ }
-    if (bytes <= 2500000) { payload.db = db; payload.baseVersion = String(db.sync?.lastSyncedVersion || ''); }
-    else payload.skipDb = true;
-  }
+  /* 2026-09-20：報表同步**淨係**寫報表分頁（攤平嗰啲），**唔會**帶埋整個資料庫。
+     整個資料庫只有一條路寫入 —— remote.saveToBackend()（核對版本 → 三方比對 → 問衝突）。
+     以前呢度順便寫 db，正正係「幾個地方都會儲存、互相蓋」嘅其中一個源頭。 */
+  if (!sample) payload.skipDb = true;
   return payload;
 }
 
@@ -938,17 +933,18 @@ export async function pushToMaster({ silent = false } = {}) {
         ...(db.sync || {}),
         log: [...((db.sync || {}).log || []), { at: new Date().toISOString().slice(0, 19).replace('T', ' '), msg: '✗ 未設定 Apps Script 網址（去「總表同步」填 /exec）' }].slice(-40)
       };
-      commit();
+      commitMeta();
       if (!silent) toast('未設定 Apps Script 網址', 'err');
       return { ok: false, msg: '未設定網址' };
     }
   }
   /* 經代理就唔好送空 key —— 等伺服器端由 TROOP_* 注入（同 remote.js 一樣做法） */
   if (viaProxy && !payload.apiKey) delete payload.apiKey;
+  /* 同步紀錄係簿記 —— commitMeta() 只寫本機，唔會計入「未儲存改動」 */
   const log = (msg) => {
     const db = load();
     db.sync = { ...(db.sync || {}), log: [...((db.sync || {}).log || []), { at: new Date().toISOString().slice(0, 19).replace('T', ' '), msg }].slice(-40), lastAt: new Date().toISOString() };
-    commit();
+    commitMeta();
   };
   try {
     const res = await fetch(endpoint, {
@@ -974,26 +970,15 @@ export async function pushToMaster({ silent = false } = {}) {
       : !res.ok;
     const ok = !failed;
     const detail = viaProxy ? String(json?.error || json?.msg || '').replace(/\s+/g, ' ').slice(0, 120) : '';
-    /* 資料庫部分撞版（另一部機先寫入）→ 報表照同步，但整個 db 冇寫入，
-       要話畀用家知去「總表同步」拉返後端先（唔好再用呢部機嘅舊資料）。 */
-    const dbConflict = !!(viaProxy && json?.db?.conflict);
-    if (ok) {
-      const d = load();
-      d.sync = { ...(d.sync || {}), pending: 0, lastPushAt: new Date().toISOString(), lastError: dbConflict ? '資料庫部分撞版（後端有另一部機嘅新版本）' : '' };
-      if (dbConflict) {
-        d.sync = { ...d.sync, log: [...(d.sync.log || []), { at: new Date().toISOString().slice(0, 19).replace('T', ' '), msg: '⚠ 報表已同步，但整個資料庫撞版未寫入 —— 後端有另一部機嘅新版本，請先「由後端還原」核對' }].slice(-40) };
-      }
-    } else if (viaProxy && detail) {
+    /* 報表分頁同步唔會郁「資料庫」分頁，所以**唔會**清 pending —— 未儲存嘅改動仍然未儲存 */
+    if (!ok && viaProxy && detail) {
       const d = load();
       d.sync = { ...(d.sync || {}), lastError: detail };
     }
     const total = payload.counts ? Object.values(payload.counts).reduce((a, b) => a + b, 0) : 0;
-    log(`${ok ? '✓' : '✗'} HTTP ${res.status}${viaProxy ? '（代理）' : ''} · ${total} 筆 · ${(detail || txt).replace(/\s+/g, ' ').slice(0, 80)}`);
-    if (!silent) {
-      if (dbConflict) toast('報表已同步，但整個資料庫撞版未寫入 —— 去「總表同步」撳「由後端還原」先', 'warn');
-      else toast(ok ? '已同步到總表' : ('同步失敗：' + (detail || ('HTTP ' + res.status))), ok ? 'ok' : 'err');
-    }
-    return { ok, conflict: dbConflict, msg: detail || txt.slice(0, 300), viaProxy };
+    log(`${ok ? '✓' : '✗'} 報表分頁 HTTP ${res.status}${viaProxy ? '（代理）' : ''} · ${total} 筆 · ${(detail || txt).replace(/\s+/g, ' ').slice(0, 80)}`);
+    if (!silent) toast(ok ? '已更新總表嘅報表分頁（資料庫本身要撳「儲存到後端」）' : ('同步失敗：' + (detail || ('HTTP ' + res.status))), ok ? 'ok' : 'err');
+    return { ok, msg: detail || txt.slice(0, 300), viaProxy };
   } catch (e) {
     if (viaProxy) {
       /* 經代理唔會有「送咗但讀唔到」呢回事 —— 掟 exception 即係根本未送到 */
@@ -1038,8 +1023,8 @@ async function slimClaimPhotos(root) {
   if (!okGo) return;
   commit();
   /* 2026-09-19：自動寫入已剷走 —— 連「瘦身」都唔會自動寫後端。
-     改動照樣暫存喺瀏覽器，等團長自己撳頂部「立即同步」。 */
-  toast(`已瘦身：騰出 ${fmtBytes(freed)}（改動已暫存，撳頂部「立即同步」先寫入後端）`, 'ok');
+     改動照樣暫存喺瀏覽器，等團長自己撳頂部「儲存到後端」。 */
+  toast(`已瘦身：騰出 ${fmtBytes(freed)}（改動已暫存，撳頂部「儲存到後端」先寫入後端）`, 'ok');
   refresh();
 }
 
@@ -1293,14 +1278,12 @@ export function mount(root, params) {
           ...(db.sync || {}),
           url,
           unit: root.querySelector('#y-unit').value.trim() || db.unitCode,
-          apiKey: root.querySelector('#y-key').value.trim(),
-          /* 2026-09-19：自動寫入已剷走，呢度唔再存 auto／autoModel。
-             剩返「會議模式」（淨係讀，唔會寫）一個開關。
-             順手清走舊遺留嘅 auto:true —— 免得日後有人睇 db 以為仲有自動寫。 */
-          poll: !!root.querySelector('#y-poll')?.checked
+          apiKey: root.querySelector('#y-key').value.trim()
         };
+        /* 舊遺留：auto／autoModel（自動寫入）、poll（會議模式背景讀）都已經冇呢啲路 */
         delete db.sync.auto;
         delete db.sync.autoModel;
+        delete db.sync.poll;
         const share = root.querySelector('#y-share')?.checked;
         if (share && url) {
           db.settings = { ...(db.settings || {}) };
@@ -1308,35 +1291,27 @@ export function mount(root, params) {
           db.settings.publicEntry = { ...(db.settings.publicEntry || {}), submitUrl: url };
           db.backend = { ...(db.backend || {}), gasUrl: url, apiKey: db.sync.apiKey };
         }
-        commit();
-        /* 會議模式（60 秒背景讀）即刻生效，唔使重新載入 ——
-           剔咗就開，熄咗就停，用家唔會「改咗但唔知有冇生效」。 */
-        try {
-          const remote = await import('../lib/remote.js');
-          if (db.sync.poll) remote.startPolling?.();
-          else remote.stopPolling?.();
-        } catch { /* 下次開機照 remoteCfg().poll 決定 */ }
+        /* 連線設定係呢部機自己嘅嘢（唔會上後端），所以只寫本機、唔計入未儲存改動 */
+        commitMeta();
         toast(share && url ? '已儲存，手機記帳／通告報名一齊用同一條網址'
-          : '已儲存同步設定（寫入後端：撳頂部「立即同步」）', 'ok');
+          : '已儲存連線設定（資料寫入後端：撳頂部「儲存到後端」）', 'ok');
         refresh();
       }
       if (act === 'test-sync') {
         const db = load();
         db.sync = { ...(db.sync || {}), url: root.querySelector('#y-url').value.trim(), unit: root.querySelector('#y-unit').value.trim(), apiKey: root.querySelector('#y-key').value.trim() };
-        commit();
-        const res = await pushToMaster({ silent: true });
-        /* 淨係 ping 得通唔代表寫得入 —— 讀類 action 唔使 API Key，
-           但 saveDb 要。以前淨係 ping，所以 key 錯都會報「連線成功」，
-           用家一路以為接通咗，其實成個資料庫一直寫唔入後端。
-           所以順手用 dbInfo 驗埋「有冇寫入權」。 */
+        commitMeta();
+        /* 測試連線係**淨係讀**（status ＋ dbInfo）—— 以前順便行報表同步寫報表、
+           甚至寫埋 db，「測試」變咗第二條寫入路。dbInfo 要 API Key，
+           所以一樣驗到「有冇寫入權」。 */
         const remote = await import('../lib/remote.js');
-        const auth = await remote.remoteInfo();
-        /* 後端版本（v2.5.0+ 會回報）：舊版後端係「睇唔到／同步唔到」嘅常見死因 */
         let st = null;
         try { st = await remote.testConnection(); } catch (e) { st = null; }
+        const res = { ok: !!st?.ok, msg: st?.error || '' };
+        const auth = await remote.remoteInfo();
         const ver = String(st?.backendVersion || '');
         if (res.ok && auth?.ok) {
-          toast('連線成功，而且寫得入後端' + (ver ? `（後端 ${ver}）` : ''), 'ok');
+          toast('連線成功，而且有寫入權' + (ver ? `（後端 ${ver}）` : '') + (auth.found ? '' : ' —— 後端仲未有資料'), 'ok');
         } else if (res.ok && auth?.hint) {
           await modal({
             title: '連得到後端，但寫唔入',
@@ -1361,8 +1336,8 @@ export function mount(root, params) {
         refresh();
       }
       if (act === 'push-sync') {
-        if (!(await confirmDlg({ title: '立即同步', okText: '開始同步', message: '會將全部表格資料送去你嘅 Apps Script（寫入總 Sheet），同時把整個資料庫存入「資料庫」分頁。' }))) return;
-        pushToMaster(); refresh();
+        if (!(await confirmDlg({ title: '更新報表分頁', okText: '開始', message: '會將全部表格資料攤平送去你嘅 Google Sheet 嘅報表分頁（帳目／團員／物資…），畀你自己睇同用公式。<br><br><b>唔會</b>寫「資料庫」分頁 —— 資料庫本身要撳「儲存到後端」。' }))) return;
+        await pushToMaster(); refresh();
       }
 
       /* ---- 同步診斷（只讀；逐格驗成條鏈，如實話你知邊格斷） ---- */
@@ -1387,14 +1362,14 @@ export function mount(root, params) {
 
       /* ---- 整個資料庫：寫入／還原／檢視（真正嘅後端儲存） ---- */
       if (act === 'push-db') {
-        const remote = await import('../lib/remote.js');
+        const { saveWithDialog } = await import('./syncdialog.js');
         const old = b.innerHTML;
-        b.disabled = true; b.textContent = '儲存中…';
-        const r = await remote.flush();
+        b.disabled = true; b.textContent = '核對緊後端…';
+        const r = await saveWithDialog({ silent: false, toastOk: true });
         b.disabled = false; b.innerHTML = old;
         if (r.ok) {
-          toast('已把整個資料庫儲存到後端', 'ok');
-        } else if (r.hint) {
+          /* toast 已由 saveWithDialog 出 */
+        } else if (r.hint && r.reason !== 'no_base') {
           /* 有得救嘅死因（API Key 唔啱／未 re-deploy）：用對話框講清楚點解決，
              唔好淨係彈個 toast —— toast 一閃就冇，用家只會覺得「又係唔得」。 */
           await modal({
@@ -1404,8 +1379,6 @@ export function mount(root, params) {
               <p class="sm muted mt-8">你部機啲資料仲喺度，一修好就會即刻寫得入 —— 唔會蝕咗。</p>`,
             actions: [{ label: '知道喇', class: 'btn-primary', value: true }]
           });
-        } else {
-          toast('儲存失敗：' + (r.error || '未知錯誤'), 'err');
         }
         refresh();
       }
@@ -1413,23 +1386,19 @@ export function mount(root, params) {
         const remote = await import('../lib/remote.js');
         const info = await remote.remoteInfo();
         if (!info?.ok) { toast('讀唔到後端：' + (info?.error || '未知錯誤'), 'err'); return; }
-        if (!info.found) { toast('後端仲未有資料庫（請先撳「立即儲存到後端」）', 'warn'); return; }
+        if (!info.found) { toast('後端仲未有資料庫（請先撳「儲存到後端」）', 'warn'); return; }
         const c = info.counts || {};
+        const pend = Number(load().sync?.pending || 0);
         const okGo = await confirmDlg({
-          title: '由後端還原資料', danger: true, okText: '用後端資料覆蓋本機',
+          title: '由後端重新載入', danger: true, okText: pend ? '丟棄本機改動，用後端嗰份' : '用後端資料覆蓋本機',
           message: `後端最後更新：<b>${esc(String(info.at || info.version || '').slice(0, 19).replace('T', ' '))}</b><br>
             內容：團員 ${c.members ?? '?'} · 帳目 ${c.transactions ?? '?'} · 會議 ${c.meetings ?? '?'} · 通告 ${c.notices ?? '?'} · 物資 ${c.invItems ?? '?'}<br><br>
-            <b>呢部機而家嘅資料會被覆蓋。</b>如果本機有未儲存嘅改動，請先撳「立即儲存到後端」。`
+            <b>呢部機而家嘅資料會被覆蓋。</b>${pend ? `本機有 <b>${pend}</b> 項未儲存改動會<b>全部丟棄</b>；想保留就撳「取消」再撳「儲存到後端」。` : ''}`
         });
         if (!okGo) return;
-        const got = await remote.pullDb();
-        if (!got?.ok || !got.db) { toast('讀取失敗：' + (got?.error || '未知錯誤'), 'err'); return; }
-        const { adoptRemote } = await import('../lib/store.js');
-        try {
-          adoptRemote(got.db, { version: String(got.version || '') });
-          toast('已由後端還原資料', 'ok');
-          refresh();
-        } catch (e) { toast('還原失敗：' + e.message, 'err'); }
+        const { reloadFromBackend } = await import('./syncdialog.js');
+        await reloadFromBackend({ force: true });
+        refresh();
       }
       if (act === 'db-info') {
         const remote = await import('../lib/remote.js');
@@ -1451,7 +1420,7 @@ export function mount(root, params) {
                   ['帳戶', `${c.accounts ?? 0} 個`]
                 ])}
               </div>`
-            : `<div class="note-box warn">${icon('alert', 15)}<div>後端仲未有資料庫 —— 撳「立即儲存到後端」就會建立。</div></div>`,
+            : `<div class="note-box warn">${icon('alert', 15)}<div>後端仲未有資料庫 —— 撳「儲存到後端」就會建立。</div></div>`,
           actions: [{ label: '知道喇', class: 'btn-primary', value: true }]
         });
       }
@@ -1517,7 +1486,7 @@ export function mount(root, params) {
           await modal({
             title: '搬遷檢查：後端仲係空',
             body: `<div class="note-box warn">${icon('alert', 15)}<div>後端未有任何資料庫。</div></div>
-              <p class="sm mt-12">先撳「<b>立即儲存到後端</b>」，再返嚟做呢個檢查。</p>
+              <p class="sm mt-12">先撳「<b>儲存到後端</b>」，再返嚟做呢個檢查。</p>
               <p class="sm muted mt-8"><b>千祈唔好</b>喺呢個狀態清走前端資料。</p>`,
             actions: [{ label: '知道喇', class: 'btn-primary', value: true }]
           });
@@ -1559,14 +1528,14 @@ export function mount(root, params) {
               <td class="r">${l === r ? `<span style="color:var(--ok)">✓</span>` : `<span style="color:var(--danger)">✗ 爭 ${Math.abs(l - r)}</span>`}</td>
             </tr>`).join('')}</tbody></table>
             ${pendingCount() ? `<div class="note-box warn mt-12">${icon('alert', 15)}<div>
-              仲有 <b>${pendingCount()}</b> 項改動未寫入後端 —— 撳「立即儲存到後端」先。</div></div>` : ''}
+              仲有 <b>${pendingCount()}</b> 項改動未寫入後端 —— 撳「儲存到後端」先。</div></div>` : ''}
             ${allMatch ? `<div class="note-box ok mt-12">${icon('check', 15)}<div>
               <b>後端同呢部機完全一致，可以安全清走前端資料。</b><br>
               建議次序：① 先撳下面「匯出 JSON 備份」留一份喺電腦（保險）→
               ② 由 Git 移除 <code>data/units/0082/</code> →
               ③ 之後新裝置開機會直接由後端讀，唔會再種舊資料。</div></div>`
             : `<div class="note-box err mt-12">${icon('alert', 15)}<div>
-              <b>未可以清。</b>上面打 ✗ 嗰啲項目兩邊對唔上 —— 先撳「立即儲存到後端」，
+              <b>未可以清。</b>上面打 ✗ 嗰啲項目兩邊對唔上 —— 先撳「儲存到後端」，
               再做多次檢查；仲係唔夾就唔好清，話我知。</div></div>`}
             <p class="sm muted mt-8">後端最後更新：${esc(String(got.version || got.at || '').slice(0, 19).replace('T', ' ') || '（未知）')}
               · 大小 ${esc(remote.fmtBytes(got.bytes || 0))}</p>`,
@@ -1593,7 +1562,7 @@ export function mount(root, params) {
         toast('已下載欄位對應表', 'ok');
       }
       if (act === 'copy-guide') {
-        const txt = `【總表同步設定】\n1. 開你嘅 Google Sheet → 擴充功能 → Apps Script\n2. 貼上下載嘅 Code.gs（或 app 內「下載 Code.gs」）\n3. 部署 → 新增部署作業 → 類型：網頁應用程式\n4. 執行身分：我；具有存取權的使用者：任何人\n5. 複製 /exec 網址，貼返「表格 → 總表同步 → Apps Script 網址」\n6. 按「測試連線」，成功就可以「立即同步全部」\n第 7 步（可選）：設定 API Key 加強保護。`;
+        const txt = `【總表同步設定】\n1. 開你嘅 Google Sheet → 擴充功能 → Apps Script\n2. 貼上下載嘅 Code.gs（或 app 內「下載 Code.gs」）\n3. 部署 → 新增部署作業 → 類型：網頁應用程式\n4. 執行身分：我；具有存取權的使用者：任何人\n5. 複製 /exec 網址，貼返「表格 → 總表同步 → Apps Script 網址」\n6. 按「測試連線」，成功就可以撳頂部「儲存到後端」\n第 7 步（可選）：設定 API Key 加強保護。`;
         if (await copyText(txt)) toast('已複製部署步驟', 'ok');
       }
     }));

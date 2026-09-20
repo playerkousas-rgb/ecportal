@@ -50,8 +50,24 @@ try {
   store.setSaveHook(() => remote.scheduleSave());
 
   out.configured = remote.remoteConfigured();
-  out.cfg = { url: remote.remoteCfg().url, unit: remote.remoteCfg().unit, auto: remote.remoteCfg().auto };
+  out.cfg = { url: remote.remoteCfg().url, unit: remote.remoteCfg().unit };
   out.seededMembers = store.load().members.length;
+
+  const DB_KEY = `venture82.unit.0082.db.v2`;
+  const BASE_KEY = `venture82.unit.0082.base.v2`;
+  const names = () => (store.tryLoad()?.members || []).map(m => m.name).sort();
+  let lastConflicts = [];
+  const pendingN = () => Number(store.tryLoad()?.sync?.pending || 0);
+  /* 劇本式衝突回答：step.useMine ＝ true（全部用我嘅）／false（全部保留後端）／
+     ['子串', …]（key 或者人話描述入面有呢啲字先用我嘅） */
+  const scriptedResolver = (step) => async ({ conflicts, ctx }) => {
+    const described = remote.describeConflicts(conflicts, ctx);
+    out.lastDialog = described.map(d => ({ key: d.key, where: `${d.module} › ${d.record} › ${d.field}`, mine: d.mineText, theirs: d.theirsText }));
+    if (step.useMine === true) return { useMine: true };
+    if (!step.useMine) return { useMine: [] };
+    const want = Array.isArray(step.useMine) ? step.useMine : [String(step.useMine)];
+    return { useMine: described.filter(d => want.some(w => d.key.includes(w) || `${d.module}${d.record}${d.field}${d.mineText}`.includes(w))).map(d => d.key) };
+  };
 
   /* ---- 依照劇本做嘢 ---- */
   for (const step of (PLAN.steps || [])) {
@@ -100,19 +116,12 @@ try {
     }
     /* 領袖喺「總表同步 → 同步設定」貼 /exec ＋ API Key（自助路線） */
     if (step.op === 'setSync') {
-      /* 2026-09-19：自動寫入已剷走（remoteCfg().auto 寫死 false），
-         所以呢度冇 auto／autoModel 可設 —— 剩「會議模式」（淨係讀）一個開關。 */
+      /* 連線設定係呢部機自己嘅嘢：只寫本機（commitMeta），唔計入未儲存改動 */
       const db = store.load();
-      db.sync = {
-        ...(db.sync || {}), url: step.url || '', apiKey: step.apiKey || '',
-        unit: step.unit || '0082', poll: step.poll === true
-      };
-      store.commit();
+      db.sync = { ...(db.sync || {}), url: step.url || '', apiKey: step.apiKey || '', unit: step.unit || '0082' };
+      store.commitMeta();
       const cfg = remote.remoteCfg();
-      out.steps.push({
-        op: 'setSync', url: cfg.url, hasKey: !!cfg.apiKey, viaProxy: cfg.viaProxy,
-        ok: cfg.ok, auto: cfg.auto, poll: cfg.poll
-      });
+      out.steps.push({ op: 'setSync', url: cfg.url, hasKey: !!cfg.apiKey, viaProxy: cfg.viaProxy, ok: cfg.ok, pending: pendingN() });
     }
     /* 「同步診斷」：逐格驗成條鏈 */
     if (step.op === 'diagnose') {
@@ -123,90 +132,101 @@ try {
         stages: (d.stages || []).map(s => `${s.id}:${s.state}`)
       });
     }
-    if (step.op === 'push') {
-      const r = await remote.pushDb({ silent: true });
-      out.steps.push({ op: 'push', ok: r.ok, error: r.error || '', reason: r.reason || '', hint: (r.hint || '').slice(0, 400), bytes: r.bytes || 0, parts: r.parts || 0, pending: Number(store.load().sync?.pending || 0) });
-    }
-    /* 2026-09-19「讀唔到後端就唔准寫」硬保險：呢個 session 對唔對到後端版本 */
-    if (step.op === 'reconciled') {
-      out.steps.push({ op: 'reconciled', reconciled: remote.isReconciled(), state: remote.syncState().state, pending: Number(store.load().sync?.pending || 0) });
-    }
-    /* 「實際生效」嘅同步模式（唔係 db 入面存咗乜，而係 remoteCfg() 點解）——
-       用來釘死 2026-09-19 團長指示：預設手動、舊遺留 auto:true 都當手動。 */
-    if (step.op === 'syncMode') {
-      const db = store.load();
-      const cfg = remote.remoteCfg();
+    /* 「儲存到後端」—— 唯一寫入路（核對版本 → 三方比對 → 撞就問 resolver） */
+    if (step.op === 'push' || step.op === 'save' || step.op === 'syncNow') {
+      const policy = step.policy || 'ask';
+      out.lastDialog = null;
+      const r = await remote.saveToBackend({ policy, resolver: scriptedResolver(step), silent: true });
       out.steps.push({
-        op: 'syncMode',
-        storedAuto: db.sync?.auto === undefined ? 'undefined' : String(db.sync?.auto),
-        storedAutoModel: String(db.sync?.autoModel ?? 'none'),
-        effAuto: cfg.auto, effPoll: cfg.poll
+        op: step.op, ok: !!r.ok, pushed: !!r.pushed, error: r.error || '', reason: r.reason || '', hint: (r.hint || '').slice(0, 400),
+        bytes: r.bytes || 0, parts: r.parts || 0, version: String(r.version || ''),
+        remoteChanged: !!r.remoteChanged, mine: r.mine ?? null, theirs: r.theirs ?? null, same: r.same ?? null, applied: r.applied ?? null,
+        conflicts: (r.conflicts || []).map(c => c.key), resolved: r.resolved || 0, kept: r.kept ?? 0,
+        overrideOk: r.overrideOk, dialog: out.lastDialog,
+        pending: pendingN(), members: names().length, names: names(), state: remote.syncState().state
       });
     }
-    /* 模擬「舊版本遺留落嚟嘅 db.sync.auto:true」（舊 checkbox 預設剔住，
-       用家一撳儲存設定就明寫 auto:true）—— 新預設必須仍然係手動。 */
-    if (step.op === 'legacyAuto') {
-      const db = store.load();
-      db.sync = { ...(db.sync || {}), auto: true };
-      delete db.sync.autoModel;
-      store.commitMeta();
-      const cfg = remote.remoteCfg();
-      out.steps.push({ op: 'legacyAuto', effAuto: cfg.auto, effPoll: cfg.poll });
-    }
-    /* 團長要嘅「撳同步」：一次過 先讀後端（拉＋合併）→ 再寫後端 */
-    if (step.op === 'syncNow') {
-      const r = await remote.syncNow();
-      const db = store.tryLoad();
+    /* 「登入／開機」—— 由後端攞成份資料做基準（有未存改動就三方比對保留） */
+    if (step.op === 'load' || step.op === 'checksync') {
+      const r = await remote.loadFromBackend({ policy: step.policy || 'ask' });
+      lastConflicts = r.conflicts || [];
+      const described = r.conflicts?.length ? remote.describeConflicts(r.conflicts, r.ctx) : [];
+      const base = store.getBase();
       out.steps.push({
-        op: 'syncNow', ok: !!r?.ok, error: r?.error || '', reason: r?.reason || '', stage: r?.stage || '',
-        pulled: !!r?.pulled, mergedPull: !!r?.mergedPull, pushed: !!r?.pushed, upToDate: !!r?.upToDate,
-        members: (db?.members || []).length, names: (db?.members || []).map(m => m.name).sort(),
-        pending: Number(db?.sync?.pending || 0)
+        op: step.op, ok: !!r.ok, found: r.found !== false, fresh: !!r.fresh, merged: !!r.merged, legacy: !!r.legacy,
+        error: r.error || '', reason: r.reason || '', version: String(r.version || ''),
+        mine: r.mine ?? null, theirs: r.theirs ?? null, same: r.same ?? null,
+        conflicts: (r.conflicts || []).map(c => c.key),
+        dialog: described.map(d => ({ key: d.key, where: `${d.module} › ${d.record} › ${d.field}`, mine: d.mineText, theirs: d.theirsText })),
+        baseVersion: String(base?.version || ''), baseEmpty: !!base?.empty,
+        pending: pendingN(), members: names().length, names: names(), state: remote.syncState().state
       });
+    }
+    /* 登入前嘅 ensureFresh（登入頁擺咗耐先撳登入） */
+    if (step.op === 'ensureFresh') {
+      const r = await remote.ensureFresh({ maxAgeMs: step.maxAgeMs ?? 0 });
+      out.steps.push({ op: 'ensureFresh', ok: !!r.ok, fresh: !!r.fresh, upToDate: !!r.upToDate, skipped: r.skipped || '', members: names().length, names: names(), pending: pendingN() });
+    }
+    /* 登入時衝突對話框揀「用我嘅」→ 寫落本機（等撳儲存）；用上一個 load 回嘅 conflicts */
+    if (step.op === 'applyMine') {
+      const merge3 = await import('../assets/js/lib/merge3.js');
+      const keys = step.useMine === true ? true
+        : (lastConflicts || []).map(c => c.key).filter(k => !step.match || k.includes(step.match));
+      const ov = merge3.overridesFor(lastConflicts || [], keys);
+      store.applyChangesLocal(ov);
+      out.steps.push({ op: 'applyMine', applied: ov.length, pending: pendingN() });
+    }
+    /* 改完嘢淨係暫存：等幾秒都唔會自動寫後端 */
+    if (step.op === 'stage' || step.op === 'manualStage' || step.op === 'autosave') {
+      store.add('members', { name: step.name, ymis: step.ymis, identity: 'member' });
+      remote.scheduleSave();
+      await new Promise(r => setTimeout(r, step.waitMs || 3000));
+      out.steps.push({ op: step.op, pending: pendingN(), state: remote.syncState().state, msg: remote.syncState().msg || '', members: names().length });
+    }
+    /* 直接改一格（例如點名）—— 測「同一格唔同值」 */
+    if (step.op === 'setField') {
+      const db = store.load();
+      const rec = (db[step.coll] || []).find(r => r.id === step.id);
+      if (!rec) { out.steps.push({ op: 'setField', ok: false, error: '搵唔到紀錄' }); continue; }
+      let cur = rec;
+      const segs = step.path.slice(0, -1);
+      segs.forEach(k => { if (!cur[k] || typeof cur[k] !== 'object') cur[k] = {}; cur = cur[k]; });
+      cur[step.path[step.path.length - 1]] = step.value;
+      store.commit();
+      out.steps.push({ op: 'setField', ok: true, id: step.id, path: step.path, value: step.value, pending: pendingN() });
+    }
+    /* 讀一格返嚟（驗證合併結果） */
+    if (step.op === 'getField') {
+      const db = store.load();
+      const rec = (db[step.coll] || []).find(r => r.id === step.id);
+      let cur = rec;
+      (step.path || []).forEach(k => { cur = cur == null ? undefined : cur[k]; });
+      out.steps.push({ op: 'getField', id: step.id, path: step.path, value: cur === undefined ? null : cur, exists: !!rec });
+    }
+    /* 直接問後端攞成份 db，睇下頂層有咩 key（驗 sync／backend 冇上到 Sheet） */
+    if (step.op === 'backendKeys') {
+      const cfg = remote.remoteCfg();
+      const r = await fetch(cfg.url || `${BASE}/api/proxy`, {
+        method: 'POST', headers: { 'Content-Type': cfg.url ? 'text/plain;charset=utf-8' : 'application/json' },
+        body: JSON.stringify(cfg.url ? { action: 'loadDb', unit: cfg.unit || '0082', apiKey: cfg.apiKey } : { action: 'loadDb', unit: cfg.unit || '0082' })
+      });
+      const j = await r.json().catch(() => ({}));
+      out.steps.push({ op: 'backendKeys', ok: !!j.ok && !!j.found, keys: Object.keys(j.db || {}).sort(), version: String(j.version || '') });
     }
     /* 劇本中途直接問後端而家有咩（唔信前端自己講）——
        要喺兩個 step **之間**取樣先有意義，例如證明「手動模式下未撳同步
        之前，後端真係一個字都未收到」。 */
     if (step.op === 'backendPeek') {
       const cfg = remote.remoteCfg();
-      const r = await fetch(cfg.url, {
-        method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'dbInfo', unit: cfg.unit || '0082', apiKey: cfg.apiKey })
+      const r = await fetch(cfg.url || `${BASE}/api/proxy`, {
+        method: 'POST', headers: { 'Content-Type': cfg.url ? 'text/plain;charset=utf-8' : 'application/json' },
+        body: JSON.stringify(cfg.url ? { action: 'dbInfo', unit: cfg.unit || '0082', apiKey: cfg.apiKey } : { action: 'dbInfo', unit: cfg.unit || '0082' })
       });
       const j = await r.json().catch(() => ({}));
       out.steps.push({
         op: 'backendPeek', http: r.status, found: !!j.found,
         members: Number(j.counts?.members || 0), version: String(j.version || '')
       });
-    }
-    /* 手動模式：改動淨係暫存，等 debounce 過咗都唔應該自動寫 */
-    if (step.op === 'manualStage') {
-      const db0 = store.load();
-      db0.sync = { ...(db0.sync || {}), auto: false };
-      store.commit();
-      remote.arm();
-      store.add('members', { name: step.name, ymis: step.ymis, identity: 'member' });
-      remote.scheduleSave();
-      await new Promise(r => setTimeout(r, step.waitMs || 4000));
-      out.steps.push({
-        op: 'manualStage', pending: Number(store.load().sync?.pending || 0),
-        state: remote.syncState().state, msg: remote.syncState().msg || '',
-        members: (store.load().members || []).length
-      });
-    }
-    if (step.op === 'autosave') {
-      /* 2026-09-19 團長指示「自動會有機會出事就唔好比佢有得選」——
-         自動寫入已經**剷走**，所以呢個 op 而家測嘅係反過來嘅嘢：
-         「改完嘢、arm 咗、等足 debounce 時間，都**唔會**自動寫後端」。
-         仲刻意把 db.sync.auto 強行設做 true（模擬舊遺留值／有人手改 db），
-         證明就算咁都寫唔到 —— 因為 remoteCfg().auto 係寫死嘅 false。 */
-      const dbA = store.load();
-      dbA.sync = { ...(dbA.sync || {}), auto: true };
-      store.commitMeta();
-      remote.arm();
-      store.add('members', { name: step.name, ymis: step.ymis, identity: 'member' });
-      await new Promise(r => setTimeout(r, step.waitMs || 4000));
-      out.steps.push({ op: 'autosave', pending: Number(store.load().sync?.pending || 0), state: remote.syncState().state });
     }
     /* 「成員連結」頁會派出去嘅公開連結（驗 ?be= 自助後端附埋入 link） */
     if (step.op === 'links') {
@@ -223,11 +243,11 @@ try {
       const i = await remote.remoteInfo();
       out.steps.push({ op: 'info', ok: i.ok, found: !!i.found, reason: i.reason || '', error: (i.error || '').slice(0, 80), counts: i.counts || null, at: i.at || '' });
     }
+    /* 「由後端重新載入」（丟棄本機未存改動；冇 pending 嗰陣同 load 一樣） */
     if (step.op === 'pull') {
-      const g = await remote.pullDb();
+      const g = await remote.discardAndReload();
       let adopted = null;
-      if (g.ok && g.db) {
-        store.adoptRemote(g.db, { version: String(g.version || '') });
+      if (g.ok) {
         adopted = {
           members: store.load().members.length,
           transactions: store.load().transactions.length,
@@ -235,7 +255,7 @@ try {
           pending: Number(store.load().sync?.pending || 0)
         };
       }
-      out.steps.push({ op: 'pull', ok: g.ok, found: !!g.found, error: g.error || '', adopted });
+      out.steps.push({ op: 'pull', ok: g.ok, found: g.ok ? true : (g.reason === 'empty' ? false : null), error: g.error || '', reason: g.reason || '', adopted });
     }
     if (step.op === 'snapshot') {
       const db = store.load();
@@ -247,14 +267,18 @@ try {
         hasLocalContent: store.hasLocalContent(),
         updatedAt: store.localUpdatedAt(),
         lastSyncedVersion: String(db.sync?.lastSyncedVersion || ''),
+        baseVersion: String(store.getBase()?.version || ''),
+        hasBase: !!store.getBase(),
+        localChanges: store.localChanges().length,
         pending: Number(db.sync?.pending || 0)
       });
     }
     /* 「第 N 部機」模擬：把呢部機嘅本機 db 匯出／匯入（模擬同一部機走開咗再返嚟，
        中間有第二部機更新咗後端 —— 用嚟測衝突復原）。 */
+    /* 「同一部機走開再返嚟」：把本機 db ＋ 基準快照原樣存檔／讀返（唔係備份檔格式） */
     if (step.op === 'export') {
-      fs.writeFileSync(step.file, store.exportAll(), 'utf8');
-      out.steps.push({ op: 'export', file: step.file, members: store.load().members.length });
+      fs.writeFileSync(step.file, JSON.stringify({ db: localStorage.getItem(DB_KEY), base: localStorage.getItem(BASE_KEY) }), 'utf8');
+      out.steps.push({ op: 'export', file: step.file, members: store.load().members.length, hasBase: !!localStorage.getItem(BASE_KEY) });
     }
     /* 模擬「隊友喺另一部機儲存」：直接經 proxy 用正確 baseVersion 寫入後端 */
     if (step.op === 'teammatePush') {
@@ -263,47 +287,23 @@ try {
       const db = JSON.parse(JSON.stringify(got.db));
       db.members = [...(db.members || []), { id: 'm8' + Date.now(), name: step.name, ymis: step.ymis, identity: 'member' }];
       db.meta = { ...(db.meta || {}), updatedAt: '2026-09-18T20:00:00.000Z' };
-      const r = await (await fetch(`${BASE}/api/proxy`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'saveDb', unit: '0082', db, baseVersion: String(got.version || '') })
+      const cfg = remote.remoteCfg();
+      const r = await (await fetch(cfg.url || `${BASE}/api/proxy`, {
+        method: 'POST', headers: { 'Content-Type': cfg.url ? 'text/plain;charset=utf-8' : 'application/json' },
+        body: JSON.stringify({ action: 'saveDb', unit: '0082', db, baseVersion: String(got.version || ''), ...(cfg.url ? { apiKey: cfg.apiKey } : {}) })
       })).json();
       out.steps.push({ op: 'teammatePush', ok: r.ok === true, version: String(r.version || '') });
     }
-    /* 「立即同步」：問後端有冇隊友新版本，有就拉（本機有 pending 就會合併） */
-    if (step.op === 'checksync') {
-      const r = await remote.checkRemote({ silent: true });
-      const db = store.tryLoad();
-      out.steps.push({
-        op: 'checksync', ok: !!r?.ok, updated: !!r?.updated, merged: !!r?.merged, upToDate: !!r?.upToDate,
-        members: (db?.members || []).length, names: (db?.members || []).map(m => m.name),
-        pending: Number(db?.sync?.pending || 0)
-      });
-    }
-    /* 跨視窗同步（2026-09-19）：部機開住、隊友喺另一部機推咗新版，
-       用家「撳返呢個視窗」（focus）→ 1.2 秒內自動對版本、拉隊友嘅改動。
-       （前一個 step 通常係 teammatePush —— 模擬「另一個視窗／無痕視窗做咗嘢」） */
-    if (step.op === 'watchAndFocus') {
-      remote.arm();
-      remote.startVisibilityWatch();
-      await new Promise(r => setTimeout(r, 300));                 // 等 watcher 綁好
-      window.dispatchEvent(new window.Event('focus'));            // 模擬切返呢個視窗
-      await new Promise(r => setTimeout(r, step.waitMs || 2600)); // 等 1.2s debounce＋拉取
-      const db = store.tryLoad();
-      out.steps.push({
-        op: 'watchAndFocus',
-        members: (db?.members || []).length,
-        names: (db?.members || []).map(m => m.name),
-        lastSyncedVersion: String(db?.sync?.lastSyncedVersion || ''),
-        pending: Number(db?.sync?.pending || 0)
-      });
-    }
     if (step.op === 'import') {
-      store.importAll(fs.readFileSync(step.file, 'utf8'));
+      const st = JSON.parse(fs.readFileSync(step.file, 'utf8'));
+      if (st.db) localStorage.setItem(DB_KEY, st.db); else localStorage.removeItem(DB_KEY);
+      if (st.base) localStorage.setItem(BASE_KEY, st.base); else localStorage.removeItem(BASE_KEY);
+      store.reloadFromStorage();
       const db = store.load();
       out.steps.push({
         op: 'import', file: step.file, members: db.members.length,
         names: db.members.map(m => m.name), pending: Number(db.sync?.pending || 0),
-        lastSyncedVersion: String(db.sync?.lastSyncedVersion || '')
+        lastSyncedVersion: String(db.sync?.lastSyncedVersion || ''), hasBase: !!store.getBase()
       });
     }
   }
