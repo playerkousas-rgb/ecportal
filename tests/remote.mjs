@@ -537,6 +537,14 @@ section('只有一個儲存方式（原始碼守門：冇自動寫、冇 poll、
     && /export function setLocalMerged/.test(storeSrc) && /export function commitSaved/.test(storeSrc));
   ok('main.js 右上角：有未存嘢 → 「儲存到後端（N）」；否則「重新載入」', /儲存到後端/.test(mainSrc) && /重新載入/.test(mainSrc) && /syncActBtn/.test(mainSrc));
   ok('main.js 開機**等**後端載入完先出登入頁（await syncBoot）', /await syncBoot\(\)/.test(mainSrc));
+  ok('開機後端失敗會停喺連線閘（唔會落入登入頁）',
+    /const bootSync = await syncBoot\(\)/.test(mainSrc)
+    && /if \(!isMock\(\) && !bootSync\?\.ok\)[\s\S]*?renderBackendGate\(bootSync\)/.test(mainSrc)
+    && /function renderBackendGate/.test(mainSrc));
+  ok('連線閘只顯示普通用家可明白嘅重試／揀旅團操作',
+    /暫時未能連線，請稍後再試/.test(mainSrc)
+    && /id="btnRetryBackend"/.test(mainSrc) && /id="btnChangeUnit"/.test(mainSrc)
+    && !/input[^>]+(?:exec|API Key)/i.test((mainSrc.match(/function renderBackendGate[\s\S]*?function renderFatal/) || [''])[0]));
   /* 2026-09-20 改：以前呢度係 `freshenBeforeLogin()`（ensureFresh，「連唔到都照登入」）。
      團長質疑「既然都同後端對咗帳戶密碼，點可能入去之後話冇連上後端」之後，
      改成硬閘 —— 後端答唔到就唔准入。所以呢條斷言要跟著改。 */

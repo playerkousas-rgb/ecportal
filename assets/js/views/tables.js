@@ -544,7 +544,9 @@ function syncView() {
   const baseAt = base?.at ? String(base.at).slice(0, 19).replace('T', ' ') : '';
   const baseVer = base ? (base.empty ? '（後端仲係空）' : String(base.version || '').slice(0, 19).replace('T', ' ')) : '';
   return `
-  <div class="note-box mb-16">${icon('cloud', 15)}<div>
+  ${route.serverManaged ? `<div class="note-box mb-16">${icon('cloud', 15)}<div>
+    <b>資料已接上旅團後端。</b>改好資料後撳「儲存到後端」；想放棄呢部機未儲存嘅改動，就撳「由後端重新載入」。
+  </div></div>` : `<div class="note-box mb-16">${icon('cloud', 15)}<div>
     <b>資料真正嘅家係你自己嘅 Google Sheet。只有一個方式：</b>
     ① 登入嗰陣由後端攞成份資料（＝登入嗰一刻嘅後端）→
     ② 之後改乜都<b>淨係暫存喺呢部機</b> →
@@ -553,7 +555,7 @@ function syncView() {
     ＝嗰格<b>唔會</b>寫入，會列出嚟等你再確認，確認咗先蓋過去。<br>
     <span class="xs">其他分頁（帳目／團員／物資…）係攤平出嚟畀你自己睇同用公式嘅「報表」。
     同一個後端仲會處理 <b>成員手機記帳</b>（entry.html）同 <b>通告報名</b>（notice.html）。</span>
-  </div></div>
+  </div></div>`}
 
   ${wired ? `<div class="card mb-16"><div class="card-head">
     <div><div class="card-title">${icon('shield', 15)} 儲存狀態</div>
@@ -565,8 +567,8 @@ function syncView() {
     <div class="kv-row"><span>登入時攞到嘅後端版本（基準）</span><span>${esc(baseVer ? `${baseVer}${baseAt ? `，攞於 ${baseAt}` : ''}` : '（未由後端載入過）')}</span></div>
     <div class="kv-row"><span>最後寫入後端</span><span>${esc(lastPush || '（未試過）')}</span></div>
     <div class="kv-row"><span>最後由後端讀取</span><span>${esc(lastPull || '（未試過）')}</span></div>
-    ${s.lastError ? `<div class="kv-row"><span>上次錯誤</span><span style="color:var(--danger)">${esc(String(s.lastError).slice(0, 120))}</span></div>` : ''}
-    ${/API ?Key|未授權/i.test(String(s.lastError || '')) ? `
+    ${s.lastError ? `<div class="kv-row"><span>上次狀態</span><span style="color:var(--danger)">${route.serverManaged ? '上次操作未完成，請稍後再試' : esc(String(s.lastError).slice(0, 120))}</span></div>` : ''}
+    ${!route.serverManaged && /API ?Key|未授權/i.test(String(s.lastError || '')) ? `
     <div class="note-box err mt-8">${icon('alert', 15)}<div>
       <b>寫唔入係因為 API Key 未入伺服器端。</b>後端行過 <code>initializeSheets</code> 之後會自動生成一條 API Key，
       但平台伺服器端未有，所以後端拒絕寫入（讀就冇事，所以「測試連線」照樣顯示成功）。<br>
@@ -579,21 +581,26 @@ function syncView() {
     <div class="row gap-8 mt-12 wrap">
       <button class="btn btn-primary btn-sm" data-act="push-db">${icon('cloud', 15)} 儲存到後端${pending ? `（${pending}）` : ''}</button>
       <button class="btn btn-sm" data-act="pull-db">${icon('download', 15)} 由後端重新載入${pending ? '（會丟棄未儲存改動）' : ''}</button>
-      <button class="btn btn-sm" data-act="db-info">${icon('search', 15)} 睇後端有咩資料</button>
-      <button class="btn btn-sm" data-act="diagnose">${icon('search', 15)} 同步診斷</button>
-      <button class="btn btn-sm" data-act="migrate-check">${icon('shield', 15)} 搬遷檢查</button>
     </div>
-    ${(() => {
-      const bk = dbSizeBreakdown(load());
-      const mb = bk.total / 1048576;
-      /* v2.4.0：分件儲存之後冇「停止使用」嘅天花板 —— 顏色只係俾你知道大細 */
-      const cls = mb > 25 ? 'b-danger' : (mb > 10 ? 'b-warn' : 'b-ok');
-      return `<div class="row gap-8 mt-12 wrap" style="align-items:center">
-      <span class="badge ${cls}" title="資料庫 JSON 總大小。分件儲存之下幾大都存得到；得閒睇吓邊個分頁食緊嘢就得">${icon('chart', 12)} 體積 ${fmtBytes(bk.total)}${mb > 10 ? '（' + Math.round(mb) + ' MB）' : ''}</span>
-      <button class="btn btn-xs btn-sm" data-act="size-check">${icon('chart', 13)} 體積檢查</button>
-      ${bk.photoBytes > 0 ? `<button class="btn btn-xs" data-act="size-slim">${icon('image', 13)} 相片瘦身（${fmtBytes(bk.photoBytes)}）</button>` : ''}
-    </div>`;
-    })()}
+    <details class="mt-12" ${route.serverManaged ? 'style="display:none"' : ''}>
+      <summary class="btn btn-xs">其他管理功能（一般不用）</summary>
+      <div class="row gap-8 mt-8 wrap">
+        <button class="btn btn-sm" data-act="db-info">${icon('search', 15)} 睇後端有咩資料</button>
+        <button class="btn btn-sm" data-act="diagnose">${icon('search', 15)} 同步診斷</button>
+        <button class="btn btn-sm" data-act="migrate-check">${icon('shield', 15)} 搬遷檢查</button>
+      </div>
+      ${(() => {
+        const bk = dbSizeBreakdown(load());
+        const mb = bk.total / 1048576;
+        /* v2.4.0：分件儲存之後冇「停止使用」嘅天花板 —— 顏色只係俾你知道大細 */
+        const cls = mb > 25 ? 'b-danger' : (mb > 10 ? 'b-warn' : 'b-ok');
+        return `<div class="row gap-8 mt-8 wrap" style="align-items:center">
+        <span class="badge ${cls}" title="資料庫 JSON 總大小。分件儲存之下幾大都存得到；管理員需要時先睇">${icon('chart', 12)} 體積 ${fmtBytes(bk.total)}${mb > 10 ? '（' + Math.round(mb) + ' MB）' : ''}</span>
+        <button class="btn btn-xs btn-sm" data-act="size-check">${icon('chart', 13)} 體積檢查</button>
+        ${bk.photoBytes > 0 ? `<button class="btn btn-xs" data-act="size-slim">${icon('image', 13)} 相片瘦身（${fmtBytes(bk.photoBytes)}）</button>` : ''}
+      </div>`;
+      })()}
+    </details>
     <div class="hint mt-8">「由後端重新載入」會<b>用後端嘅資料覆蓋呢部機</b>（換咗新手機／清咗 cache，或者想放棄未儲存嘅改動就用呢個）。</div>
   </div></div>` : `
   <div class="note-box danger mb-16">${icon('alert', 15)}<div>
@@ -609,6 +616,12 @@ function syncView() {
        最常見就係平台伺服器端未登記呢個旅團。 */
     const st = syncState();
     if (st.state !== 'unreachable') return '';
+    if (route.serverManaged) {
+      return `<div class="note-box danger mb-16">${icon('alert', 15)}<div>
+        <b>暫時未能連線，請稍後再試。</b>
+        <div class="xs mt-4">未儲存嘅改動仍然留喺呢部機，連線恢復後可以再儲存。</div>
+      </div></div>`;
+    }
     return `<div class="note-box danger mb-16">${icon('alert', 15)}<div>
       <b>而家連唔到旅團後端</b> —— 你嘅改動暫時淨係存喺呢部機嘅瀏覽器。
       <div class="xs mt-4">原因：<code>${esc(st.msg || '未知')}</code></div>
@@ -616,9 +629,9 @@ function syncView() {
     </div></div>`;
   })()}
 
-  ${diagCard()}
+  ${route.serverManaged ? '' : diagCard()}
 
-  ${backend ? `<div class="card mb-16"><div class="card-head">
+  ${!route.serverManaged && backend ? `<div class="card mb-16"><div class="card-head">
     <div><div class="card-title">${icon('check', 15)} 後端已連接${backend.shared ? '（跟 Registry 共用）' : '（本旅團專用）'}</div>
       <div class="card-sub">${esc(backend.name)}${backend.updated ? ` · 更新 ${esc(backend.updated)}` : ''}</div></div>
     <span class="badge b-ok"><span class="dot"></span>已設定 Apps Script</span>
@@ -627,7 +640,7 @@ function syncView() {
     <div class="kv-row"><span>總表同步</span><code>${esc(shortUrl(backend.gasUrl))}</code></div>
     <div class="kv-row"><span>手機記帳送出</span><code>${esc(shortUrl(load().settings?.publicEntry?.submitUrl || '')) || '（未設定）'}</code></div>
     <div class="kv-row"><span>通告報名送出</span><code>${esc(shortUrl(load().settings?.notice?.submitUrl || '')) || '（未設定）'}</code></div>
-  </div></div>` : (wired ? `<div class="card mb-16"><div class="card-head">
+  </div></div>` : (!route.serverManaged && wired ? `<div class="card mb-16"><div class="card-head">
     <div><div class="card-title">${icon('cloud', 15)} 後端接線方式</div>
       <div class="card-sub">呢個旅團經平台伺服器端接線（唔使喺瀏覽器打 Key）${route.verified ? ' · 登入／載入已實際核對成功' : ''}</div></div>
     <span class="badge ${route.verified ? 'b-ok' : 'b-info'}"><span class="dot"></span>${route.verified ? '已核對 · /api/proxy' : '經 /api/proxy'}</span>
@@ -640,7 +653,9 @@ function syncView() {
     撳「同步診斷」會分清楚「Vercel 已接線」同「後端真係未設定」，唔會再用一個籠統嘅「未有後端」混埋。</span>
   </div></div>` : '')}
 
-  <div class="grid g-2-1">
+  <details class="mt-16" ${route.serverManaged ? 'style="display:none"' : ''}>
+    <summary class="btn btn-xs">管理員／後備設定（一般不用）</summary>
+  <div class="grid g-2-1 mt-8">
     <div class="card"><div class="card-head"><div><div class="card-title">自助後備設定 <span class="badge b-info xs">Vercel 接線時不用填</span></div>
       <div class="card-sub">只有純靜態部署冇 <code>/api/proxy</code> 時，先需要 Apps Script Web App 網址</div></div></div>
       <div style="padding:16px 18px">
@@ -707,7 +722,8 @@ function syncView() {
     <div style="padding:14px 18px">
       <pre class="code">${esc(JSON.stringify(payloadSample(), null, 2))}</pre>
     </div>
-  </div>`;
+  </div>
+  </details>`;
 }
 
 function payloadSample() {

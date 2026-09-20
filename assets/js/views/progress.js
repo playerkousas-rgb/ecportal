@@ -408,6 +408,26 @@ function reviewView() {
 function settingsView() {
   const c = progressCfg();
   const reg = progressIsRegistered();
+  /* 正式 Vercel 旅團由 Registry／Proxy 管理接線；普通用家唔需要亦唔應該
+     再見到 /exec、API Key 或自訂路線。 */
+  if (c.serverSide) {
+    return `
+    <div class="card" style="max-width:780px">
+      <div class="card-head"><div><div class="card-title">進度後端已準備好</div>
+        <div class="card-sub">由平台安全接線，呢部機唔需要填任何設定。</div></div>
+        <span class="badge b-ok"><span class="dot"></span>已接通</span></div>
+      <div style="padding:16px 18px" class="sm muted">
+        <div class="note-box ok">${icon('shield', 15)}<div>
+          進度紀錄同旅團其他資料使用同一個後端。平台已經處理好連線資料，
+          你只需要按頁面上嘅「重新讀取」或進行核心操作。
+        </div></div>
+        <div class="row gap-8 mt-12">
+          <button class="btn btn-primary" data-act="reload">${icon('refresh', 15)} 重新讀取</button>
+          <button class="btn" data-go="#/progress/overview">返回進度總覽</button>
+        </div>
+      </div>
+    </div>`;
+  }
   return `
   <div class="grid g-2-1">
     <div class="col gap-16">
@@ -486,7 +506,9 @@ function settingsView() {
 export function render(params) {
   if (params?.id && ['overview', 'members', 'tick', 'review', 'settings'].includes(params.id)) tab = params.id;
   else tab = 'overview';   // 由側邊欄入返嚟時，返去總覽
+  const cfg = progressCfg();
   const configured = progressConfigured();
+  const serverManaged = cfg.serverSide;
   /* 分頁數字要同「成員進度」表格一致 —— summarizeRemote 會剔走管理員／領袖，
      以前呢度直接用後端 raw members 數，搞到「標籤 12 人、表得 11 行」。 */
   const memberCount = configured && remote
@@ -501,7 +523,7 @@ export function render(params) {
       : '未接駁 —— 去「設定」填入旅團後端嘅 /exec 網址同 API Key',
     actions: `
       <button class="btn btn-sm" data-act="reload" ${configured ? '' : 'disabled'}>${icon('refresh', 15)} ${loading ? '讀取中…' : '重新讀取'}</button>
-      <button class="btn btn-sm btn-primary" data-act="settings">${icon('settings', 15)} 設定</button>`
+      ${serverManaged ? '' : `<button class="btn btn-sm btn-primary" data-act="settings">${icon('settings', 15)} 設定</button>`}`
   })}
 
   ${tabs([
@@ -511,7 +533,7 @@ export function render(params) {
       ['tick', can('progress.tick') ? '勾選進度' : '勾選進度（無權限）', Object.keys(pending).length || undefined],
       ['review', `審批中心${reviewCount() ? `（${reviewCount()}）` : ''}`]
     ] : []),
-    ['settings', configured ? '設定' : '設定（未接駁）']
+    ...(serverManaged ? [] : [['settings', configured ? '設定' : '設定（未接駁）']])
   ], tab)}
 
   ${tab === 'settings' ? settingsView()
