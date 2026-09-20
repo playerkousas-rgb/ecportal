@@ -433,13 +433,16 @@ async function publish() {
      ② 發布只係 commit() 去本機。手動同步之下，改動會一直留喺呢部機，
         公開頁永遠睇唔到新版 —— 正正係「POST 唔到出尼」。
         「發布」本身就係「我要而家出街」嘅明確指令，所以即刻寫後端。 */
+  /* 2026-09-20：發布 ＝ 行**同一條**儲存路（saveWithDialog：核對版本 → 三方比對 → 撞就問），
+     冇另一條「順便寫後端」嘅路。 */
   const remote = await import('../lib/remote.js').catch(() => null);
   if (remote?.remoteConfigured?.()) {
-    toast(`已發布 v${r.version} —— 正在寫入後端…`, 'ok');
-    const res = await remote.syncNow();
+    toast(`已發布 v${r.version} —— 正在儲存到後端…`, 'ok');
+    const { saveWithDialog } = await import('./syncdialog.js');
+    const res = await saveWithDialog({ silent: true, toastOk: false });
     toast(res?.ok
       ? `已發布 v${r.version} ✓ 公開閱讀頁同 QR Code 而家已經係新版`
-      : `已發布 v${r.version}，但暫時寫唔入後端（${res?.error || '未知'}）—— 撳頂部「立即同步」再試`,
+      : `已發布 v${r.version}，但暫時寫唔入後端（${res?.error || '未知'}）—— 撳頂部「儲存到後端」再試`,
       res?.ok ? 'ok' : 'warn');
   } else {
     toast(`已發布 v${r.version}（呢部機未接後端 —— 公開頁要接咗後端先至睇到）`, 'warn');

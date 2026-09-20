@@ -90,28 +90,32 @@ async function boot() {
   window.addEventListener('v82:refresh', render);
   window.addEventListener('v82:sync', paintSyncChip);
 
-  /* 資料真正嘅家係旅團自己嘅 Google Sheet：開機同後端對一對，
-     再開啟「改完自動存去後端」。失敗都唔會阻住開 app（照用本機資料）。 */
-  syncBoot();
+  /* 資料真正嘅家係旅團自己嘅 Google Sheet：登入之前先由後端攞一次
+     （登入嗰一刻攞到嘅 ＝ 後端嗰一刻嘅狀態）。攞唔到就照出登入頁，但會話你知。 */
+  await syncBoot();
 
   /* 示範 session 唔可以帶入真實旅團（否則會用「示範領袖」身份改真資料） */
   if (!isMock() && current()?.mock) logout();
   if (isMock() && !current()) loginAsMock('leader');
   if (!current()) renderLogin();
-  else { render(); maybeForceChangePw(); }
+  else { render(); maybeForceChangePw(); maybeShowLoginConflicts(); }
 }
 
 /* ============================================================
-   後端儲存：開機對資料 ＋ 自動儲存
+   後端儲存 —— 唯一模式（2026-09-20 團長定案）
    ------------------------------------------------------------
-   以前 app 嘅資料淨係喺瀏覽器，換機就冇晒。而家：
-     開機 → 問後端有冇資料（dbInfo）→ 比本機新就拉落嚟
-     之後 → 任何改動 debounce 幾秒自動寫返後端
+     開機／登入   → loadFromBackend()：由後端攞成份資料 ＝ 基準
+     之後改乜     → 淨係寫瀏覽器
+     撳「儲存到後端」→ saveToBackend()：核對版本 → 逐格三方比對 →
+                     唔撞嘅寫入；撞嘅（早走 vs 遲到）彈框問，確認咗先蓋
+   冇自動儲存、冇 poll、冇切視窗自動拉、冇關視窗自動寫。
    ============================================================ */
 let remoteApi = null;
-/* 開機問唔到後端嗰陣嘅原因（同一個資訊都會經 remote.syncState() 傳去界面，
-   呢度只係留返做 log／除錯用） */
+/* 開機問唔到後端嗰陣嘅原因（登入頁會出橫額） */
 let bootSyncWarn = null;
+/* 開機三方比對發現上次未存嘅改動同後端撞咗 → 登入之後先問（未登入唔好彈嘢） */
+let loginConflicts = null;
+let unloadGuardOn = false;
 export function remoteMod() { return remoteApi; }
 
 async function syncBoot() {
@@ -123,7 +127,20 @@ async function syncBoot() {
     return;
   }
   const store = await import('./lib/store.js');
+  /* 本機一有改動 → 淨係更新頂部狀態（「儲存到後端（N）」），唔會寫後端 */
   store.setSaveHook(() => remoteApi.scheduleSave());
+
+  if (!unloadGuardOn) {
+    unloadGuardOn = true;
+    /* 離開頁面前提醒有嘢未存。**唔會**寫後端（團長：「唔好比佢有機會出事」）。 */
+    window.addEventListener('beforeunload', (e) => {
+      if (remoteApi?.hasPending?.()) {
+        e.preventDefault();
+        e.returnValue = '仲有改動未儲存到後端，真係要離開？';
+        return e.returnValue;
+      }
+    });
+  }
 
   if (!remoteApi.remoteConfigured()) {
     /* 未設定後端：照用本機，但要話畀團長知資料未有備份 */
@@ -131,74 +148,59 @@ async function syncBoot() {
     return;
   }
 
-  /* 2026-09-19 團長回報（第三次同一個病徵，今次講到正題）：
-       「其他 APP 都係暫存喺瀏覽器、撳同步先一次過 SAVE；呢個成日自動
-         SAVE 就變相蓋咗佢 …… A 開佢未讀後端就已經複寫，B 開又係 ——
-         永遠自己睇自己。」
-     死因喺呢個 try/catch：佢食咗 remoteInfo() 嘅失敗（網絡慢／逾時／平台
-     未登記）就繼續行 arm()，而 arm() 一見到 pending 就 scheduleSave()
-     → 2.5 秒後 push。**未讀後端就已經寫後端**，兩部機輪流盲蓋。
-     而家開機、60 秒 poll、切返視窗、同**每次 push 之前**一律行同一個
-     remote.reconcile()：先讀後端版本 → 有新版就拉＋合併 → 讀到先至准寫。 */
+  app.innerHTML = loadingScreen('由旅團後端載入資料中…');
   try {
-    const rc = await remoteApi.reconcile({ silent: true });
-    if (rc?.ok && rc.updated) {
-      try {
-        applyTheme(load()?.unit?.theme);
-        render();
-        toast(rc.merged ? '後端有另一部機嘅新版本 —— 已同本機改動合併' : '已由後端載入最新資料', 'ok');
-      } catch (e) { console.warn('[sync] 採用後端資料失敗', e); }
-    } else if (rc?.ok && rc.oldBackend) {
-      bootSyncWarn = { ok: false, reason: 'old_backend', error: '後端未更新 —— 讀唔到版本' };
-      toastAction('後端版本舊咗 —— 睇唔到隊友嘅改動', '點樣更新？', () => go('#/tables/sync'), 'err');
-    } else if (!rc?.ok) {
-      /* 問唔到後端 —— 唔好靜靜雞當冇事。最常見係平台伺服器端未登記呢個旅團
-         （TROOP_<編號>_BACKEND / _APIKEY 未設定），而呢個用家自己貼 /exec
-         就即刻救得返，所以一定要即刻話佢知去邊度撳邊粒掣。
-         同時 pushDb 嘅硬保險已經生效：讀唔到後端就一律唔會寫，改動留喺
-         本機排隊重試，唔會蓋走另一部機嘅資料。 */
-      bootSyncWarn = rc;
-      toastAction(
-        rc?.reason === 'not_registered'
-          ? '連唔到旅團後端 —— 你嘅改動而家淨係喺呢部機'
-          : '讀唔到旅團後端 —— 已暫停寫入（避免蓋走另一部機嘅資料）',
-        '點樣修？', () => go('#/tables/sync'), 'err');
+    const r = await remoteApi.loadFromBackend();
+    bootSyncWarn = r.ok ? null : r;
+    if (r.ok) {
+      try { applyTheme(load()?.unit?.theme); } catch { /* ignore */ }
+      if (r.merged) {
+        loginConflicts = r.conflicts?.length ? { conflicts: r.conflicts, ctx: r.ctx, remoteAt: r.at } : null;
+        toastAction('上次未儲存嘅改動已保留喺呢部機 —— 記得撳「儲存到後端」', '去睇', () => go('#/tables/sync'), '');
+      }
     }
   } catch (e) {
-    console.warn('[sync] 開機對資料失敗（改動留喺本機，唔會盲寫後端）', e);
+    console.warn('[sync] 開機由後端載入失敗（改動留喺本機，唔會盲寫後端）', e);
+    bootSyncWarn = { ok: false, error: e?.message || String(e) };
   }
-
-  /* 開機流程完成先至開始自動儲存（避免種子資料一載入就寫返上去） */
-  remoteApi.arm();
-  /* 2026-09-19 團長指示「唔好不停讀」：會議模式（每 60 秒背景問後端）而家係
-     **opt-in**，預設唔會行。要一齊睇／一齊做嘢就喺「總表同步」剔「會議模式」。
-     冇開嗰陣，讀後端淨係發生喺：開機一次 ＋ 你自己撳「立即同步」。 */
-  if (remoteApi.remoteCfg?.().poll) remoteApi.startPolling();
-  /* 跨視窗／跨機：一切返呢個視窗就即刻對一次版本（同一帳戶無痕＋普通視窗
-     都會即時見到對方嘅改動，唔使等 60 秒） */
-  remoteApi.startVisibilityWatch?.();
   paintSyncChip();
-
-  /* 離開頁面前，仲有嘢未存就即刻試多次 */
-  window.addEventListener('beforeunload', (e) => {
-    if (remoteApi?.hasPending?.()) {
-      /* 2026-09-19 團長指示「唔好比佢有機會出事」：連關視窗都**唔會**寫後端。
-         以前呢度一有 pending 就 flush() —— 等如用家關個 tab 都被動寫咗一次，
-         正正係佢唔想嘅「不停寫」。而家淨係提醒佢有嘢未存。
-         注意：**冇** e.preventDefault() 以外嘅動作，尤其冇 flush()。 */
-      e.preventDefault();
-      e.returnValue = '仲有改動未儲存到後端，真係要離開？';
-      return e.returnValue;
-    }
-  });
 }
 
-/** 頂部「儲存狀態」提示 —— 一眼睇到資料有冇真係入咗後端。
-    2026-09-18 團長要求：右上天長地久有一個「立即儲存／立即同步」掣，
-    唔好收埋喺「總表同步」入面。所以呢度畫兩樣嘢：
-      ① 狀態 badge（儲存緊／已存到後端／未儲存／撞版…）—— 撳佢去詳情頁
-      ② 行動掣：有未存嘢 → 「立即儲存（N）」＝即刻 flush；
-         已經同步 → 「立即同步」＝問後端有冇隊友更新，有就拉落嚟 */
+/** 開機三方比對有撞格 → 登入後問一次；剔咗嘅寫入本機（等你撳儲存），冇剔嘅維持後端 */
+async function maybeShowLoginConflicts() {
+  if (!loginConflicts || !current()) return;
+  const lc = loginConflicts;
+  loginConflicts = null;
+  try {
+    const { resolveConflictsDialog } = await import('./views/syncdialog.js');
+    const { overridesFor } = await import('./lib/merge3.js');
+    const { applyChangesLocal } = await import('./lib/store.js');
+    const choice = await resolveConflictsDialog({ conflicts: lc.conflicts, ctx: lc.ctx, mode: 'login', remoteAt: lc.remoteAt });
+    const ov = overridesFor(lc.conflicts, choice?.useMine || []);
+    if (ov.length) { applyChangesLocal(ov); render(); toast(`已用返你嘅 ${ov.length} 項 —— 記得撳「儲存到後端」`, 'ok'); }
+  } catch (e) { console.warn('[sync] 登入衝突對話框失敗', e); }
+}
+
+/** 登入頁頂：後端狀態橫額（連唔到／後端仲係空） */
+function loginSyncBanner() {
+  if (isMock() || !remoteApi) return '';
+  if (!remoteApi.remoteConfigured()) return '';
+  if (bootSyncWarn) {
+    return `<div class="note-box danger mb-12" id="loginSyncWarn">${icon('alert', 15)}<div>
+      <b>連唔到旅團後端</b> —— ${esc(bootSyncWarn.error || '未知原因')}${bootSyncWarn.hint ? `<div class="xs mt-4">${esc(bootSyncWarn.hint)}</div>` : ''}
+      <div class="xs mt-4">而家見到嘅係呢部機上次留低嘅資料；登入後改嘅嘢會留喺本機，等連返後端先可以儲存。</div>
+      <button class="btn btn-xs mt-8" type="button" id="btnRetrySync">${icon('refresh', 13)} 重試連線</button>
+    </div></div>`;
+  }
+  const s = remoteApi.syncState();
+  if (s.state === 'pending' && remoteApi.hasPending()) {
+    return `<div class="note-box warn mb-12">${icon('clock', 15)}<div>呢部機有改動仲未儲存到後端 —— 登入後撳右上角「儲存到後端」。</div></div>`;
+  }
+  return '';
+}
+
+/** 頂部「儲存狀態」提示 ＋ 唯一嘅行動掣：
+      有未存嘢 → 「儲存到後端（N）」；已同步 → 「重新載入」；連唔到 → 「重試」 */
 function paintSyncChip() {
   const el = document.getElementById('syncChip');
   if (!el) return;
@@ -217,25 +219,24 @@ function paintSyncChip() {
   const map = {
     saving:  ['b-warn', 'cloud', '儲存緊…'],
     saved:   ['b-ok', 'check', '已存到後端'],
-    pending: ['b-warn', 'clock', '未儲存'],
-    offline: ['b-warn', 'alert', '離線'],
+    pending: ['b-warn', 'clock', `未儲存${pending > 1 ? `（${pending}）` : ''}`],
     loading: ['b-warn', 'cloud', '讀取緊…'],
-    conflict:['b-warn', 'alert', '同步撞版：已自動合併'],
+    conflict:['b-warn', 'alert', '有格同後端唔同'],
     error:   ['b-danger', 'alert', '儲存失敗'],
-    /* 問唔到後端（最常見：平台未登記呢個旅團）—— 唔可以扮「已連後端」 */
     unreachable: ['b-danger', 'alert', '連唔到後端'],
     idle:    ['b-ok', 'cloud', '已連後端']
   };
-  const [cls, ic, label] = map[s.state] || map.idle;
-  const needSave = pending > 0 || s.state === 'error' || s.state === 'conflict' || s.state === 'offline';
-  /* 手動模式（同步方式揀咗「撳同步先存」）：掣要叫「立即同步」，因為佢真係
-     一次過做齊「讀後端 → 合併 → 寫後端」，而唔係淨係單向推。 */
-  const manual = tryLoad()?.sync?.auto === false;
-  const actLabel = needSave
-    ? `${manual ? '立即同步' : '立即儲存'}${pending > 1 ? `（${pending}）` : ''}`
-    : '立即同步';
+  let state = s.state;
+  if (pending > 0 && (state === 'idle' || state === 'saved')) state = 'pending';
+  const [cls, ic, label] = map[state] || map.idle;
+  const needSave = pending > 0;
+  const unreachable = state === 'unreachable';
+  const actLabel = needSave ? `儲存到後端${pending > 1 ? `（${pending}）` : ''}` : unreachable ? '重試' : '重新載入';
+  const actTitle = needSave
+    ? '先核對後端版本；有人喺你登入後儲存過就逐格比對 —— 唔撞嘅寫入，撞嘅會問你'
+    : '由後端攞返最新資料（冇未儲存改動，唔會丟嘢）';
   el.innerHTML = `<span class="badge ${cls}" title="${esc(s.msg || label)}">${icon(ic, 12)} ${esc(label)}</span>
-    <button class="btn btn-xs ${needSave ? 'btn-primary' : ''}" id="syncActBtn" title="一次過：先讀後端最新版本（有隊友新改動就拉落嚟合併），再把呢部機嘅改動寫返上去">
+    <button class="btn btn-xs ${needSave ? 'btn-primary' : ''}" id="syncActBtn" title="${esc(actTitle)}" ${s.state === 'saving' ? 'disabled' : ''}>
       ${icon(needSave ? 'save' : 'refresh', 12)} ${esc(actLabel)}</button>`;
   el.style.cursor = 'default';
   const badge = el.querySelector('.badge');
@@ -244,34 +245,14 @@ function paintSyncChip() {
   el.querySelector('#syncActBtn')?.addEventListener('click', async () => {
     const btn = el.querySelector('#syncActBtn');
     if (btn) { btn.disabled = true; btn.textContent = '處理中…'; }
-    if (needSave) {
-      /* 2026-09-19：改由 syncNow() —— 先讀後端再寫，唔會淨係單向推上去蓋走
-         另一部機嘅資料（團長：「A 開佢未讀後端就已經複寫」）。 */
-      const r = await remoteApi.syncNow();
-      const pulled = r?.pulled ? (r.mergedPull ? '已同你本機改動合併隊友新版本' : '已載入隊友最新改動') : '';
-      toast(r.ok
-        ? [pulled, r.pushed ? '已寫入後端 ✓' : '後端已經係最新，冇嘢要寫'].filter(Boolean).join('，')
-        : '同步失敗：' + (r.error || '未知錯誤') + (r.hint ? '（' + r.hint + '）' : ''),
-        r.ok ? 'ok' : 'err');
-      if (r.ok && r.pulled) render();
-    } else {
-      const r = await remoteApi.checkRemote();
-      if (r?.upToDate) toast('已經係最新 —— 後端冇隊友新改動', 'ok');
-      else if (r?.updated) {
-        toast(r.merged ? '後端有隊友新版本 —— 已同你未存嘅改動合併，之後自動存' : '已載入隊友嘅最新改動', 'ok');
-        render();
-      } else if (r && !r.ok) toast(r.error || '同步失敗', 'err');
+    try {
+      const dlg = await import('./views/syncdialog.js');
+      if (needSave) await dlg.saveWithDialog({ silent: false });
+      else await dlg.reloadFromBackend();
+    } finally {
+      paintSyncChip();
     }
-    paintSyncChip();
   });
-}
-
-/** 把 GAS 回嘅時間（可能係 ISO 或者 'YYYY-MM-DD HH:mm:ss'）正規化做可比較字串 */
-function normAt(v) {
-  const s = String(v || '').trim();
-  if (!s) return '';
-  const d = new Date(s.includes('T') ? s : s.replace(' ', 'T'));
-  return isNaN(d.getTime()) ? s : d.toISOString();
 }
 
 /* ============================================================
@@ -786,8 +767,8 @@ async function openApplication() {
   }
 }
 
-function loadingScreen() {
-  return `<div style="display:grid;place-items:center;min-height:100vh;color:#9A868C;font-size:14px">載入中…</div>`;
+function loadingScreen(msg = '載入中…') {
+  return `<div style="display:grid;place-items:center;min-height:100vh;color:#9A868C;font-size:14px">${esc(msg)}</div>`;
 }
 
 function legacyDismissed() {
@@ -899,6 +880,7 @@ function renderLogin() {
     <main class="login-panel">
       <div class="login-card">
         ${mockBanner}
+        ${loginSyncBanner()}
         ${false && units.length > 1 ? `
         <div class="field mb-16">
           <label class="label">旅團</label>
@@ -1007,6 +989,14 @@ function renderLogin() {
   });
 
   app.querySelector('#btnMock')?.addEventListener('click', () => enterMock());
+  app.querySelector('#btnRetrySync')?.addEventListener('click', async () => {
+    const b = app.querySelector('#btnRetrySync');
+    if (b) { b.disabled = true; b.textContent = '連線中…'; }
+    await syncBoot();
+    renderLogin();
+    if (bootSyncWarn) toast('仍然連唔到後端：' + (bootSyncWarn.error || ''), 'err');
+    else toast('已由後端載入最新資料', 'ok');
+  });
   app.querySelector('#loginDlGs')?.addEventListener('click', () => downloadCodeGs());
   app.querySelector('#loginGuide')?.addEventListener('click', openDeployGuideModal);
   app.querySelector('#btnGate')?.addEventListener('click', () => forgetChoice());
@@ -1024,6 +1014,7 @@ function renderLogin() {
     const { saveHubAuth } = await import('./lib/hub-session.js');
     const { saveMe } = await import('./lib/member-me.js');
     const { identityOf } = await import('./lib/model.js');
+    await freshenBeforeLogin();
     const res = await loginMember(app.querySelector('#liYmis')?.value, app.querySelector('#liMemPass')?.value);
     if (btn) btn.disabled = false;
     if (!res.ok) {
@@ -1039,6 +1030,7 @@ function renderLogin() {
       location.hash = '#/dashboard';
       render();
       if (res.mustChangePw) maybeForceChangePw();
+      maybeShowLoginConflicts();
       return;
     }
     location.href = `./members.html?u=${encodeURIComponent(code)}${res.mustChangePw ? '#forcepw' : ''}`;
@@ -1072,6 +1064,7 @@ function renderLogin() {
     e.preventDefault();
     const box = app.querySelector('#liKeyErr');
     if (box) { box.textContent = ''; box.style.display = 'none'; }
+    await freshenBeforeLogin();
     const res = await loginSetupKey(app.querySelector('#liSetupKey')?.value);
     if (!res.ok) {
       if (box) { box.textContent = res.msg; box.style.display = 'block'; }
@@ -1082,6 +1075,7 @@ function renderLogin() {
     location.hash = '#/admin';
     render();
     toast('已用開團 KEY 進入。請即刻新增領袖電郵帳戶。', 'ok');
+    maybeShowLoginConflicts();
   });
 
   app.querySelector('#loginForm')?.addEventListener('submit', async e => {
@@ -1090,6 +1084,8 @@ function renderLogin() {
     err.style.display = 'none';
     const btn = app.querySelector('#loginForm button[type=submit]');
     btn.disabled = true;
+    /* 登入嗰一刻要係後端嗰一刻：登入頁擺咗耐先撳 → 先攞多次（帳戶名單都會係最新） */
+    await freshenBeforeLogin();
     const res = await login('staff', userInput.value, passInput.value);
     btn.disabled = false;
     if (!res.ok) {
@@ -1104,7 +1100,38 @@ function renderLogin() {
     location.hash = '#/dashboard';
     render();
     if (res.mustChangePw) maybeForceChangePw();
+    maybeShowLoginConflicts();
   });
+}
+
+/** 登入前：上次由後端載入超過 60 秒 → 再攞一次（有未存改動就唔郁；連唔到就照登入，橫額會話你知） */
+async function freshenBeforeLogin() {
+  if (isMock() || !remoteApi?.remoteConfigured?.()) return;
+  try {
+    const r = await remoteApi.ensureFresh({ maxAgeMs: 60000 });
+    if (r?.ok) bootSyncWarn = null;
+    else if (r && r.reason !== 'not_configured') bootSyncWarn = r;
+  } catch (e) { console.warn('[sync] 登入前重新載入失敗', e); }
+}
+
+/** 登出確認：有未儲存改動一定要講明（改動會留喺呢部機，下次登入再三方比對） */
+async function confirmLogout() {
+  const pending = Number(tryLoad()?.sync?.pending || 0);
+  const warn = pending > 0
+    ? `<div class="note-box warn mt-8">${icon('alert', 14)}<div>仲有 <b>${pending}</b> 項改動未儲存到後端。登出唔會寫入後端；改動會留喺呢部機，下次開機再同後端比對。<br>想而家就儲存，撳「取消」再撳右上角「儲存到後端」。</div></div>`
+    : '';
+  return modal({
+    title: '登出', body: `<p class="sm">確定登出系統？</p>${warn}`,
+    actions: [{ label: '取消', class: 'btn', value: false }, { label: pending > 0 ? '照登出（暫不儲存）' : '登出', class: 'btn-primary', value: true }]
+  });
+}
+
+/** 登出 → 出返登入頁，同時由後端攞多次（下一個人登入嗰一刻 ＝ 後端嗰一刻） */
+async function doLogout() {
+  logout();
+  document.body.classList.add('login-body');
+  await syncBoot();
+  renderLogin();
 }
 
 async function maybeForceChangePw() {
@@ -1236,10 +1263,7 @@ function render() {
       exitMock();
       return;
     }
-    if (await modal({
-      title: '登出', body: '<p class="sm">確定登出系統？</p>',
-      actions: [{ label: '取消', class: 'btn', value: false }, { label: '登出', class: 'btn-primary', value: true }]
-    })) { logout(); document.body.classList.add('login-body'); renderLogin(); }
+    if (await confirmLogout()) doLogout();
   }));
   app.querySelector('#topMockExit')?.addEventListener('click', () => exitMock());
   app.querySelectorAll('#btnPw, #btnPw2').forEach(el => el.addEventListener('click', async () => {
@@ -1327,7 +1351,8 @@ function moreSheet() {
            留喺一個示範模式嘅登入畫面，又冇橫額又冇掣，睇落好似走唔到。 */
         if (id === 'logout') {
           if (isMock()) { exitMock(); return; }
-          logout(); renderLogin(); return;
+          if (await confirmLogout()) doLogout();
+          return;
         }
         go('#/' + id);
       }));

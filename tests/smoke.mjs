@@ -27,7 +27,7 @@ globalThis.fetch = async (url) => {
   const clean = String(url).split('?')[0].replace(/^\.?\//, '');
   const file = path.join(ROOT, clean);
   if (!file.startsWith(ROOT) || !fs.existsSync(file)) {
-    return { ok: false, status: 404, json: async () => { throw new Error('404 ' + clean); } };
+    return { ok: false, status: 404, text: async () => '404 ' + clean, json: async () => { throw new Error('404 ' + clean); } };
   }
   const text = fs.readFileSync(file, 'utf8');
   return { ok: true, status: 200, text: async () => text, json: async () => JSON.parse(text) };
@@ -822,21 +822,28 @@ section('通告（開一張・分享・報名）');
 }
 
 /* ---------- 團長回報（2026-09-17）：已發布通告 →「同步到公開頁」 ---------- */
-section('通告詳情頁（同步到公開頁）');
+section('通告詳情頁（同步到公開頁 ＝ 行同一條「儲存到後端」路）');
 {
   const pub = (store.load().notices || []).find(n => n.status === 'published');
   ok('有已發布通告可以做測試', !!pub);
   const db0 = store.load();
   const keepSync = db0.sync;
   db0.sync = { ...(keepSync || {}), url: 'https://script.google.com/macros/s/TESTDEPLOY/exec', apiKey: 'TESTKEY' };
-  store.commit();
+  store.commitMeta();
 
   const realFetch = globalThis.fetch;
   let sent = [];
+  /* 假後端：後端仲係空（dbInfo found:false）→ 儲存直接寫 saveDb */
+  let infoReply = { ok: true, success: true, found: false };
   globalThis.fetch = async (url, init = {}) => {
     if (/script\.google\.com|\/exec/.test(String(url))) {
-      sent.push(init?.body ? JSON.parse(init.body) : null);
-      return { ok: true, status: 200, text: async () => '{"success":true}', json: async () => ({ success: true }) };
+      const body = init?.body ? JSON.parse(init.body) : null;
+      sent.push(body);
+      let reply = { ok: true, success: true };
+      if (body?.action === 'dbInfo') reply = infoReply;
+      if (body?.action === 'saveDb') reply = { ok: true, success: true, version: 'v-smoke-1', at: '2026-09-20T00:00:00.000Z', bytes: 100 };
+      if (infoReply.__http500) return { ok: false, status: 500, text: async () => 'boom', json: async () => ({}) };
+      return { ok: true, status: 200, text: async () => JSON.stringify(reply), json: async () => reply };
     }
     return realFetch(url, init);
   };
@@ -847,35 +854,48 @@ section('通告詳情頁（同步到公開頁）');
   const syncBtn = doc.querySelector('#view [data-act="sync-notice"]');
   ok('已發布通告詳情頁有「同步到公開頁」掣', !!syncBtn);
   syncBtn?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-  await new Promise(r => setTimeout(r, 260));
+  await new Promise(r => setTimeout(r, 400));
   const lastToast = () => [...doc.querySelectorAll('.toast')].map(t => t.textContent).pop() || '';
-  ok('撳一次就會 POST 去總表（action=sync）', sent[0]?.action === 'sync', JSON.stringify(sent[0]?.action));
-  ok('同步內容包括「通告」（公開頁讀嘅通告全文分頁）',
-    Array.isArray(sent[0]?.tables?.notices) && sent[0].tables.notices.some(n => n.id === pub.id),
-    JSON.stringify(Object.keys(sent[0]?.tables || {})));
-  ok('同步帶埋旅團編號同 API Key', sent[0]?.unit && sent[0]?.apiKey === 'TESTKEY', JSON.stringify([sent[0]?.unit, sent[0]?.apiKey]));
-  ok('成功有 toast 提示', /已同步到公開頁/.test(lastToast()), lastToast());
+  const actions = sent.map(x => x?.action);
+  if (MODE === 'mock') {
+    /* 示範模式永遠唔寫後端 —— 就算填咗 /exec 都唔會送 */
+    ok('示範模式：一個請求都唔會送去後端', sent.length === 0, JSON.stringify(actions));
+    ok('示範模式：toast 講明唔會寫入後端', /示範模式/.test(lastToast()), lastToast());
+    globalThis.fetch = realFetch;
+    const dbm = store.load(); dbm.sync = keepSync; store.commitMeta();
+    window.location.hash = '#/notices';
+    window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+    await new Promise(r => setTimeout(r, 60));
+  } else {
+  ok('撳一次：先問後端版本（dbInfo），再寫入（saveDb）—— 同頂部「儲存到後端」同一條路', actions[0] === 'dbInfo' && actions.includes('saveDb'), JSON.stringify(actions));
+  const saved = sent.find(x => x?.action === 'saveDb');
+  ok('寫入內容係整個資料庫，包括呢張通告（公開頁由「資料庫」分頁讀）',
+    Array.isArray(saved?.db?.notices) && saved.db.notices.some(n => n.id === pub.id), JSON.stringify(Object.keys(saved?.db || {})).slice(0, 200));
+  ok('寫入帶埋旅團編號同 API Key', saved?.unit && saved?.apiKey === 'TESTKEY', JSON.stringify([saved?.unit, saved?.apiKey]));
+  ok('寫上後端嘅 db 唔會夾帶 sync／backend（連線設定唔上 Sheet）', saved?.db && !('sync' in saved.db) && !('backend' in saved.db), JSON.stringify(Object.keys(saved?.db || {})));
+  ok('成功有 toast 提示', /已儲存到後端/.test(lastToast()), lastToast());
   ok('同步之後掣會還原（可以再撳）', !!doc.querySelector('#view [data-act="sync-notice"]:not([disabled])'));
+  ok('寫入成功後 pending 清零', Number(store.load().sync?.pending || 0) === 0, String(store.load().sync?.pending));
 
   /* 失敗路徑：/exec 回 500 → 要提團長去「總表同步」檢查 */
   sent = [];
-  globalThis.fetch = async (url, init = {}) => {
-    if (/script\.google\.com|\/exec/.test(String(url))) return { ok: false, status: 500, text: async () => 'boom', json: async () => ({}) };
-    return realFetch(url, init);
-  };
+  infoReply = { __http500: true };
+  store.add('notices', { type: 'notice', status: 'draft', title: { zh: '再改一嘢' }, body: { zh: '' } });   // 有嘢未存
   doc.querySelector('#view [data-act="sync-notice"]')?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-  await new Promise(r => setTimeout(r, 260));
-  ok('失敗都有 toast（唔會靜靜地冇反應）', /同步失敗/.test(lastToast()), lastToast());
+  await new Promise(r => setTimeout(r, 400));
+  ok('失敗都有 toast（唔會靜靜地冇反應）', /儲存失敗/.test(lastToast()), lastToast());
   ok('失敗提示去「帳號與系統 → 資料管理 → 總表同步」檢查 /exec 同 API Key',
     /總表同步/.test(lastToast()) && /\/exec/.test(lastToast()) && /API Key/.test(lastToast()), lastToast());
+  ok('讀唔到後端版本 → 一個 saveDb 都冇送出', !sent.some(x => x?.action === 'saveDb'), JSON.stringify(sent.map(x => x?.action)));
 
   globalThis.fetch = realFetch;
   const db1 = store.load();
   db1.sync = keepSync;
-  store.commit();
+  store.commitMeta();
   window.location.hash = '#/notices';
   window.dispatchEvent(new window.HashChangeEvent('hashchange'));
   await new Promise(r => setTimeout(r, 60));
+  }
 }
 
 /* ---------- v3：表格設計（改名／加欄位） ---------- */

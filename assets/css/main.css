@@ -716,6 +716,6 @@ pre.code { background:#2A1015; color:#F6E7EA; padding:14px 16px; border-radius:1
 .table tbody tr.row-sep td{ background:#FBF6F7; border-top:1.5px solid var(--line-2); }
 .doc table tbody tr.row-sep td{ background:#FBF6F7; font-weight:700; }
 
-/* 頂欄右上：狀態 badge ＋「立即儲存／立即同步」掣（2026-09-18 團長要求） */
+/* 頂欄右上：狀態 badge ＋「儲存到後端（N）／重新載入」掣（2026-09-20 單一儲存方式） */
 #syncChip{ display:inline-flex; align-items:center; gap:6px; }
 #syncChip .badge{ cursor:pointer; }

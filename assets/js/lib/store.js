@@ -17,6 +17,7 @@ import {
   registry, unitEntry, backendOf, dataPathOf, fetchUnitData, fetchMockData, defaultUnitCode, localUnits
 } from './units.js';
 import { scoutFYLabel } from './fiscal.js';
+import { SKIP_TOP, diffDb as _diffDb, applyChanges as _applyChanges, clone as _clone } from './merge3.js';
 
 export const SCHEMA = 2;
 
@@ -333,40 +334,31 @@ export async function init(opts = {}) {
     state.db = await buildSeed(state.mode, code);
     state.seedFailed = !!state.db.meta?.seedFailed;
     state.seedSource = state.db.meta?.seedSource || '';
-    persist();
+    persistLocalOnly();
   }
-  // 帳戶名單升級（例如加入新欄位）
+  /* 開機升級（帳戶名單／身份／systemId／期初結餘／後端設定）全部只寫本機 ——
+     佢哋唔係用家嘅改動，唔應該令 pending 由 0 變 1（否則一開機就話「未儲存」）。 */
   if (!Array.isArray(state.db.accounts) || !state.db.accounts.length) {
     state.db.accounts = state.mode === 'mock' ? SEED_ACCOUNTS_MOCK : SEED_ACCOUNTS;
-    persist();
+    persistLocalOnly();
   }
   // 用戶名冊升級：舊資料冇「身份」欄 → 由職位／標籤推算（領袖 / 執委 / 團員）
-  if (migrateIdentities(state.db)) persist();
+  if (migrateIdentities(state.db)) persistLocalOnly();
   // 跨系統身份 key（進度追蹤等外部系統要靠呢個對人）
-  if (migrateMemberKeys(state.db)) persist();
+  if (migrateMemberKeys(state.db)) persistLocalOnly();
   // 期初結餘：舊嘅全域數字如果係上年度嘅期初，自動搬返去對應年度（見 migrateOpeningBalances）
-  if (migrateOpeningBalances(state.db)) persist();
+  if (migrateOpeningBalances(state.db)) persistLocalOnly();
   // 後端設定升級：舊資料庫（未有 sync 設定）自動補上 Registry / unit.json 嘅 Apps Script 網址
   if (state.mode === 'real') {
     const before = JSON.stringify([state.db.sync?.url || '', state.db.settings?.notice?.submitUrl || '', state.db.settings?.publicEntry?.submitUrl || '', state.db.settings?.publicBorrow?.submitUrl || '']);
     if (state.db.sync?.url !== undefined || !state.db.backend) seedBackend(state.db, state.mode, code);
     const after = JSON.stringify([state.db.sync?.url || '', state.db.settings?.notice?.submitUrl || '', state.db.settings?.publicEntry?.submitUrl || '', state.db.settings?.publicBorrow?.submitUrl || '']);
-    if (before !== after) persist();
+    if (before !== after) persistLocalOnly();
   }
   lsSet(K.unit, code);
   lsSet(K.mode, state.mode);
-  /* ★ 三方合併基準：呢部機嘅「起始狀態」指紋。
-     一定要喺**種子建立嗰陣**就記低 —— 如果等到第一次同步先至記，
-     一部全新機「開機 → 填 IG／FB → 撳同步」就會因為未有 base
-     而被當成「本機冇改過」，填嘢被後端蓋返（團長回報嘅正是呢個）。
-     有 base 之後就分得清楚：
-       · 團章冇掂過  → 指紋同 base 一樣 → 後端贏（種子機唔會蓋走已發布團章）
-       · settings 改過 → 指紋唔同      → 本機贏（填嘅 IG／FB 出到街）
-     已經有 base 嘅舊裝置唔好覆蓋（佢嘅 base 先至準）。 */
-  if (!state.db.sync?.baseObjHash) {
-    state.db.sync = { ...(state.db.sync || {}), baseObjHash: snapshotObjHashes(state.db) };
-    persistLocalOnly();
-  }
+  /* 舊版（2026-09-19 之前）留低嘅指紋基準已經冇用 —— 而家用成份基準快照（getBase） */
+  if (state.db.sync?.baseObjHash) { delete state.db.sync.baseObjHash; persistLocalOnly(); }
   state.ready = true;
   return state.db;
 }
@@ -470,17 +462,18 @@ function persist({ remote = true } = {}) {
   if (!state.db) return;
   state.db.meta = state.db.meta || {};
   state.db.meta.updatedAt = nowStamp();
-  lsSet(dbKey(state.mode, state.unitCode), JSON.stringify(state.db));
-
-  /* 本機寫完 → 排隊寫入旅團自己嘅後端（Google Sheet）。
-     pending 係「仲未寫入後端嘅改動數」，寫入成功就會清零。
-     示範模式永遠唔會送出。 */
-  if (state.mode !== 'mock' && remote) {
+  /* pending ＝「仲未寫入後端嘅改動次數」（介面提示用；真正要寫乜係 diff(基準, 本機)）。
+     要**先**加、**後**寫 localStorage —— 以前掉轉次序，localStorage 入面嘅 pending
+     永遠差一次，閂咗視窗再開就以為冇嘢未存。示範模式永遠唔計。 */
+  const bump = state.mode !== 'mock' && remote;
+  if (bump) {
     state.db.sync = state.db.sync || {};
     state.db.sync.pending = Number(state.db.sync.pending || 0) + 1;
-    if (saveHook) {
-      try { saveHook(); } catch (e) { console.warn('[store] 後端自動儲存排隊失敗', e); }
-    }
+  }
+  lsSet(dbKey(state.mode, state.unitCode), JSON.stringify(state.db));
+  /* 本機寫完 → 通知介面（頂部出「儲存到後端（N）」）。唔會寫後端。 */
+  if (bump && saveHook) {
+    try { saveHook(); } catch (e) { console.warn('[store] 儲存狀態通知失敗', e); }
   }
 }
 
@@ -549,7 +542,9 @@ export function audit(action, detail = '', who = null) {
   db.auditLog = db.auditLog || [];
   db.auditLog.unshift({ id: 'log_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6), at: nowStamp(), action, detail, by: who || '' });
   if (db.auditLog.length > 400) db.auditLog.length = 400;
-  persist();
+  /* 操作紀錄係簿記：只寫本機、唔計入「未儲存改動」（否則一登入就話有嘢未存）。
+     佢會跟下一次真正嘅儲存一齊上後端（三方合併：紀錄係併集，永遠唔會撞）。 */
+  persistLocalOnly();
 }
 
 /* ---------------- 備份 / 還原 / 重設 ---------------- */
@@ -571,255 +566,217 @@ export function importAll(jsonText, { allowMockIntoReal = false } = {}) {
   if (from === 'mock' && !isMock() && !allowMockIntoReal) {
     throw new Error('呢個係示範（MOCK）備份，唔可以匯入真實資料庫（保護真實資料）');
   }
+  delete obj._exportedFrom;
+  delete obj._exportedAt;
+  /* 備份檔入面嘅 sync／backend 係**嗰部機**嘅連線設定 —— 呢部機自己嗰份要保留 */
+  const keepSync = state.db?.sync ? { ...state.db.sync } : null;
+  const keepBackend = state.db?.backend ? { ...state.db.backend } : null;
   state.db = obj;
   state.db.accounts = Array.isArray(obj.accounts) && obj.accounts.length ? obj.accounts : SEED_ACCOUNTS;
+  if (keepSync) state.db.sync = { ...keepSync, pending: Number(keepSync.pending || 0) };
+  if (keepBackend) state.db.backend = keepBackend;
+  state.db.unitCode = state.unitCode;
+  state.db.kind = state.mode;
+  /* 還原備份 ＝ 一次改動（相對登入時嘅基準）—— 撳「儲存到後端」先會寫入，撞嘅格照樣會問 */
   persist();
   return state.db;
 }
 
-/* ---------------- 後端資料（由旅團自己嘅 Google Sheet 讀返） ---------------- */
+/* ============================================================
+   後端資料 —— 「一個方式」（2026-09-20 團長定案）
+   ------------------------------------------------------------
+     登入／開機  → 由後端攞成份資料 ＝ 本機工作副本，同時記低一份**基準快照（base）**
+     之後改乜    → 淨係寫本機（pending +1）
+     撳「儲存」  → remote.saveToBackend()：diff(base, 本機) vs diff(base, 後端而家)
+                   → 唔撞就一齊寫；撞嘅格保持後端、彈出嚟畀用家再確認（見 lib/merge3.js）
+     儲存成功    → 本機 ＝ 後端 ＝ 新基準，pending 歸零
+
+   基準快照另外存一個 key（venture82.unit.<編號>.base.v2），內容係剝走
+   sync／meta／backend 之後嘅 db。冇佢就分唔到「我改咗乜」同「對方改咗乜」。
+   ============================================================ */
+
+const baseKey = (mode, code) => mode === 'mock' ? `venture82.mock.base.v${SCHEMA}` : `venture82.unit.${code}.base.v${SCHEMA}`;
+let baseMem = undefined;           // localStorage 寫唔入（配額）嗰陣嘅後備
+
+/** 剝走簿記／連線設定 —— 基準快照同比對都用呢個形狀 */
+export function stripForBase(db) {
+  const out = {};
+  Object.keys(db || {}).forEach(k => { if (!SKIP_TOP.has(k)) out[k] = db[k]; });
+  return _clone(out);
+}
+
+/** 而家嘅基準快照：{ version, at, db } ；未有就 null */
+export function getBase() {
+  if (baseMem !== undefined) return baseMem;
+  const raw = lsGet(baseKey(state.mode, state.unitCode));
+  if (!raw) return null;
+  try {
+    const b = JSON.parse(raw);
+    return b && typeof b === 'object' && b.db ? b : null;
+  } catch { return null; }
+}
+
+/** 記低基準快照（db ＝ 呢一刻同後端一致嘅內容；version ＝ 後端版本字串） */
+export function setBase(db, version = '') {
+  const rec = { version: String(version || ''), at: nowStamp(), db: stripForBase(db) };
+  const key = baseKey(state.mode, state.unitCode);
+  try {
+    localStorage.setItem(key, JSON.stringify(rec));
+    baseMem = undefined;
+  } catch {
+    /* 配額爆／私隱模式 → 留喺記憶體（重新載入就會再由後端攞，唔會蝕資料） */
+    baseMem = rec;
+  }
+  state.db.sync = { ...(state.db.sync || {}), lastSyncedVersion: rec.version, baseAt: rec.at };
+  return rec;
+}
+
+export function clearBase() {
+  baseMem = undefined;
+  lsDel(baseKey(state.mode, state.unitCode));
+}
+
+/** 後端拉返嚟嘅 db 先過一次同本機一樣嘅升級（identity／systemId／帳戶），
+    咁基準、本機、後端三份先至係同一個形狀，唔會生出幻影改動。 */
+export function normalizeRemote(remoteDb) {
+  const db = _clone(remoteDb || {});
+  if (!Array.isArray(db.accounts) || !db.accounts.length) db.accounts = _clone(SEED_ACCOUNTS);
+  migrateIdentities(db);
+  migrateMemberKeys(db);
+  return db;
+}
+
+/* 本機嘅連線設定／簿記唔可以因為換咗資料而斷（部機連緊邊個後端係部機自己嘅事） */
+function keepLocalWiring(next, local) {
+  next.schema = SCHEMA;
+  next.kind = state.mode;
+  next.unitCode = state.unitCode;
+  /* sync／backend 係**呢部機**連緊邊個後端、有幾多未存 —— 永遠用本機嗰份，
+     唔會由後端資料帶入（另一部機貼嘅 /exec／API Key 唔應該經 Sheet 傳嚟傳去） */
+  next.sync = { ...(local?.sync || {}) };
+  if (local?.backend) next.backend = local.backend; else delete next.backend;
+  next.meta = { ...(next.meta || {}), ...(local?.meta || {}) };
+  return next;
+}
+
+/** 要寫上後端嘅內容：資料本身＋meta，**唔包括** sync／backend（每部機自己嘅連線設定） */
+export function exportForBackend(db = state.db) {
+  const out = {};
+  Object.keys(db || {}).forEach(k => { if (k !== 'sync' && k !== 'backend') out[k] = db[k]; });
+  out.schema = SCHEMA;
+  out.kind = state.mode;
+  out.unitCode = state.unitCode;
+  out.meta = { ...(out.meta || {}), updatedAt: nowStamp() };
+  return out;
+}
+
+function syncLog(db, msg) {
+  db.sync = db.sync || {};
+  db.sync.log = [...(db.sync.log || []), { at: nowStamp().slice(0, 19).replace('T', ' '), msg }].slice(-40);
+}
 
 /**
- * 採用後端讀返嚟嘅資料庫（覆蓋本機，或者同本機合併）。
- * 只寫本機，唔會即刻又送返上去後端（避免來回打交）。
- *
- * @param {object} remoteDb 後端「資料庫」分頁存住嘅完整 db
- * @param {object} opts
- *   - version：後端回傳嘅版本字串（記入 sync.lastSyncedVersion —— 之後 push
- *     會用佢做 baseVersion 樂觀鎖，防止過時裝置盲蓋後端）
- *   - merge：true = 本機有未同步改動（sync.pending > 0）→ 唔好一刀切覆蓋，
- *     做「聯集合併」：兩邊陣列紀錄按 id 合併（本機多出嚟嘅紀錄保留，
- *     兩邊都有嘅以後端為準），物件欄位以後端為準。呢個係 2026-09-18
- *     「登入清空後端」事故嘅根本修復之一：合併永遠唔會因為同步而蝕資料。
- * @returns {object} 採用咗嘅 db
+ * 登入／開機：採用後端呢一刻嘅資料做工作副本 ＋ 基準。
+ * 本機所有未儲存改動會被**丟棄**（呼叫者要自己先判斷 pending；有 pending 應該行 setLocalMerged）。
  */
-export function adoptRemote(remoteDb, { version = '', merge = false } = {}) {
+export function adoptRemote(remoteDb, { version = '' } = {}) {
   if (!remoteDb || typeof remoteDb !== 'object') throw new Error('後端資料格式唔啱');
   if (isMock()) throw new Error('示範模式唔會採用後端資料');
   if (remoteDb.schema && remoteDb.schema !== SCHEMA) {
     throw new Error(`後端資料版本（schema ${remoteDb.schema}）同現時版本（${SCHEMA}）唔一致`);
   }
-  /* 後端資料唔應該改變「我而家係邊個旅團」 */
-  const code = state.unitCode;
   const local = state.db;
-  let merged = remoteDb;
-
-  if (merge && local && typeof local === 'object') {
-    merged = mergeDbs(remoteDb, local);
-  }
-
-  state.db = { ...merged, unitCode: merged.unitCode || code };
-  if (!Array.isArray(state.db.accounts) || !state.db.accounts.length) {
-    state.db.accounts = SEED_ACCOUNTS;
-  }
-  migrateIdentities(state.db);
-  migrateMemberKeys(state.db);
-  /* merge 模式：本機未同步嘅改動仲喺度，要繼續排隊 push；
-     覆蓋模式：本機內容 = 後端內容，冇嘢未同步。 */
-  const keepPending = merge ? Math.max(1, Number(local?.sync?.pending || 0)) : 0;
-  state.db.sync = {
-    ...(state.db.sync || {}),
-    pending: keepPending,
-    lastPullAt: nowStamp(),
-    lastSyncedVersion: String(version || remoteDb?.meta?.updatedAt || ''),
-    log: [...(state.db.sync?.log || []), {
-      at: nowStamp().slice(0, 19).replace('T', ' '),
-      msg: merge ? '⇩ 已拉後端並同本機未同步改動合併' : '⇩ 已採用後端最新版本'
-    }].slice(-40)
-  };
-  /* 連線設定跟本機（部機而家連緊嘅後端唔好因為拉資料而斷） */
-  if (local?.sync?.url) state.db.sync.url = local.sync.url;
-  if (local?.sync?.apiKey) state.db.sync.apiKey = local.sync.apiKey;
-  if (local?.sync?.unit) state.db.sync.unit = local.sync.unit;
-  if (local?.sync?.auto !== undefined) state.db.sync.auto = local.sync.auto;
-  if (local?.backend) state.db.backend = local.backend;
-  /* ★ 記低「三方合併基準」：呢一刻本機＝後端已對齊，
-     之後邊個物件欄位變咗就代表**本機真係改過**（見 mergeObjectField()）。
-     呢一行係團章／IG-FB「POST 唔到出街」嗰個 bug 嘅另一半修復。 */
-  state.db.sync.baseObjHash = snapshotObjHashes(state.db);
+  const next = keepLocalWiring(normalizeRemote(remoteDb), local);
+  state.db = next;
+  state.db.sync = { ...(state.db.sync || {}), pending: 0, lastPullAt: nowStamp(), lastError: '' };
+  syncLog(state.db, '⇩ 已由後端載入（呢一刻嘅後端 ＝ 呢部機嘅基準）');
+  setBase(state.db, version);
   state.seedFailed = false;
-  state.seedSource = merge ? '（後端＋本機合併）' : '（後端：旅團自己嘅 Google Sheet）';
+  state.seedSource = '（後端：旅團自己嘅 Google Sheet）';
   state.db.meta = { ...(state.db.meta || {}), seedSource: state.seedSource };
   persistLocalOnly();
   return state.db;
 }
 
 /**
- * 聯集合併（2026-09-18 同步事故修復）：
- *   · 陣列紀錄（團員／帳目／通告…）：按 id 合併 —— 兩邊都有嘅**逐格深層合併**，
- *     只有一邊有嘅保留。呢個係「一齊開 APP 一齊做嘢」嘅關鍵：
- *     例：同一個活動，A 點名陳大文出席、B 點名李小明出席 —— 深層合併後
- *     兩個人都喺度（盲蓋或者「成條以後端為準」都會蝕一邊）。
- *     同一條紀錄嘅同一個純值格（例如同一個成員嘅電話）兩邊都改咗
- *     → 以「未存落後端嗰部機」為準（同用家螢幕一致）；地圖格
- *     （rsvp／rollcall／responses 等人名→狀態）做併集。
- *   · 物件／標量（settings、constitution…）：以 remote 為準；本機 sync/backend
- *     連線設定同 meta 由 adoptRemote 之後再補返。
- *   · 已知取捨：本機離線刪除嘅紀錄，如果另一部機未見過，合併後會「翻生」
- *     —— 總好過成個資料庫被盲蓋清空。刪多一次就得。
- * @returns {object} 合併後嘅新 db（唔會改動傳入嘅兩個物件）
+ * 登入時本機仲有未儲存改動：本機 ← 合併結果（後端 ＋ 我嘅唔撞改動），基準 ← 後端而家。
+ * 我嘅改動因此仍然係「基準 → 本機」嘅 diff，之後撳儲存先寫。
  */
-
-/** 兩條同 id 紀錄逐格合併：地圖格併集（本機細格贏）、陣列格遞迴、純值本機贏 */
-function mergeRec(rv, lv) {
-  const out = { ...rv };
-  Object.keys(lv).forEach(k => {
-    const b = lv[k];
-    if (b === undefined) return;
-    const a = out[k];
-    if (a === undefined) { out[k] = b; return; }
-    const aMap = a && typeof a === 'object' && !Array.isArray(a);
-    const bMap = b && typeof b === 'object' && !Array.isArray(b);
-    if (aMap && bMap) { out[k] = { ...a, ...b }; return; }            // rsvp／rollcall／responses／title：併集
-    if (Array.isArray(a) && Array.isArray(b)) { out[k] = mergeArrayById(a, b); return; }
-    out[k] = b;                                                       // 純值：以未存嗰邊為準
-  });
-  return out;
+export function setLocalMerged(mergedDb, remoteDb, { version = '', pending = 0 } = {}) {
+  if (isMock()) throw new Error('示範模式唔會採用後端資料');
+  const local = state.db;
+  const remoteN = normalizeRemote(remoteDb);
+  const next = keepLocalWiring(normalizeRemote(mergedDb), local);
+  state.db = next;
+  state.db.sync = { ...(state.db.sync || {}), lastPullAt: nowStamp(), lastError: '' };
+  syncLog(state.db, '⇩ 已由後端載入，並保留呢部機未儲存嘅改動（撳「儲存到後端」先寫）');
+  /* 基準 ＝ 後端而家（唔係合併結果）—— 咁我嘅改動先至仍然睇得出 */
+  const rec = { version: String(version || ''), at: nowStamp(), db: stripForBase(remoteN) };
+  try { localStorage.setItem(baseKey(state.mode, state.unitCode), JSON.stringify(rec)); baseMem = undefined; }
+  catch { baseMem = rec; }
+  state.db.sync.lastSyncedVersion = rec.version;
+  state.db.sync.baseAt = rec.at;
+  const stillMine = _diffDb(rec.db, stripForBase(state.db)).length;
+  state.db.sync.pending = stillMine ? Math.max(1, Number(pending || local?.sync?.pending || 1)) : 0;
+  state.seedFailed = false;
+  state.seedSource = '（後端＋本機未儲存改動）';
+  state.db.meta = { ...(state.db.meta || {}), seedSource: state.seedSource };
+  persistLocalOnly();
+  return state.db;
 }
 
-/** 陣列合併：有 id 嘅物件按 id 合（同 id 遞迴 mergeRec）、冇 id 嘅去重加入 */
-function mergeArrayById(rv, lv) {
-  const base = (Array.isArray(rv) ? rv : []).slice();
-  const index = new Map();
-  base.forEach((x, i) => { if (x && typeof x === 'object' && x.id !== undefined) index.set(String(x.id), i); });
-  (Array.isArray(lv) ? lv : []).forEach(item => {
-    if (item && typeof item === 'object' && item.id !== undefined) {
-      const key = String(item.id);
-      if (index.has(key)) base[index.get(key)] = mergeRec(base[index.get(key)], item);
-      else { index.set(key, base.length); base.push(item); }
-    } else if (!base.includes(item)) base.push(item);
-  });
-  return base;
+/** 儲存成功：本機 ＝ 後端 ＝ 新基準 */
+export function commitSaved(finalDb, { version = '', bytes = 0, parts = 0 } = {}) {
+  const local = state.db;
+  const next = keepLocalWiring(normalizeRemote(finalDb), local);
+  state.db = next;
+  state.db.sync = { ...(state.db.sync || {}), pending: 0, lastPushAt: nowStamp(), lastError: '' };
+  setBase(state.db, version);
+  syncLog(state.db, `✓ 已儲存到後端${bytes ? `（${(bytes / 1024).toFixed(0)} KB${parts ? `，分 ${parts} 件` : ''}）` : ''}`);
+  state.db.meta = { ...(state.db.meta || {}), seedSource: '（後端：旅團自己嘅 Google Sheet）' };
+  persistLocalOnly();
+  return state.db;
 }
 
-/** 匯出畀測試等需要合併語意嘅地方用（純函數，唔會寫入） */
-export function mergeDbs(remote, local) {
-  const out = { ...remote };
-  /* 三方合併嘅「基準」：上次同後端對齊嗰陣，每個物件欄位嘅內容指紋。
-     冇佢就分唔到「本機真係改過」同「本機淨係有一份舊／種子副本」。 */
-  const base = local?.sync?.baseObjHash || null;
-  Object.keys(local).forEach(key => {
-    if (key === 'sync' || key === 'meta' || key === 'backend' || key === 'unitCode') return;
-    const lv = local[key];
-    const rv = remote[key];
-    if (Array.isArray(lv) && (Array.isArray(rv) || rv === undefined)) {
-      out[key] = mergeArrayById(rv || [], lv);
-    } else if (lv !== undefined && rv === undefined) {
-      out[key] = lv;            // 後端完全冇呢個 key（舊版後端）→ 用本機
-    } else if (isPlainObj(lv) && isPlainObj(rv)) {
-      /* 2026-09-19 團長回報兩件事：
-           「團章我都一直 POST 唔到出尼」
-           「IG／FB 公開資料 …… 團員登入後完全見唔到」
-         死因就喺呢度。舊 code 呢一格係「兩邊都有嘅物件 → 保持 remote」，
-         即係**本機改咗嘅 settings／constitution 一律被後端蓋返**。
-         於是：執委填完 IG／FB → 撳同步 → 合併嗰下自己填嘅嘢被掉咗 →
-         寫上後端嘅係冇 troopLinks 嗰份 → 團員永遠睇唔到。團章同一個死法。
-
-         但「一律本機贏」都唔得 —— 我試過，一部**全新種子**裝置（本機團章係
-         seed 嘅 v0.1 draft）一同步就把已發布嘅 v3.1 蓋走（tests/hub.mjs 即刻紅）。
-         所以要做**三方合併**：靠 sync.baseObjHash（上次同步嗰陣嘅內容指紋）
-         判斷「本機有冇真係改過呢個物件」。見 mergeObjectField()。 */
-      out[key] = mergeObjectField(rv, lv, base?.[key]);
-    }
-    /* 純量／其他型態兩邊都有 → 保持 remote（已在 out） */
-  });
-  return out;
+/** 把一批改動（例如用家揀「用我嘅」嘅衝突）套落本機，當成一次新改動（pending +1） */
+export function applyChangesLocal(changes) {
+  if (!state.db || !changes?.length) return state.db;
+  _applyChanges(state.db, changes);
+  persist();
+  return state.db;
 }
 
-function isPlainObj(v) {
-  return !!v && typeof v === 'object' && !Array.isArray(v);
+/** 本機相對基準而家有幾多個改動（真數；pending 只係次數） */
+export function localChanges() {
+  const b = getBase();
+  if (!b || !state.db) return [];
+  return _diffDb(b.db, stripForBase(state.db));
 }
 
-/**
- * 深層合併兩個物件（後端版 remote ＋ 本機版 local）。
- *
- * 規則：
- *   · 淨係一邊有嗰個 key → 用嗰邊（兩邊嘅欄位都唔會冇咗）
- *   · 兩邊都係物件 → 逐層落去
- *   · 兩邊都係陣列 → mergeArrayById（按 id 聯集，兩邊紀錄都保留）
- *   · 兩邊都係純量而唔同 → **本機贏**
- *
- * 最後嗰條係有意識嘅取捨：撳「立即同步」嘅人，就係而家手上有嘢想發布嘅人。
- * 舊行為（後端贏）會令佢嘅改動靜靜地消失 —— 團長回報嘅「POST 唔到」就係咁嚟。
- * 代價係：如果兩部機同一秒改**同一格**，後撳嗰個會蓋先撳嗰個。
- * 呢個同「兩邊都保留但其中一邊靜靜地冇咗」比，係明顯較可預期嘅行為。
- */
-function deepMerge(remote, local) {
-  const out = { ...remote };
-  Object.keys(local).forEach(k => {
-    const lv = local[k];
-    const rv = remote ? remote[k] : undefined;
-    if (lv === undefined) return;
-    if (Array.isArray(lv) && (Array.isArray(rv) || rv === undefined)) {
-      out[k] = mergeArrayById(rv || [], lv);
-    } else if (isPlainObj(lv) && isPlainObj(rv)) {
-      out[k] = deepMerge(rv, lv);
-    } else {
-      out[k] = lv;              // 本機贏（包括「後端冇呢格」同「兩邊純量唔同」）
-    }
-  });
-  return out;
-}
-
-/**
- * 內容指紋（用嚟判斷「本機有冇真係改過呢個物件」）。
- * 唔使密碼學強度 —— 只要穩定、夠敏感。
- */
-export function objHash(v) {
-  if (v === undefined || v === null) return '';
-  let str;
-  try { str = JSON.stringify(v); } catch { return ''; }
-  if (!str) return '';
-  let h = 5381;
-  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
-  return String(h >>> 0) + ':' + str.length;
-}
-
-/**
- * push 成功之後调用：而家本機＝後端，把三方合併基準更新到呢一刻。
- * 只應該喺「冇剩低未同步改動」嗰陣调用 —— 如果送出期間又改咗嘢，
- * 嗰啲改動仲未入後端，更新基準會令佢哋之後被當成「本機冇改過」而俾後端蓋返。
- */
-export function markBaseAligned() {
+/** 把「後端仲未有資料庫」記做基準（新旅團第一次）：基準＝空，之後儲存＝全部當我加嘅 */
+export function markBackendEmpty() {
   if (!state.db) return;
-  state.db.sync = state.db.sync || {};
-  state.db.sync.baseObjHash = snapshotObjHashes(state.db);
+  const rec = { version: '', at: nowStamp(), db: {}, empty: true };
+  try { localStorage.setItem(baseKey(state.mode, state.unitCode), JSON.stringify(rec)); baseMem = undefined; }
+  catch { baseMem = rec; }
+  state.db.sync = { ...(state.db.sync || {}), lastSyncedVersion: '', baseAt: rec.at, lastPullAt: nowStamp() };
+  if (hasLocalContent()) state.db.sync.pending = Math.max(1, Number(state.db.sync.pending || 0));
+  persistLocalOnly();
 }
 
-/** 為 db 入面所有物件型態嘅頂層欄位計指紋（存入 sync.baseObjHash） */
-function snapshotObjHashes(db) {
-  const out = {};
-  if (!db) return out;
-  Object.keys(db).forEach(k => {
-    if (k === 'sync' || k === 'meta' || k === 'backend' || k === 'unitCode') return;
-    if (isPlainObj(db[k])) out[k] = objHash(db[k]);
-  });
-  return out;
+/** 由 localStorage 重新讀返本機 db（測試／另一個視窗改咗 localStorage 之後用） */
+export function reloadFromStorage() {
+  const raw = lsGet(dbKey(state.mode, state.unitCode));
+  if (!raw) return state.db;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.schema === SCHEMA) state.db = parsed;
+  } catch { /* ignore */ }
+  baseMem = undefined;
+  return state.db;
 }
 
-/**
- * 合併一個「兩邊都有嘅物件欄位」（settings／constitution …）—— 三方合併。
- *
- * @param rv    後端版
- * @param lv    本機版
- * @param baseH 上次同步嗰陣呢個欄位嘅指紋（可能冇）
- *
- * 判斷：
- *   · 冇 baseH           → 呢部機**從未同後端對齊過**呢個欄位（全新／種子機）。
- *                          佢手上嘅唔算「改動」，只係一份舊副本 → **後端贏**。
- *                          （實測：冇呢條，一部種子機一同步就把已發布團章 v3.1
- *                            蓋返做 seed 嘅 v0.1 draft —— tests/hub.mjs 即刻紅。）
- *   · objHash(lv)===baseH → 本機**冇改過** → **後端贏**（後端嘅新嘢照入）
- *   · 其他               → 本機**真係改過** → 深層合併，衝突嗰格**本機贏**
- *                          （呢個先係團長要嘅「我撳發布 ＝ 出街」）
- */
-function mergeObjectField(rv, lv, baseH) {
-  if (!baseH) return rv;                        // 從未對齊 → 後端贏
-  if (objHash(lv) === baseH) return rv;         // 本機冇改 → 後端贏
-  return deepMerge(rv, lv);                     // 本機改過 → 深層合併，本機優先
-}
-
-/** 本機已知嘅「後端版本」（上次 pull／push 成功嗰個）—— push 時做樂觀鎖 baseVersion 用 */
+/** 本機已知嘅「後端版本」（上次 pull／push 成功嗰個）—— 只係顯示用；樂觀鎖用 getBase().version */
 export function lastSyncedVersion() {
   return String(state.db?.sync?.lastSyncedVersion || '');
 }
@@ -869,8 +826,10 @@ export function wipe() {
 /** 清除示範資料（唔會影響真實資料） */
 export function clearMockData() {
   lsDel(dbKey('mock', state.unitCode));
+  lsDel(baseKey('mock', state.unitCode));
   if (isMock()) {
     try { localStorage.removeItem('venture82.mock.db.v' + SCHEMA); } catch { /* ignore */ }
+    baseMem = undefined;
   }
 }
 

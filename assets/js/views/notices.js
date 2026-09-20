@@ -858,19 +858,19 @@ export function mount(root, params) {
       } };
       commit(); toast('已儲存分享設定', 'ok');
     }
-    /* 「同步到公開頁」：公開頁讀嘅係旅團自己 Sheet 嘅「通告全文」分頁，
-       所以新開／改咗嘅通告要經總表同步先會出到公開頁。 */
+    /* 「同步到公開頁」：公開頁（notice.html）由後端嘅「資料庫」分頁讀已發布通告，
+       所以呢個掣 ＝ 行**同一條**儲存路（saveWithDialog）。冇另一條寫入路。 */
     if (act === 'sync-notice') {
       const keep = b.innerHTML;
-      b.disabled = true; b.innerHTML = `${icon('refresh', 15)} 同步中…`;
+      b.disabled = true; b.innerHTML = `${icon('refresh', 15)} 儲存中…`;
       const hint = '如失敗，請去「帳號與系統 → 資料管理 → 總表同步」檢查 /exec 網址同 API Key';
       try {
-        const tables = await import('./tables.js');
-        const r = await tables.pushToMaster({ silent: true });
-        if (r?.ok) toast('已同步到公開頁 —— 通告全文已更新', 'ok');
-        else toast('同步失敗：' + (r?.msg || '送唔到總表') + '（' + hint + '）', 'err');
+        const { saveWithDialog } = await import('./syncdialog.js');
+        const r = await saveWithDialog({ silent: true, toastOk: false });
+        if (r?.ok) toast('已儲存到後端 —— 公開頁而家見到最新通告', 'ok');
+        else if (!['busy', 'no_base', 'not_configured'].includes(r?.reason)) toast('儲存失敗：' + (r?.error || '寫唔入後端') + '（' + hint + '）', 'err');
       } catch (e) {
-        toast('同步失敗：' + (e?.message || e) + '（' + hint + '）', 'err');
+        toast('儲存失敗：' + (e?.message || e) + '（' + hint + '）', 'err');
       } finally {
         b.disabled = false; b.innerHTML = keep;
       }

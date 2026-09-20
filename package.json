@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "node dev-server.mjs",
     "serve": "python3 -m http.server 8000",
-    "test": "node scripts/build-gas.mjs && node tests/smoke.mjs real && node tests/smoke.mjs mock && node tests/public.mjs && node tests/gate.mjs && node tests/gate-env.mjs && node tests/bake.mjs && node tests/api.mjs && node tests/progress.mjs && node tests/pdftext.mjs && node tests/login.mjs && node tests/remote.mjs && node tests/selfserve.mjs && node tests/syncorder.mjs && node tests/tabs.mjs && node tests/gas.mjs && node tests/hub.mjs",
+    "test": "node scripts/build-gas.mjs && node tests/smoke.mjs real && node tests/smoke.mjs mock && node tests/public.mjs && node tests/gate.mjs && node tests/gate-env.mjs && node tests/bake.mjs && node tests/api.mjs && node tests/progress.mjs && node tests/pdftext.mjs && node tests/login.mjs && node tests/merge3.mjs && node tests/remote.mjs && node tests/selfserve.mjs && node tests/syncorder.mjs && node tests/tabs.mjs && node tests/gas.mjs && node tests/hub.mjs",
     "test:api": "node tests/api.mjs && node tests/progress.mjs",
     "test:real": "node tests/smoke.mjs real",
     "test:mock": "node tests/smoke.mjs mock",
@@ -18,6 +18,7 @@
     "test:progress": "node tests/progress.mjs",
     "test:pdftext": "node tests/pdftext.mjs",
     "build:gas": "node scripts/build-gas.mjs",
+    "test:merge3": "node tests/merge3.mjs",
     "test:remote": "node tests/remote.mjs",
     "test:selfserve": "node tests/selfserve.mjs",
     "test:syncorder": "node tests/syncorder.mjs",
