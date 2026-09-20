@@ -11,7 +11,24 @@ export function gasTemplate() {
   return `/**
  * ============================================================
  *  82venture · 總表同步與多旅團後端 Apps Script（Code.gs）
- *  版本：v2.6.0
+ *  版本：v2.6.1
+ *
+ *  ★ v2.6.1 修正（2026-09-20，團長回報 3 項問題）：
+ *    ① 「成員進度不知為何重複了」——死因：報表同步（writeTab）用**前端 schema key 次序**
+ *       寫「團員」分頁（旅團,id,name,eng,identity,…,ymis,…），
+ *       但進度讀取（progressMembers）寫死「第 2 欄=ymis、第 4 欄=姓名」
+ *       （嗰個係 initializeSheets 嘅次序：旅團,id,ymis,systemId,姓名,…）。
+ *       兩套次序唔同 → 讀錯欄，每人都多咗一行「YMIS=姓名、名=身份」。
+ *       修正：progressMembers 改為照標題列搵返 ymis／姓名 喺邊一欄，唔再寫死欄號。
+ *    ② 「同步會為這旅團再創建分頁（物資82）」——死因：sheetName() 喺
+ *       per-unit-sheet 模式會回「分頁名·旅團編號」（物資·0082），
+ *       同 initializeSheets() 建嘅無後綴分頁（物資）係兩張唔同嘅表。
+ *       一張總表＝一個旅團，根本唔需要後綴。修正：報表一律寫返無後綴分頁，
+ *       並順手清走舊版留低嘅後綴分身，等資料歸返一張表。
+ *    ③ 「由後端重新載入仍不成功」——其中一個可修嘅死因係 BACKEND_VERSION
+ *       一直係 'v2.5.0'（寫住 v2.6.0 功能、但版本號冇跟上），
+ *       令同步診斷／提示誤判後端版本。已升做 'v2.6.1'。
+ *       （真正載入仲要：Apps Script 貼新 Code.gs → 部署 → 版本揀「新版本」。）
  *
  *  ★ v2.6.0 新增（2026-09-20，團長回報「無痕同普通視窗對唔到料、又話我冇後端」）：
  *    ① loadDbPart —— **分段讀取**成份資料庫。
@@ -98,7 +115,7 @@ var MODE = 'per-unit-sheet';   // 'per-unit-sheet' = 每個旅團獨立工作表
 var DRIVE_FOLDER_ID = '';
 
 /** 後端版本（status 會回報；APP 用嚟檢查「你張 Sheet 係咪仲行舊 code」） */
-var BACKEND_VERSION = 'v2.5.0';
+var BACKEND_VERSION = 'v2.6.1';
 
 /* ============================================================
    初始化與 API KEY 管理
@@ -826,7 +843,27 @@ function syncAll(body) {
   log.appendRow([new Date(), unit, body.unitName || '', JSON.stringify(counts)]);
   log.getRange(1, 1, 1, 4).setFontWeight('bold');
 
+  // v2.6.1：順手清走舊版留低嘅後綴分身（物資·0082、帳目·0082、團員·0082、
+  // 收支申報·0082、通告·0082、報名·0082、物資借用·0082、會議·0082）。
+  // 查實啲資料頭先已經寫返落無後綴分頁，呢啲只係舊 code 遺物；唔刪佢，
+  // 團長下次同步仲會見到「物資82」嗰啲分頁。
+  removeSuffixedTabs(ss, unit);
+
   return counts;
+}
+
+/** 刪走上次同步留低嘅「分頁名·旅團編號」分身（同一個旅團先刪） */
+function removeSuffixedTabs(ss, unit) {
+  try {
+    var suffix = '·' + textOf(unit);
+    if (!unit || suffix === '·') return;
+    ss.getSheets().forEach(function (sh) {
+      var nm = sh.getName();
+      if (nm.indexOf(suffix) === nm.length - suffix.length) {
+        try { ss.deleteSheet(sh); } catch (e) { /* 刪唔到就留低，唔好成全個同步失敗 */ }
+      }
+    });
+  } catch (e) { /* ignore */ }
 }
 
 /** 寫入一個工作表（每次同步會重寫該旅團嘅資料，避免重複） */
@@ -997,11 +1034,25 @@ function progressMembers() {
     if (nm === '團員' || nm.indexOf('團員·') === 0) { tSheet = all[k]; break; }
   }
   if (tSheet) {
+    /* v2.6.1（2026-09-20 團長回報「成員進度重複」）：
+       以前寫死「第 2 欄＝ymis、第 4 欄＝姓名」（嗰個係 initializeSheets 嘅次序），
+       但報表同步（writeTab）係用前端 schema 次序寫（…,name,…,identity,…,ymis,…），
+       兩套唔同結果讀錯欄——每人多咗一行「ymis=姓名、name=身份」。
+       而家照標題列搵返 ymis／姓名 喺邊一欄，兩個次序都啱。 */
     var t = tSheet.getDataRange().getValues();
+    var head = (t.length ? t[0] : []).map(function (c) { return textOf(c); });
+    var ciYmis = -1, ciName = -1;
+    for (var c = 0; c < head.length; c++) {
+      if (ciYmis < 0 && (head[c] === 'ymis' || head[c].toLowerCase() === 'ymis')) ciYmis = c;
+      if (ciName < 0 && /^姓名$|^名$|^name$/i.test(head[c])) ciName = c;
+    }
+    /* 搵唔到欄就退返 initializeSheets 嘅舊次序（旅團,id,ymis,systemId,姓名,…） */
+    if (ciYmis < 0) ciYmis = 2;
+    if (ciName < 0) ciName = 4;
     for (var j = 1; j < t.length; j++) {
-      var y2 = textOf(t[j][2]);
+      var y2 = textOf(t[j][ciYmis]);
       if (!y2 || seen[y2]) continue;
-      out.push({ ymis: y2, name: textOf(t[j][4]) });
+      out.push({ ymis: y2, name: textOf(t[j][ciName]) });
       seen[y2] = true;
     }
   }
@@ -1546,8 +1597,13 @@ function appendSignup(body) {
    ============================================================ */
 
 function sheetName(base, unit) {
-  if (MODE === 'one-sheet') return base;
-  return base + '·' + unit;
+  /* v2.6.1（2026-09-20 團長回報）：總表本身**就係**一個旅團嘅 Sheet。
+     initializeSheets() 建嘅係無後綴分頁（物資／帳目／團員…），
+     以前呢度喺 per-unit-sheet 模式照樣回「分頁名·旅團編號」（物資·0082），
+     同 initializeSheets 兩套名對唔上，結果每次同步都**多生一張**「物資·0082」。
+     而家報表一律寫返無後綴分頁，同 initializeSheets 一致，
+     即等於填落原本嗰張「物資」度，唔會再生分身。 */
+  return base;
 }
 
 function getPath(obj, path) {

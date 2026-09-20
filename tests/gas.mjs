@@ -202,6 +202,64 @@ section('★ 真實故障：後端有 key、app 條 key 空');
 }
 
 /* ============================================================
+   ③b v2.6.1（2026-09-20 團長回報）：
+   ① 同步後嘅「團員」分頁要用**標題列**搵 ymis／姓名（唔好寫死欄號）
+      —— 否則報表同步（schema 次序）同 initializeSheets（固定次序）兩套欄位
+         次序唔同，進度讀取讀錯欄，每個人都會多咗一行「ymis=姓名、name=身份」。
+   ② 報表同步要寫返**無後綴**分頁（物資／團員…），唔好再生「物資·0082」，
+      並順手清走舊版留低嘅後綴分身。
+   ============================================================ */
+section('v2.6.1 團長回報：同步生分身分頁＋成員進度重複');
+{
+  const g = makeGas();
+
+  /* 先照 initializeSheets 咁建「無後綴」分頁 */
+  g.sandbox.initializeSheets();
+  const ss = g.sandbox.SpreadsheetApp.getActiveSpreadsheet();
+
+  /* 成員名單（進度前端嘅另一來源）喺呢度要有資料 */
+  const ml = ss.getSheetByName('成員名單');
+  ml.appendRow(['8202001', '陳大文', '2025-01-01', '深資', '98765432']);
+  ml.appendRow(['8202002', '李小明', '2025-02-01', '深資', '91234567']);
+
+  /* 用真嘅前端 schema 欄位次序（writeTab 就跟呢套）整一份報表同步 */
+  const schema = { members: [
+    { key: 'name' }, { key: 'eng' }, { key: 'identity' }, { key: 'birthday' }, { key: 'role' },
+    { key: 'status' }, { key: 'phone' }, { key: 'email' }, { key: 'join' }, { key: 'ymis' },
+    { key: 'systemId' }, { key: 'note' }
+  ] };
+  const tables = {
+    members: [
+      { id: 'm1', name: '陳大文', eng: '', identity: 'member', birthday: '2008-03-14', role: '', status: 'active', phone: '', email: '', join: '', ymis: '8202001', systemId: '', note: '' },
+      { id: 'm2', name: '李小明', eng: '', identity: 'member', birthday: '2009-11-02', role: '', status: 'active', phone: '', email: '', join: '', ymis: '8202002', systemId: '', note: '' }
+    ],
+    transactions: [], claims: [], invItems: [], notices: [], invLoans: [], meetings: []
+  };
+  const r = g.post({ action: 'sync', unit: '0082', unitName: '82旅', tables, schema, skipDb: true });
+  ok('② 報表同步成功', r.ok === true && (r.counts?.members || 0) === 2, JSON.stringify(r).slice(0, 140));
+
+  const names = ss.getSheets().map(s => s.getName());
+  ok('② 唔會再生「物資·0082」等後綴分頁', !names.some(n => /·0082$/.test(n)), names.join(', '));
+  ok('② 有無後綴「物資」分頁（資料寫落原本嗰張）', names.includes('物資'), names.join(', '));
+
+  /* 模擬舊版留低嘅後綴分身 → 下次同步要清走 */
+  ss.insertSheet('物資·0082');
+  ss.insertSheet('團員·0082');
+  g.post({ action: 'sync', unit: '0082', unitName: '82旅', tables, schema, skipDb: true });
+  const names2 = ss.getSheets().map(s => s.getName());
+  ok('② 舊版留低嘅後綴分身會被清走', !names2.some(n => /·0082$/.test(n)), names2.join(', '));
+
+  /* ① 進度讀取：以「團員」＋「成員名單」合一，唔可以讀錯欄搞到重複 */
+  const load = g.get({ action: 'load', unit: '0082' });
+  const mem = load.members || [];
+  ok('① 成員無重複（2 人，唔係 4 人）', mem.length === 2, JSON.stringify(mem));
+  ok('① YMIS 正確（係 8202001／8202002，唔係攞咗姓名／身份）',
+    mem.some(m => m.ymis === '8202001' && m.name === '陳大文')
+    && mem.some(m => m.ymis === '8202002' && m.name === '李小明'),
+    JSON.stringify(mem));
+}
+
+/* ============================================================
    ④ 讀返嚟嘅資料要同寫出去嗰份一模一樣（唔可以走樣）
    ============================================================ */
 section('round-trip：資料唔可以走樣');
