@@ -8,7 +8,8 @@ import {
 } from './lib/store.js';
 import {
   loadRegistry, unitList, unitEntry, defaultUnitCode, registryReachable,
-  serverUnitsStatus, bakedUnitsStatus, fileUnitsStatus, fetchRegistryDiag, registryStale
+  serverUnitsStatus, bakedUnitsStatus, fileUnitsStatus, fetchRegistryDiag, registryStale,
+  canonicalUnitCode
 } from './lib/units.js';
 import {
   adminInbox, validateApplication, submitApplication, adminChecklist,
@@ -467,7 +468,11 @@ function renderUnitGate() {
   const goCode = () => {
     const raw = app.querySelector('#gateCode')?.value.trim() || '';
     if (!raw) { toast('請輸入旅團編號', 'err'); return; }
-    gotoUnit(raw);
+    /* ★ 打「82」都要入到「0082」嗰個旅團 —— 唔好因為少咗兩個 0
+       就對團長講「未能連接旅團後端」（詳見 gotoUnit 註解）。 */
+    const canon = canonicalUnitCode(raw);
+    if (canon && canon !== raw) toast(`旅團編號已校正：${raw} → ${canon}`, 'ok');
+    gotoUnit(canon || raw);
   };
   app.querySelector('[data-act="goto-code"]')?.addEventListener('click', goCode);
   app.querySelector('#gateCode')?.addEventListener('keydown', e => { if (e.key === 'Enter') goCode(); });
@@ -480,6 +485,15 @@ function renderUnitGate() {
    ============================================================ */
 function gotoUnit(code, { remember = true } = {}) {
   const isMockCode = String(code).toUpperCase() === 'MOCK';
+  /* ★ 一律用 Registry 登記咗嗰個編號入去（82 → 0082）。
+     以前打「82」就會 ?u=82 ＋ db.unitCode='82'：
+       · /api/proxy 以前搵唔到「0082」→ 404「找不到此旅團或後端網址未設定」
+         → 登入硬閘對團長講「未能連接旅團後端」＝「無後端」（後端明明登記得好哋）；
+       · 就算代理肯轉發，寫落 Google Sheet 嘅旅團欄會係「82」，
+         而用「0082」讀又搵唔到 → 同一張表兩套資料庫，兩邊永遠對唔到料。
+     兩邊都喺伺服器端校正咗（api/_registry.js、api/proxy.js），
+     呢度再校正多一層，令 ?u=、localStorage、db.unitCode、data/units/<編號>/ 全部一致。 */
+  code = isMockCode ? code : (canonicalUnitCode(code) || code);
   if (remember) markChosen(isMockCode ? 'MOCK' : code);
   if (isMockCode) { enterMock(); return; }
   setMode('real');

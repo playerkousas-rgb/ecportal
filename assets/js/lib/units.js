@@ -267,9 +267,34 @@ export function unitList() {
   return Object.values(all).sort((a, b) => String(a.code).localeCompare(String(b.code)));
 }
 
+/* ★ 旅團編號寫法統一（2026-09-21）：82／082／0082 一律當同一個旅團。
+   團長喺旅團選擇閘打「82」（第八十二旅，個 logo 都係顯示 82）係最自然嘅做法，
+   但 Registry 嘅 key 係「0082」。以前呢度同 api/_registry.js 一樣，淨係試
+   『原樣』同『搣走前導零』兩種寫法，永遠砌唔出「0082」→ 代理回 404 →
+   前端對用家講「未能連接旅團後端」＝「無後端」。讀寫兩邊一齊死。 */
+function matchUnitKey(code, all) {
+  const raw = String(code == null ? '' : code).trim();
+  if (!raw) return '';
+  if (all[raw]) return raw;
+  const bare = raw.replace(/^0+/, '');
+  if (!bare || !/^\d+$/.test(bare)) return '';
+  return Object.keys(all).find(k => /^\d+$/.test(k) && k.replace(/^0+/, '') === bare) || '';
+}
+
+/** 任意寫法 → Registry 登記咗嗰個 key；搵唔到回 '' */
+export function canonicalUnitKey(code) { return matchUnitKey(code, allUnits()); }
+
+/** 任意寫法 → 登記咗嘅旅團編號（例如 82 → 0082）；Registry 冇呢個旅團就原樣回 */
+export function canonicalUnitCode(code) {
+  const all = allUnits();
+  const key = matchUnitKey(code, all);
+  return key ? String(all[key].code || key) : String(code == null ? '' : code).trim();
+}
+
 export function unitEntry(code) {
   const all = allUnits();
-  return all[code] || all[String(code).replace(/^0+/, '')] || null;
+  const key = matchUnitKey(code, all);
+  return key ? all[key] : null;
 }
 
 /**

@@ -695,6 +695,13 @@ function syncView() {
       <div class="card"><div class="card-head"><div class="card-title">後端 Apps Script 範本</div></div>
         <div style="padding:14px 18px" class="sm muted">
           下載 <code>Code.gs</code> → 喺你嘅試算表「擴充功能 → Apps Script」貼上 → 部署為網頁應用程式（執行身分：我；存取權：任何人）。
+          <div class="note-box warn mt-12"><div class="xs">
+            <b>已經更新過都係「儲存唔到去後端／後端讀取唔到」？</b>
+            好可能係舊版（v2.6.1 之前）留低咗一堆分件暫存垃圾行喺「資料庫」分頁 —— 每次大資料庫儲存都多留成份資料庫嘅複製品，
+            分頁越嚟越大，最後讀寫一齊撞 Apps Script 執行時間上限（而「測試連線」照樣話正常）。
+            <br>救法：貼新版 <code>Code.gs</code> → 部署（版本揀「新版本」）→ 喺 Apps Script 編輯器揀 <code>cleanStaleStaging</code> 撳「執行」一次。
+            「同步診斷」而家會話你知後端仲有幾多行垃圾（正常應該係 0）。
+          </div></div>
           <div class="col gap-6 mt-12">
             <button class="btn btn-sm btn-block" data-act="dl-gas">${icon('download', 15)} 下載 Code.gs（Apps Script）</button>
             <button class="btn btn-sm btn-block" data-act="copy-gas">${icon('copy', 15)} 複製 Code.gs 原始碼</button>
@@ -999,7 +1006,9 @@ export async function pushToMaster({ silent = false } = {}) {
     const total = payload.counts ? Object.values(payload.counts).reduce((a, b) => a + b, 0) : 0;
     log(`${ok ? '✓' : '✗'} 報表分頁 HTTP ${res.status}${viaProxy ? '（代理）' : ''} · ${total} 筆 · ${(detail || txt).replace(/\s+/g, ' ').slice(0, 80)}`);
     if (!silent) toast(ok ? '已更新總表嘅報表分頁（資料庫本身要撳「儲存到後端」）' : ('同步失敗：' + (detail || ('HTTP ' + res.status))), ok ? 'ok' : 'err');
-    return { ok, msg: detail || txt.slice(0, 300), viaProxy };
+    /* total ＝ 今次攤平咗幾多筆落報表分頁 —— 「儲存到後端」嘅成功訊息會用嚟
+       話畀用家知「團員／帳目嗰啲分頁而家有嘢睇」，唔使再開張 Sheet 先知。 */
+    return { ok, msg: detail || txt.slice(0, 300), viaProxy, total };
   } catch (e) {
     if (viaProxy) {
       /* 經代理唔會有「送咗但讀唔到」呢回事 —— 掟 exception 即係根本未送到 */
